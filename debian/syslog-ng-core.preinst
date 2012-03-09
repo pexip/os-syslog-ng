@@ -1,0 +1,11 @@
+#! /bin/sh
+
+set -e
+
+if [ "$1" = "install" -a -n "$2" ] ; then
+  [ -f /etc/logrotate.d/syslog-ng.disabled ] && mv -f /etc/logrotate.d/syslog-ng.disabled /etc/logrotate.d/syslog-ng
+fi
+
+#DEBHELPER#
+
+exit 0

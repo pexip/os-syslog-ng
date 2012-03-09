@@ -1,0 +1,33 @@
+From d12ee8cbd804696448f6497d6baf094a2fd4ccd5 Mon Sep 17 00:00:00 2001
+From: Gergely Nagy <algernon@balabit.hu>
+Date: Fri, 10 Feb 2012 12:56:29 +0100
+Subject: [PATCH] afsql: Fix a deadlock when using explicit commits.
+
+When using explicit commits, in case the COMMIT results in an error,
+syslog-ng forgot to release a mutex, resulting in a deadlock the next
+time the same error happened.
+
+The fix is to do release the mutex in this error path, too.
+
+Signed-off-by: Fried Zoltan <deirf@balabit.hu>
+Signed-off-by: Patrick Hemmer <syslogng@stormcloud9.net>
+Signed-off-by: Gergely Nagy <algernon@balabit.hu>
+---
+ modules/afsql/afsql.c |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
+diff --git a/modules/afsql/afsql.c b/modules/afsql/afsql.c
+index b3fec86..d3c72c9 100644
+--- a/modules/afsql/afsql.c
++++ b/modules/afsql/afsql.c
+@@ -890,6 +890,7 @@ afsql_dd_database_thread(gpointer arg)
+                     {
+                       afsql_dd_disconnect(self);
+                       afsql_dd_suspend(self);
++                      g_mutex_unlock(self->db_thread_mutex);
+                       continue;
+                     }
+                 }
+-- 
+1.7.9
+

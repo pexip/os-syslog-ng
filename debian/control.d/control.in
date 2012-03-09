@@ -1,8 +1,7 @@
 Source: syslog-ng
 Section: admin
 Priority: extra
-Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
-XSBC-Original-Maintainer: Laszlo Boszormenyi (GCS) <gcs@debian.hu>
+Maintainer: Laszlo Boszormenyi (GCS) <gcs@debian.hu>
 Build-Depends: debhelper (>= 8), dh-autoreconf, libnet1-dev, libevtlog-dev (>= 0.2.12-5~), libssl-dev, libmongo-client-dev, libjson0-dev, libwrap0-dev, libglib2.0-dev (>= 2.4), pkg-config, libdbi0-dev | libdbi-dev, libpcre3-dev, flex, bison, help2man, automake, autoconf, autoconf-archive, xsltproc, docbook-xsl, docbook-xml, libcap-dev [linux-any], hardening-includes
 Build-Conflicts: autoconf2.13
 Standards-Version: 3.9.2
@@ -55,7 +54,7 @@ Description: Next generation system logging daemon (debug symbols)
  This package contains debug symbols for the whole of syslog-ng,
  including the modules.
 
-Package: libsyslog-ng-3.3.4
+Package: libsyslog-ng-@UPSTREAM_VERSION@
 Pre-Depends: dpkg (>= 1.15.6), ${misc:Pre-Depends}
 Section: libs
 Architecture: any
@@ -71,7 +70,7 @@ Package: libsyslog-ng-dev
 Pre-Depends: dpkg (>= 1.15.6)
 Section: libdevel
 Architecture: any
-Depends: libsyslog-ng-3.3.4 (= ${binary:Version}),
+Depends: libsyslog-ng-@UPSTREAM_VERSION@ (= ${binary:Version}),
  ${misc:Depends}, ${perl:Depends},
  pkg-config, perl, flex, bison, libevtlog-dev (>= 0.2.12), libglib2.0-dev
 Description: Next generation system logging daemon (development files)
