@@ -1,0 +1,16 @@
+{
+  author: "Gergely Nagy",
+  pages: [
+    {
+      title: "BSON tutorial",
+      content: "...",
+      importance: 1
+    },
+    {
+      title: "Some other thing",
+      content: "...",
+      importance: 0
+    }
+  ],
+  inline: true
+}
