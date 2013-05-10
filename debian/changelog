@@ -1,3 +1,9 @@
+syslog-ng (3.3.4.dfsg-2ubuntu1pexip1) precise; urgency=low
+
+  * Fix use-after-free in log writer
+
+ -- John-Mark Bell <jmb@pexip.com>  Fri, 10 May 2013 15:53:25 +0100
+
 syslog-ng (3.3.4.dfsg-2ubuntu1) precise; urgency=low
 
   * Merge with Debian Testing (LP: #950799). Remaining Ubuntu changes:

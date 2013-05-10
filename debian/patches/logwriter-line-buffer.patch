@@ -1,0 +1,213 @@
+--- syslog-ng-3.3.4.dfsg/lib/logwriter.c	2011-10-31 21:05:44.000000000 +0000
++++ syslog-ng-3.3.4.dfsg/lib/logwriter.c	2013-04-09 15:21:44.390547862 +0000
+@@ -983,27 +983,21 @@
+           LogProtoStatus status;
+ 
+           status = log_proto_post(proto, (guchar *) self->line_buffer->str, self->line_buffer->len, &consumed);
+-          if (status == LPS_ERROR)
+-            {
+-              if ((self->options->options & LWO_IGNORE_ERRORS) == 0)
+-                {
+-                  msg_set_context(NULL);
+-                  log_msg_refcache_stop();
+-                  return FALSE;
+-                }
+-              else
+-                {
+-		  if (!consumed)
+-	            g_free(self->line_buffer->str);
+-                  consumed = TRUE;
+-                }
+-            }
++          /* Consider consumed flag regardless of error state.
++           * The log proto may have consumed the buffer before generating an error */
+           if (consumed)
+             {
+               self->line_buffer->str = g_malloc(self->line_buffer->allocated_len);
+               self->line_buffer->str[0] = 0;
+               self->line_buffer->len = 0;
+             }
++          if (status == LPS_ERROR && (self->options->options & LWO_IGNORE_ERRORS) == 0)
++            {
++              /* TODO: should we ack and/or unref the message here? */
++              msg_set_context(NULL);
++              log_msg_refcache_stop();
++              return FALSE;
++            }
+         }
+       if (consumed)
+         {
+--- syslog-ng-3.3.4.dfsg/tests/unit/test_logwriter.c	2011-09-23 09:52:43.000000000 +0000
++++ syslog-ng-3.3.4.dfsg/tests/unit/test_logwriter.c	2013-04-09 15:17:56.398189203 +0000
+@@ -1,7 +1,10 @@
+ #include "syslog-ng.h"
+ #include "logwriter.h"
+ #include "logmsg.h"
++#include "logproto.h"
++#include "logtransport.h"
+ #include "templates.h"
++#include "mainloop.h"
+ #include "misc.h"
+ #include "apphook.h"
+ #include "cfg.h"
+@@ -13,11 +16,97 @@
+ #include <stdlib.h>
+ #include <stdio.h>
+ #include <string.h>
++#include <iv.h>
++#include <iv_thread.h>
+ 
+ gboolean success = TRUE;
+ gboolean verbose = FALSE;
+ MsgFormatOptions parse_options;
+ 
++typedef struct _LogProtoMock
++{
++  LogProto super;
++  enum { PHASE_1, PHASE_2 } phase;
++  guchar *buffer;
++  gsize buffer_len;
++} LogProtoMock;
++
++static gboolean
++log_proto_mock_prepare(LogProto *s, gint *fd, GIOCondition *cond)
++{
++  LogProtoMock *self = (LogProtoMock *) s;
++
++  *fd = self->super.transport->fd;
++  *cond = self->super.transport->cond;
++
++  if (*cond == 0)
++    *cond = G_IO_OUT;
++
++  return TRUE;
++}
++
++static LogProtoStatus
++log_proto_mock_flush(LogProto *s)
++{
++  /* Nothing to do */
++
++  return LPS_SUCCESS;
++}
++
++static LogProtoStatus
++log_proto_mock_post(LogProto *s, guchar *msg, gsize msg_len, gboolean *consumed)
++{
++  LogProtoMock *self = (LogProtoMock *) s;
++
++  fprintf(stderr, "%s:%d: phase: %d message: '%.*s'\n", __FILE__, __LINE__, self->phase + 1, msg_len, msg);
++
++  if (self->phase == PHASE_1) {
++    /* Consume buffer, then generate error */
++    g_assert(self->buffer == NULL);
++    self->buffer = msg;
++    self->buffer_len = msg_len;
++    *consumed = TRUE;
++    /* Advance to phase 2 */
++    self->phase = PHASE_2;
++    return LPS_ERROR;
++  } else if (self->phase == PHASE_2) {
++    /* Should not be passed the same buffer again */
++    g_assert(msg != self->buffer);
++    /* Flush & consume buffer */
++    g_free(self->buffer);
++    g_free(msg);
++    *consumed = TRUE;
++    /* Tell main loop to exit, as we're done */
++    iv_quit();
++  }    
++
++  return LPS_SUCCESS;
++}
++
++static LogProto *
++log_proto_mock_new(int fd)
++{
++  LogProtoMock *self = (LogProtoMock *) g_malloc0(sizeof(LogProtoMock));
++
++  self->phase = PHASE_1;
++  self->buffer = NULL;
++  self->buffer_len = 0;
++  self->super.prepare = log_proto_mock_prepare;
++  self->super.post = log_proto_mock_post;
++  self->super.flush = log_proto_mock_flush;
++  self->super.transport = log_transport_plain_new(fd, 0);
++  self->super.convert = (GIConv) -1;
++  return &self->super;
++}
++
++static LogPipe *
++log_pipe_mock_new(void)
++{
++  LogPipe *self = (LogPipe *) g_malloc0(sizeof(LogPipe));
++
++  return self;
++}
++
+ LogMessage *
+ init_msg(gchar *msg_string, gboolean use_syslog_protocol)
+ {
+@@ -44,6 +133,53 @@
+ }
+ 
+ void
++test_line_buffer_usage(void)
++{
++  GThread *push_thread;
++  int fd;
++  LogPipe *control;
++  LogWriter *writer;
++  LogProto *proto;
++  LogQueue *queue;
++  LogMessage *msg1, *msg2;
++  LogPathOptions lpopts = LOG_PATH_OPTIONS_INIT;
++  LogWriterOptions opt = {0};
++  char tmpname[32] = "/tmp/tmpXXXXXX";
++
++  fd = mkstemp(tmpname);
++  g_assert(fd != -1);
++
++  opt.flush_timeout = 0;
++
++  iv_init();
++
++  control = log_pipe_mock_new();
++
++  queue = log_queue_fifo_new(1000, NULL);
++
++  proto = log_proto_mock_new(fd);
++
++  writer = (LogWriter *) log_writer_new(LW_SYSLOG_PROTOCOL);
++  log_writer_set_options(writer, control, &opt, 0, 0, NULL, NULL);
++  log_writer_set_queue((LogPipe *) writer, queue);
++  log_writer_reopen((LogPipe *) writer, proto);
++  log_pipe_init((LogPipe *) writer, NULL);
++
++  msg1 = init_msg("<155>2006-02-11T10:34:56+01:00 bzorp syslog-ng[23323]:message 1", FALSE);
++  msg2 = init_msg("<155>2006-02-11T10:34:56+01:00 bzorp syslog-ng[23323]:message 2", FALSE);
++
++  /* Push messages */
++  log_pipe_queue((LogPipe *) writer, msg1, &lpopts);
++  log_pipe_queue((LogPipe *) writer, msg2, &lpopts);
++
++  /* Run main loop */
++  iv_main();
++
++  log_pipe_unref((LogPipe *) writer);
++  unlink(tmpname);
++}
++
++void
+ testcase(gchar *msg_string, gboolean input_is_rfc5424, gchar *template, guint writer_flags, gchar *expected_value)
+ {
+   LogTemplate *templ = NULL;
+@@ -145,6 +281,8 @@
+   testcase(msg_zero_pri, FALSE, NULL,   LW_FORMAT_PROTO, expected_msg_zero_pri_str);
+   testcase(msg_zero_pri, FALSE, "$PRI", LW_FORMAT_PROTO, expected_msg_zero_pri_str_t);
+ 
++  test_line_buffer_usage();
++
+   app_shutdown();
+   return 0;
+ }
