@@ -105,18 +105,6 @@ override_dh_auto_test:
 # earlier.
 override_dh_auto_clean:
 	dh_auto_clean
-	find . \( -name 'Makefile.in' -or \
-		  -name 'aclocal.m4' -or \
-		  -name 'configure' -or \
-		  -name 'depcomp' -or -name 'missing' -or \
-		  -name 'install-sh' -or -name 'ltmain.sh' -or \
-		  -name 'ylwrap' -or \
-		  -regex '.*/config\.\(sub\|guess\|h\.in\)' \) \
-	     -exec rm '{}' \;
-	rm -f m4/lt*.m4 m4/libtool.m4 m4/pkg.m4
-	rm -rf lib/ivykis/m4 modules/afmongodb/libmongo-client/m4
-	${MAKE} -f debian/tools/help2man.mk clean
-	rm -rf debian/build-tree/
 
 # We also want to install ivykis headers and whatnot, so override
 # _auto_install, and do it too.
