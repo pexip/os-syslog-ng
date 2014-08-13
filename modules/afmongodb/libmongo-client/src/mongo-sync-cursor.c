@@ -1,5 +1,5 @@
 /* mongo-sync-cursor.c - libmongo-client cursor API on top of Sync
- * Copyright 2011 Gergely Nagy <algernon@balabit.hu>
+ * Copyright 2011, 2012 Gergely Nagy <algernon@balabit.hu>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 
 mongo_sync_cursor *
 mongo_sync_cursor_new (mongo_sync_connection *conn, const gchar *ns,
-		       mongo_packet *packet)
+                       mongo_packet *packet)
 {
   mongo_sync_cursor *c;
 
@@ -70,9 +70,9 @@ mongo_sync_cursor_next (mongo_sync_cursor *cursor)
       mongo_wire_packet_free (cursor->results);
       cursor->offset = -1;
       cursor->results = mongo_sync_cmd_get_more (cursor->conn, cursor->ns,
-						 ret, cid);
+                                                 ret, cid);
       if (!cursor->results)
-	return FALSE;
+        return FALSE;
       mongo_wire_reply_packet_get_header (cursor->results, &cursor->ph);
     }
   cursor->offset++;
@@ -107,8 +107,8 @@ mongo_sync_cursor_get_data (mongo_sync_cursor *cursor)
     }
 
   if (!mongo_wire_reply_packet_get_nth_document (cursor->results,
-						 cursor->offset + 1,
-						 &r))
+                                                 cursor->offset + 1,
+                                                 &r))
     {
       errno = ERANGE;
       return NULL;

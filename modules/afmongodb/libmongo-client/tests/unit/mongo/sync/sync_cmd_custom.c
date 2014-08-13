@@ -12,12 +12,12 @@ test_mongo_sync_cmd_custom_net_secondary (void)
   mongo_packet *p;
 
   skip (!config.secondary_host, 1,
-	"Secondary server not configured");
+        "Secondary server not configured");
 
   conn = mongo_sync_connect (config.secondary_host, config.secondary_port,
-			     TRUE);
+                             TRUE);
   cmd = bson_build (BSON_TYPE_INT32, "getnonce", 1,
-		    BSON_TYPE_NONE);
+                    BSON_TYPE_NONE);
   bson_finish (cmd);
 
   p = mongo_sync_cmd_custom (conn, config.db, cmd);
@@ -45,7 +45,7 @@ test_mongo_sync_cmd_custom_net (void)
   mongo_sync_conn_set_auto_reconnect (conn, TRUE);
 
   cmd = bson_build (BSON_TYPE_INT32, "getnonce", 1,
-		    BSON_TYPE_NONE);
+                    BSON_TYPE_NONE);
   bson_finish (cmd);
 
   p = mongo_sync_cmd_custom (conn, config.db, cmd);

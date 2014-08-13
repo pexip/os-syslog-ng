@@ -33,8 +33,8 @@ test_func_mongo_sync_cursor_iterate (void)
   bson_finish (query);
 
   sc = mongo_sync_cursor_new (conn, config.ns,
-			      mongo_sync_cmd_query (conn, config.ns, 0, 0, 3,
-						    query, NULL));
+                              mongo_sync_cmd_query (conn, config.ns, 0, 0, 3,
+                                                    query, NULL));
   bson_free (query);
 
   ok (sc != NULL,
@@ -50,10 +50,10 @@ test_func_mongo_sync_cursor_iterate (void)
       result = mongo_sync_cursor_get_data (sc);
 
       if (!result)
-	{
-	  early_break = TRUE;
-	  break;
-	}
+        {
+          early_break = TRUE;
+          break;
+        }
       i++;
       c = bson_find (result, "i32");
       bson_cursor_get_int32 (c, &current_i32);
@@ -61,13 +61,13 @@ test_func_mongo_sync_cursor_iterate (void)
       bson_free (result);
 
       if (first_i32 == -1)
-	{
-	  first_i32 = current_i32;
-	  last_i32 = first_i32 - 1;
-	}
+        {
+          first_i32 = current_i32;
+          last_i32 = first_i32 - 1;
+        }
 
       if (current_i32 != last_i32 + 1)
-	continous = FALSE;
+        continous = FALSE;
       last_i32 = current_i32;
     }
 
@@ -77,9 +77,9 @@ test_func_mongo_sync_cursor_iterate (void)
       "mongo_sync_cursor_next() iterates over all elements");
 
   cmp_ok (first_i32, "!=", last_i32,
-	  "Iteration returns different elements, as expected");
+          "Iteration returns different elements, as expected");
   cmp_ok (i, ">=", 10,
-	  "Iteration really does return all documents");
+          "Iteration really does return all documents");
 
   mongo_sync_cursor_free (sc);
   mongo_sync_disconnect (conn);

@@ -1,22 +1,191 @@
-syslog-ng (3.3.4.dfsg-2ubuntu1) precise; urgency=low
+syslog-ng (3.5.6-2) unstable; urgency=high
 
-  * Merge with Debian Testing (LP: #950799). Remaining Ubuntu changes:
-    [ Colin Watson <cjwatson@ubuntu.com> ]
-    + Pre-Depends: dpkg (>= 1.15.6) for xz compression support.  Needed
-      until after Ubuntu 12.04 LTS.
-    [ Serge Hallyn <serge.hallyn@ubuntu.com> ]
-    + debian/control: remove libsystemd-daemon-dev build-depends
-    + debian/rules: remove --with-systemdsystemunitdir from
-      override_dh_auto_configure.
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * Use dh_installinit --restart-after-upgrade instead of hand-coding
+    essentially the same thing, badly.
+  * Urgency high, as this moderates the effect of #757903.
 
- -- Gergely Nagy <algernon@balabit.hu>  Fri, 09 Mar 2012 13:34:28 +0100
+ -- Gergely Nagy <algernon@madhouse-project.org>  Wed, 13 Aug 2014 13:57:15 +0200
 
-syslog-ng (3.3.4.dfsg-2) unstable; urgency=medium
+syslog-ng (3.5.6-1) unstable; urgency=high
 
-  * Get important bugfixes from upstream git tree.
-  * Correct short description of -dbg package (closes: #659119).
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * New upstream release, fixing a major memory leak (thus the urgency)
+  * Loosen the shlibs dependency on syslog-ng-core, so that
+    syslog-ng-incubator need not be rebuilt for every single syslog-ng
+    upload.
+  * Fixed a typo in debian/rules.
 
- -- Laszlo Boszormenyi (GCS) <gcs@debian.hu>  Thu, 16 Feb 2012 00:52:01 +0100
+ -- Gergely Nagy <algernon@madhouse-project.org>  Mon, 11 Aug 2014 11:07:34 +0200
+
+syslog-ng (3.5.5-2) unstable; urgency=high
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * Explicitly disable linux capability support on non-linux platforms,
+    instead of relying on auto-detection (which doesn't always work).
+
+ -- Gergely Nagy <algernon@madhouse-project.org>  Sat, 26 Jul 2014 13:53:39 +0200
+
+syslog-ng (3.5.5-1) unstable; urgency=high
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * New upstream release, fixing major leaks (hence the urgency)
+  * Build-Depend on libjson-c-dev | libjson0-dev. (Closes: #745014)
+  * Add /var/log/error to the logrotate file. (Closes: #747020)
+  * Include libsyslog-ng-test.a and the related pkg-config file in the
+    syslog-ng-dev package.
+  * Added an upstart init script (mostly for the benefit of older Ubuntu
+    releases and backports).
+  * syslog-ng-mod-redis no longer (mistakenly) recommends geoip-database.
+
+ -- Gergely Nagy <algernon@madhouse-project.org>  Wed, 23 Jul 2014 18:44:55 +0200
+
+syslog-ng (3.5.4.1-1) unstable; urgency=medium
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * New upstream release.
+  * Handle the shlibs file correctly, and install it to the syslog-ng-core
+    package.
+
+ -- Gergely Nagy <algernon@madhouse-project.org>  Wed, 19 Mar 2014 09:14:08 +0100
+
+syslog-ng (3.5.3-1) unstable; urgency=medium
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * New upstream release.
+    + Based on 3.5/master, which includes a couple of bison3 fixes.
+
+ -- Gergely Nagy <algernon@madhouse-project.org>  Wed, 25 Dec 2013 15:29:45 +0100
+
+syslog-ng (3.5.2-1) unstable; urgency=high
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * New upstream release.
+    + Fix the system() source on older Linux kernels (Closes: #729991)
+    + Fix kernel timestamp computation on 32-bit systems (Closes: #729575)
+  * Added a missing GPL-2+ license block to debian/copyright.
+  * Correctly install the pkg-config file to /usr/lib/pkgconfig.
+  * Updated the Vcs-* fields to point to debian.org resources.
+  * Updated the package descriptions to be more similar to the upstream
+    one.
+  * Urgency set to high, due to the RC bugfix on 32-bit architectures.
+
+ -- Gergely Nagy <algernon@madhouse-project.org>  Mon, 02 Dec 2013 15:19:51 +0100
+
+syslog-ng (3.5.1-1) unstable; urgency=low
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * New upstream release.
+    + Support auto-loading modules (Closes: #650814)
+    + The SMTP module is available in syslog-ng-mod-smtp (Closes: #722746)
+    + New modules: amqp, geoip, stomp, redis and smtp.
+    + Multi-line input support (indented multiline and regexp-based)
+    + Template type hinting for the MongoDB destination and $(format-json)
+    + Support for unit suffixes in the configuration file
+    + New filters, template functions and other miscellaneous changes
+  * New (team) maintainer, Laszlo Boszormenyi, Attila Szalay and myself
+    added to Uploaders.
+  * Ship /var/lib/syslog-ng in the syslog-ng-core package, instead of
+    creating it in the init script. Thanks Michael Biebl
+    <biebl@debian.org> for the report & assistance. (Closes: #699942, #719910)
+  * Use dh-systemd for proper systemd-related maintainer scripts. Based on
+    a patch by Michael Biebl <biebl@debian.org>. (Closes: #713982,
+    #690067)
+  * Do not wait for syslog-ng to settle down during installation / update.
+    This also fixes installing via debootstrap and a fake
+    start-stop-daemon. (Closes: #714254)
+
+ -- Gergely Nagy <algernon@madhouse-project.org>  Mon, 04 Nov 2013 15:27:37 +0100
+
+syslog-ng (3.3.9-1) unstable; urgency=low
+
+  * New upstream release.
+  * Include missed ivykis header (closes: #708793).
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.org>  Sun, 26 May 2013 09:06:21 +0200
+
+syslog-ng (3.3.6-2) unstable; urgency=low
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * Use /dev/ttyva on kFreeBSD as the target of the d_console_all
+    destination (closes: #697042).
+  * Use the standard /var/log/mail.{info,err,warn} location for the
+    various mail-related logs (closes: #692056).
+  * Don't mark systemd symlinks in /etc as conffiles.
+  * Instead of installing systemd service file symlinks, install a
+    conffile, that includes the real service file (closes: #690067).
+  * Do not forcibly remove the systemd service files, that code is not
+    needed anymore.
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.hu>  Sat, 02 Mar 2013 16:03:18 +0100
+
+syslog-ng (3.3.6-1) unstable; urgency=low
+
+  * New upstream release:
+    - fixes disconnect on charset decoding error when using UDP sources
+      (closes: #674099),
+    - use upstream, packaged ivykis.
+  * Backport upstream fix of cfg-lexer to fix glob-based include order.
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * Add NEWS.Debian, with a note about OpenSSL changing the default dir
+    hashing from MD5 to SHA1, and its effect on syslog-ng users.
+  * Fix build-indep and multiple builds in a row
+  * Explicitly remove systemd unit and service files from /etc upon purge
+    (closes: #674020).
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.hu>  Wed, 05 Sep 2012 01:57:50 +0200
+
+syslog-ng (3.3.5-2) unstable; urgency=low
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * Fix FTBFS on non-Linux architectures (closes: #672457).
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.hu>  Sun, 13 May 2012 00:42:42 +0200
+ 
+syslog-ng (3.3.5-1) unstable; urgency=low
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * New upstream release.
+    + afsocket: handle DNS failures as if it was a connection failure
+      (Closes: #660897)
+  * All patches dropped, they're applied upstream.
+  * Include upstream man pages, as they're DFSG-free now.
+  * Update debian/copyright for 1.0 of the spec.
+  * Bump Standards-Version to 3.9.3 (no changes required)
+  * Fix squeeze->wheezy install-remove-install upgrade path.
+    (Closes: #665905)
+  * Fix the init script to create /dev/xconsole properly on GNU/kFreeBSD.
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.hu>  Thu, 03 May 2012 08:23:46 +0000
+ 
+syslog-ng (3.3.5-1~mhp1) unstable; urgency=low
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * New upstream release.
+    + afsocket: handle DNS failures as if it was a connection failure
+      (Closes: #660897)
+  * All patches dropped, they're applied upstream.
+  * Include upstream man pages, as they're DFSG-free now.
+  * Update debian/copyright for 1.0 of the spec.
+  * Bump Standards-Version to 3.9.3 (no changes required)
+  * Fix squeeze->wheezy install-remove-install upgrade path.
+    (Closes: #665905)
+  * Fix the init script to create /dev/xconsole properly on GNU/kFreeBSD.
+
+ -- Gergely Nagy <algernon@madhouse-project.org>  Mon, 16 Apr 2012 15:22:59 +0200
+
+syslog-ng (3.3.4.dfsg-2~mhp1) unstable; urgency=low
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * Packaging synced with GCS.
+  * Patches applied:
+    + Fix framing issues with the syslog protocol, based on a patch by
+      Zoltan Fried <deirf@balabit.hu>.
+    + afsql: Fix a deadlock when using explicit commits.
+    + afmongodb: Fix a deadlock at deinit time.
+
+ -- Gergely Nagy <algernon@madhouse-project.org>  Fri, 10 Feb 2012 13:38:13 +0100
 
 syslog-ng (3.3.4.dfsg-1) unstable; urgency=low
 
@@ -41,20 +210,71 @@ syslog-ng (3.3.4.dfsg-1) unstable; urgency=low
 
  -- Laszlo Boszormenyi (GCS) <gcs@debian.hu>  Wed, 01 Feb 2012 14:21:11 +0000
 
-syslog-ng (3.3.1.dfsg-1ubuntu2) precise; urgency=low
+syslog-ng (3.3.4.dfsg-1~mhp1) unstable; urgency=low
 
-  * Pre-Depends: dpkg (>= 1.15.6) for xz compression support.  Needed until
-    after Ubuntu 12.04 LTS.
+  * New upstream release.
 
- -- Colin Watson <cjwatson@ubuntu.com>  Sat, 19 Nov 2011 23:50:54 +0000
+  [ Gergely Nagy <algernon@balabit.hu> ]
+  * Applied a patch to fix framing issues with the syslog protocol, based
+    on a patch by Zoltan Fried <deirf@balabit.hu>.
 
-syslog-ng (3.3.1.dfsg-1ubuntu1) precise; urgency=low
+ -- Gergely Nagy <algernon@madhouse-project.org>  Fri, 27 Jan 2012 14:47:07 +0100
 
-  * debian/control: remove libsystemd-daemon-dev build-depends
-  * debian/rules: remove --with-systemdsystemunitdir from
-    override_dh_auto_configure.
+syslog-ng (3.3.3.dfsg-1~mhp2+g511e939) unstable; urgency=low
 
- -- Serge Hallyn <serge.hallyn@ubuntu.com>  Tue, 15 Nov 2011 08:48:02 -0600
+  * New snapshost release, based on upstream commit 511e939.
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * Change the package versioning scheme and the way Revision is
+    assembled: the version now includes the git commit id it is based on,
+    and so does the revision (which now also includes the distribution
+    version it was built for, not only in the version).
+
+ -- Gergely Nagy <algernon@madhouse-project.org>  Thu, 29 Dec 2011 10:23:55 +0100
+
+syslog-ng (3.3.3.dfsg-1~mhp1) unstable; urgency=low
+
+  * New snapshot release, based on upstream commit cd059ea.
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * Dropped the previous two patches, they're applied upstream.
+
+ -- Gergely Nagy <algernon@madhouse-project.org>  Thu, 01 Dec 2011 11:46:17 +0100
+
+syslog-ng (3.3.3.dfsg-1~mhp0) unstable; urgency=low
+
+  * New upstream release.
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * Refresh debian/copyright.
+  * Fix reusable rewrite rules, patch from Zoltan Fried
+    <deirf@balabit.hu>.
+  * Fix FTBFS on Hurd, patch from Svante Signell
+    <svante.signell@telia.com>. (Closes: #648987)
+
+ -- Gergely Nagy <algernon@madhouse-project.org>  Fri, 18 Nov 2011 15:18:37 +0100
+
+syslog-ng (3.3.2.dfsg-1~mhp0) unstable; urgency=low
+
+  * New upstream release.
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * Introduced a syslog-ng-dbg package.
+  * Init script updates:
+    + Silence mknod errors, they're not interesting, and adds noise on
+    kFreeBSD.
+    + Use set -e.
+    + Use s-s-d's --oknodo options instead of checking the existence of a
+    pidfile ourselves.
+
+ -- Gergely Nagy <algernon@madhouse-project.org>  Sun, 13 Nov 2011 19:49:36 +0100
+
+syslog-ng (3.3.2.dfsg~0-1~mhp3) unstable; urgency=low
+
+  * New upstream snapshot, based on commit 8239b58.
+  * Packaging synced with GCS.
+
+ -- Gergely Nagy <algernon@madhouse-project.org>  Wed, 09 Nov 2011 23:41:12 +0100
 
 syslog-ng (3.3.1.dfsg-1) unstable; urgency=low
 
@@ -88,12 +308,6 @@ syslog-ng (3.3.1.dfsg-1) unstable; urgency=low
     (Closes: #589081)
 
  -- Laszlo Boszormenyi (GCS) <gcs@debian.hu>  Tue, 11 Oct 2011 14:30:48 +0200
-
-syslog-ng (3.2.4-1ubuntu1) oneiric; urgency=low
-
-  * Build-depend on libdbi-dev rather than libdbi0-dev (LP: #625882).
-
- -- Colin Watson <cjwatson@ubuntu.com>  Tue, 23 Aug 2011 10:49:08 +0100
 
 syslog-ng (3.2.4-1) unstable; urgency=high
 
@@ -427,7 +641,7 @@ syslog-ng (1.9.8) unstable; urgency=low
   * Fixed config file place back to /etc/syslog-ng/ (Closes: #336981)
 
  -- SZALAY Attila <sasa@debian.org>  Sat, 21 Jan 2006 16:33:19 +0000
-
+ 
 syslog-ng (1.9.6) experimental; urgency=low
 
   * New upstream version.
@@ -993,4 +1207,3 @@ syslog-ng (1.2.2-1) unstable; urgency=low
   * Initial Release.
 
  -- SZALAY Attila <sasa@debian.org>  Thu, 2 Dec 1999 01:38:28 +0200
-

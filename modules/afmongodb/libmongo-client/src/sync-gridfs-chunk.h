@@ -1,5 +1,5 @@
 /* sync-gridfs-chunk.h - libmong-client GridFS chunk API
- * Copyright 2011 Gergely Nagy <algernon@balabit.hu>
+ * Copyright 2011, 2012 Gergely Nagy <algernon@balabit.hu>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -59,7 +59,7 @@ typedef struct _mongo_sync_gridfs_chunked_file mongo_sync_gridfs_chunked_file;
  * object once it is no longer needed.
  */
 mongo_sync_gridfs_chunked_file *mongo_sync_gridfs_chunked_find (mongo_sync_gridfs *gfs,
-								const bson *query);
+                                                                const bson *query);
 
 /** Upload a file to GridFS from a buffer.
  *
@@ -80,9 +80,9 @@ mongo_sync_gridfs_chunked_file *mongo_sync_gridfs_chunked_find (mongo_sync_gridf
  * not guard by design.
  */
 mongo_sync_gridfs_chunked_file *mongo_sync_gridfs_chunked_file_new_from_buffer (mongo_sync_gridfs *gfs,
-										const bson *metadata,
-										const guint8 *data,
-										gint64 size);
+                                                                                const bson *metadata,
+                                                                                const guint8 *data,
+                                                                                gint64 size);
 /** Free a GridFS chunked file object.
  *
  * @param gfile is the file object to free.
@@ -106,7 +106,7 @@ void mongo_sync_gridfs_chunked_file_free (mongo_sync_gridfs_chunked_file *gfile)
  * longer needed.
  */
 mongo_sync_cursor *mongo_sync_gridfs_chunked_file_cursor_new (mongo_sync_gridfs_chunked_file *gfile,
-							      gint start, gint num);
+                                                              gint start, gint num);
 
 /** Get the data of a GridFS file chunk, via a cursor.
  *
@@ -123,7 +123,7 @@ mongo_sync_cursor *mongo_sync_gridfs_chunked_file_cursor_new (mongo_sync_gridfs_
  * caller to free this once it is no longer needed.
  */
 guint8 *mongo_sync_gridfs_chunked_file_cursor_get_chunk (mongo_sync_cursor *cursor,
-							 gint32 *size);
+                                                         gint32 *size);
 
 /** @} */
 

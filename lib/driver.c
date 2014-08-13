@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -24,6 +24,10 @@
   
 #include "driver.h"
 #include "logqueue-fifo.h"
+#include "afinter.h"
+#include "cfg-tree.h"
+
+#include <string.h>
 
 /* LogDriverPlugin */
 
@@ -45,14 +49,6 @@ void
 log_driver_add_plugin(LogDriver *self, LogDriverPlugin *plugin)
 {
   self->plugins = g_list_append(self->plugins, plugin);
-}
-
-void
-log_driver_append(LogDriver *self, LogDriver *next)
-{
-  if (self->drv_next)
-    log_pipe_unref(&self->drv_next->super);
-  self->drv_next = (LogDriver *) log_pipe_ref(&next->super);
 }
 
 gboolean
@@ -84,7 +80,7 @@ log_driver_deinit_method(LogPipe *s)
   return success;
 }
 
-/* NOTE: intentionally static, as only LogSrcDriver or LogDestDriver will derive from LogDriver */
+/* NOTE: intentionally static, as only cDriver or LogDestDriver will derive from LogDriver */
 static void
 log_driver_free(LogPipe *s)
 {
@@ -95,8 +91,6 @@ log_driver_free(LogPipe *s)
     {
       log_driver_plugin_free((LogDriverPlugin *) l->data);
     }
-  log_pipe_unref(&self->drv_next->super);
-  self->drv_next = NULL;
   if (self->group)
     g_free(self->group);
   if (self->id)
@@ -116,10 +110,70 @@ log_driver_init_instance(LogDriver *self)
 
 /* LogSrcDriver */
 
+gboolean
+log_src_driver_init_method(LogPipe *s)
+{
+  LogSrcDriver *self = (LogSrcDriver *) s;
+  GlobalConfig *cfg = log_pipe_get_config(s);
+
+  if (!log_driver_init_method(s))
+    return FALSE;
+
+  if (!self->super.group)
+    {
+      self->super.group = cfg_tree_get_rule_name(&cfg->tree, ENC_SOURCE, s->expr_node);
+      self->group_len = strlen(self->super.group);
+      self->super.id = cfg_tree_get_child_id(&cfg->tree, ENC_SOURCE, s->expr_node);
+    }
+
+  stats_lock();
+  stats_register_counter(0, SCS_SOURCE | SCS_GROUP, self->super.group, NULL, SC_TYPE_PROCESSED, &self->super.processed_group_messages);
+  stats_register_counter(0, SCS_CENTER, NULL, "received", SC_TYPE_PROCESSED, &self->received_global_messages);
+  stats_unlock();
+
+  return TRUE;
+}
+
+gboolean
+log_src_driver_deinit_method(LogPipe *s)
+{
+  LogSrcDriver *self = (LogSrcDriver *) s;
+
+  if (!log_driver_deinit_method(s))
+    return FALSE;
+
+  stats_lock();
+  stats_unregister_counter(SCS_SOURCE | SCS_GROUP, self->super.group, NULL, SC_TYPE_PROCESSED, &self->super.processed_group_messages);
+  stats_unregister_counter(SCS_CENTER, NULL, "received", SC_TYPE_PROCESSED, &self->received_global_messages);
+  stats_unlock();
+  return TRUE;
+}
+
+void
+log_src_driver_queue_method(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options, gpointer user_data)
+{
+  LogSrcDriver *self = (LogSrcDriver *) s;
+  GlobalConfig *cfg = log_pipe_get_config(s);
+
+  /* $SOURCE */
+
+  if (msg->flags & LF_LOCAL)
+    afinter_postpone_mark(cfg->mark_freq);
+
+  log_msg_set_value(msg, LM_V_SOURCE, self->super.group, self->group_len);
+  stats_counter_inc(self->super.processed_group_messages);
+  stats_counter_inc(self->received_global_messages);
+  log_pipe_forward_msg(s, msg, path_options);
+}
+
 void
 log_src_driver_init_instance(LogSrcDriver *self)
 {
   log_driver_init_instance(&self->super);
+  self->super.super.init = log_src_driver_init_method;
+  self->super.super.deinit = log_src_driver_deinit_method;
+  self->super.super.queue = log_src_driver_queue_method;
+  self->super.super.flags |= PIF_SOURCE;
 }
 
 void
@@ -163,19 +217,62 @@ log_dest_driver_release_queue_method(LogDestDriver *self, LogQueue *q, gpointer 
     log_queue_unref(q);
 }
 
+void
+log_dest_driver_queue_method(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options, gpointer user_data)
+{
+  LogDestDriver *self = (LogDestDriver *) s;
+
+  stats_counter_inc(self->super.processed_group_messages);
+  stats_counter_inc(self->queued_global_messages);
+  log_pipe_forward_msg(s, msg, path_options);
+}
+
+gboolean
+log_dest_driver_init_method(LogPipe *s)
+{
+  LogDestDriver *self = (LogDestDriver *) s;
+  GlobalConfig *cfg = log_pipe_get_config(s);
+
+  if (!log_driver_init_method(s))
+    return FALSE;
+
+  if (!self->super.group)
+    {
+      self->super.group = cfg_tree_get_rule_name(&cfg->tree, ENC_DESTINATION, s->expr_node);
+      self->super.id = cfg_tree_get_child_id(&cfg->tree, ENC_DESTINATION, s->expr_node);
+    }
+
+  stats_lock();
+  stats_register_counter(0, SCS_DESTINATION | SCS_GROUP, self->super.group, NULL, SC_TYPE_PROCESSED, &self->super.processed_group_messages);
+  stats_register_counter(0, SCS_CENTER, NULL, "queued", SC_TYPE_PROCESSED, &self->queued_global_messages);
+  stats_unlock();
+
+  return TRUE;
+}
+
 gboolean
 log_dest_driver_deinit_method(LogPipe *s)
 {
   LogDestDriver *self = (LogDestDriver *) s;
-  GList *l;
+  GList *l, *l_next;
 
-  for (l = self->queues; l; l = l->next)
+  for (l = self->queues; l; l = l_next)
     {
       LogQueue *q = (LogQueue *) l->data;
 
-      log_dest_driver_release_queue(self, q);
+      /* the GList struct will be freed by log_dest_driver_release_queue */
+      l_next = l->next;
+
+      /* we have to pass a reference to log_dest_driver_release_queue(),
+       * which automatically frees the ref on the list too */
+      log_dest_driver_release_queue(self, log_queue_ref(q));
     }
   g_assert(self->queues == NULL);
+
+  stats_lock();
+  stats_unregister_counter(SCS_DESTINATION | SCS_GROUP, self->super.group, NULL, SC_TYPE_PROCESSED, &self->super.processed_group_messages);
+  stats_unregister_counter(SCS_CENTER, NULL, "queued", SC_TYPE_PROCESSED, &self->queued_global_messages);
+  stats_unlock();
 
   if (!log_driver_deinit_method(s))
     return FALSE;
@@ -186,6 +283,9 @@ void
 log_dest_driver_init_instance(LogDestDriver *self)
 {
   log_driver_init_instance(&self->super);
+  self->super.super.init = log_dest_driver_init_method;
+  self->super.super.deinit = log_dest_driver_deinit_method;
+  self->super.super.queue = log_dest_driver_queue_method;
   self->acquire_queue = log_dest_driver_acquire_queue_method;
   self->release_queue = log_dest_driver_release_queue_method;
   self->log_fifo_size = -1;

@@ -23,20 +23,20 @@ test_bson_new_from_data (void)
       "bson_new_from_data (NULL, -1) fails");
 
   ok ((new = bson_new_from_data (bson_data (orig),
-				 bson_size (orig) - 1)) != NULL,
+                                 bson_size (orig) - 1)) != NULL,
       "bson_new_from_data() works");
   cmp_ok (bson_size (new), "==", -1,
-	  "Copied object is unfinished");
+          "Copied object is unfinished");
   bson_finish (new);
 
   ok (orig != new, "Copied BSON object is not the same as the original");
 
   cmp_ok (bson_size (orig), "==", bson_size (new),
-	  "Copied (& finished) object has the same size as the original");
+          "Copied (& finished) object has the same size as the original");
   ok (bson_data (orig) != bson_data (new),
       "The copied data is not the same as the original");
   ok (memcmp (bson_data (orig), bson_data (new),
-	      bson_size (orig)) == 0,
+              bson_size (orig)) == 0,
       "The copied data is identical to the original");
 
   bson_free (orig);

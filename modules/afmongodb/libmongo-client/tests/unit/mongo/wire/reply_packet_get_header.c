@@ -40,13 +40,13 @@ test_mongo_wire_reply_packet_get_header (void)
   ok (mongo_wire_reply_packet_get_header (p, &rh),
       "mongo_wire_reply_packet_get_header() works");
   cmp_ok (rh.flags, "==", 0,
-	  "Reply flags are correct");
+          "Reply flags are correct");
   ok (rh.cursor_id == (gint64)12345,
       "Cursor ID is correct");
   cmp_ok (rh.start, "==", 0,
-	  "Reply start document is OK");
+          "Reply start document is OK");
   cmp_ok (rh.returned, "==", 0,
-	  "Number of documents returned is OK");
+          "Number of documents returned is OK");
 
   mongo_wire_packet_free (p);
 }

@@ -22,7 +22,7 @@ test_bson_cursor_get_utc_datetime (void)
   ok (bson_cursor_get_utc_datetime (c, &d) == FALSE,
       "bson_cursor_get_utc_datetime() at the initial position fails");
   cmp_ok (d, "==", 987654,
-	  "destination remains unchanged after failed cursor operations");
+          "destination remains unchanged after failed cursor operations");
   bson_cursor_free (c);
 
   c = bson_find (b, "date");

@@ -33,7 +33,7 @@ test_bson_generate_full (void)
   bson_append_document (b, "doc", d);
   bson_append_array (b, "array", a);
   bson_append_binary (b, "binary0", BSON_BINARY_SUBTYPE_GENERIC,
-		      (guint8 *)"foo\0bar", 7);
+                      (guint8 *)"foo\0bar", 7);
   bson_append_oid (b, "_id", oid);
   bson_append_boolean (b, "TRUE", FALSE);
   bson_append_utc_datetime (b, "date", 1294860709000);
@@ -56,7 +56,7 @@ test_bson_generate_full (void)
 
 mongo_packet *
 test_mongo_wire_generate_reply (gboolean valid, gint32 nreturn,
-				gboolean with_docs)
+                                gboolean with_docs)
 {
   mongo_reply_packet_header rh;
   mongo_packet_header h;
@@ -91,9 +91,9 @@ test_mongo_wire_generate_reply (gboolean valid, gint32 nreturn,
   if (with_docs)
     {
       memcpy (data + sizeof (mongo_reply_packet_header),
-	      bson_data (b1), bson_size (b1));
+              bson_data (b1), bson_size (b1));
       memcpy (data + sizeof (mongo_reply_packet_header) + bson_size (b1),
-	      bson_data (b2), bson_size (b2));
+              bson_data (b2), bson_size (b2));
     }
 
   mongo_wire_packet_set_data (p, data, data_size);
@@ -148,12 +148,12 @@ test_env_setup (void)
     return FALSE;
 
   if (!mongo_util_parse_addr (getenv ("TEST_PRIMARY"), &config.primary_host,
-			      &config.primary_port))
+                              &config.primary_port))
     return FALSE;
 
   if (getenv ("TEST_SECONDARY") && strlen (getenv ("TEST_SECONDARY")) > 0)
     mongo_util_parse_addr (getenv ("TEST_SECONDARY"), &config.secondary_host,
-			   &config.secondary_port);
+                           &config.secondary_port);
 
   return TRUE;
 }

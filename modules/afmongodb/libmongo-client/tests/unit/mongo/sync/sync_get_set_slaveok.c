@@ -14,21 +14,21 @@ test_mongo_sync_get_set_slaveok (void)
   ok (mongo_sync_conn_get_slaveok (NULL) == FALSE,
       "mongo_sync_conn_get_slaveok() returns FALSE with a NULL connection");
   cmp_ok (errno, "==", ENOTCONN,
-	  "errno is now set to ENOTCONN");
+          "errno is now set to ENOTCONN");
 
   ok (mongo_sync_conn_get_slaveok (c) == FALSE,
       "mongo_sync_get_slaveok() works");
   cmp_ok (errno, "==", 0,
-	  "errno is now cleared");
+          "errno is now cleared");
 
   errno = 0;
   mongo_sync_conn_set_slaveok (NULL, TRUE);
   cmp_ok (errno, "==", ENOTCONN,
-	  "errno is set to ENOTCONN after mongo_sync_conn_get_slaveok(NULL)");
+          "errno is set to ENOTCONN after mongo_sync_conn_get_slaveok(NULL)");
 
   mongo_sync_conn_set_slaveok (c, TRUE);
   cmp_ok (errno, "==", 0,
-	  "errno is cleared");
+          "errno is cleared");
   ok (mongo_sync_conn_get_slaveok (c) == TRUE,
       "mongo_sync_set_slaveok() worked");
 

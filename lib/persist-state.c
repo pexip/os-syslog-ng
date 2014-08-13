@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -26,6 +26,7 @@
 #include "serialize.h"
 #include "messages.h"
 #include "mainloop.h"
+#include "misc.h"
 
 #include <sys/types.h>
 #include <unistd.h>
@@ -218,6 +219,7 @@ persist_state_create_store(PersistState *self)
                 NULL);
       return FALSE;
     }
+  g_fd_set_cloexec(self->fd, TRUE);
   self->current_key_block = offsetof(PersistFileHeader, initial_key_store);
   self->current_key_ofs = 0;
   self->current_key_size = sizeof((((PersistFileHeader *) NULL))->initial_key_store);
@@ -308,9 +310,27 @@ persist_state_lookup_key(PersistState *self, const gchar *key, PersistEntryHandl
 }
 
 gboolean
+persist_state_rename_entry(PersistState *self, const gchar *old_key, const gchar *new_key)
+{
+  PersistEntry *entry;
+  gpointer old_orig_key;
+
+  if (g_hash_table_lookup_extended(self->keys, old_key, &old_orig_key, (gpointer *)&entry))
+    {
+      if (g_hash_table_steal(self->keys, old_key))
+        {
+          g_free(old_orig_key);
+          g_hash_table_insert(self->keys, g_strdup(new_key), entry);
+          return TRUE;
+        }
+    }
+  return FALSE;
+}
+
 /*
  * NOTE: can only be called from the main thread (e.g. log_pipe_init/deinit).
  */
+gboolean
 persist_state_add_key(PersistState *self, const gchar *key, PersistEntryHandle handle)
 {
   PersistEntry *entry;
@@ -586,6 +606,7 @@ persist_state_load_v4(PersistState *self)
                 }
             }
         }
+      serialize_archive_free(sa);
     }
  free_and_exit:
   munmap(map, file_size);
@@ -671,6 +692,7 @@ void
 persist_state_unmap_entry(PersistState *self, PersistEntryHandle handle)
 {
   g_mutex_lock(self->mapped_lock);
+  g_assert(self->mapped_counter >= 1);
   self->mapped_counter--;
   if (self->mapped_counter == 0)
     {

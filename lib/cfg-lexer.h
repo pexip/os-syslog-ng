@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -26,6 +26,7 @@
 #define CFG_LEXER_H_INCLUDED 1
 
 #include "syslog-ng.h"
+#include "cfg-args.h"
 #include <stdio.h>
 
 /* this module provides a higher level encapsulation for the configuration
@@ -35,7 +36,6 @@
 
 typedef struct _CfgIncludeLevel CfgIncludeLevel;
 typedef struct _CfgTokenBlock CfgTokenBlock;
-typedef struct _CfgArgs CfgArgs;
 typedef struct _CfgBlockGenerator CfgBlockGenerator;
 typedef struct _CfgBlock CfgBlock;
 typedef struct _CfgLexer CfgLexer;
@@ -131,6 +131,7 @@ struct _CfgLexer
   CfgIncludeLevel include_stack[MAX_INCLUDE_DEPTH];
   GList *context_stack;
   gint include_depth;
+  gchar block_boundary[2];
   gint brace_count;
   gint tokenize_eol;
   GList *token_blocks;
@@ -141,16 +142,17 @@ struct _CfgLexer
   GString *token_pretext;
   GString *token_text;
   CfgArgs *globals;
+  gboolean non_pragma_seen:1, ignore_pragma:1;
 };
 
 /* preprocessor help */
 gchar *
-cfg_lexer_subst_args(CfgArgs *globals, CfgArgs *defs, CfgArgs *args, gchar *cptr, gsize *length);
+cfg_lexer_subst_args(CfgArgs *globals, CfgArgs *defs, CfgArgs *args, gchar *cptr, gsize *length, GError **error);
 
 /* pattern buffer */
 void cfg_lexer_unput_token(CfgLexer *self, YYSTYPE *yylval);
 
-void _cfg_lexer_force_block_state(gpointer state);
+void cfg_lexer_start_block_state(CfgLexer *self, gchar block_boundary[2]);
 
 void cfg_lexer_append_string(CfgLexer *self, int length, char *str);
 void cfg_lexer_append_char(CfgLexer *self, char c);
@@ -176,8 +178,8 @@ gint cfg_lexer_get_context_type(CfgLexer *self);
 void cfg_lexer_inject_token_block(CfgLexer *self, CfgTokenBlock *block);
 gboolean cfg_lexer_register_block_generator(CfgLexer *self, gint context, const gchar *name, CfgBlockGeneratorFunc generator, gpointer user_data, GDestroyNotify user_data_free);
 
-
 int cfg_lexer_lex(CfgLexer *self, YYSTYPE *yylval, YYLTYPE *yylloc);
+void cfg_lexer_free_token(YYSTYPE *token);
 
 CfgLexer *cfg_lexer_new(FILE *file, const gchar *filename, const gchar *preprocess_into);
 CfgLexer *cfg_lexer_new_buffer(const gchar *buffer, gsize length);
@@ -185,13 +187,6 @@ void  cfg_lexer_free(CfgLexer *self);
 
 gint cfg_lexer_lookup_context_type_by_name(const gchar *name);
 const gchar *cfg_lexer_lookup_context_name_by_type(gint id);
-
-/* argument list for a block generator */
-gboolean cfg_args_validate(CfgArgs *self, CfgArgs *defs, const gchar *context);
-void cfg_args_set(CfgArgs *self, const gchar *name, const gchar *value);
-const gchar *cfg_args_get(CfgArgs *self, const gchar *name);
-CfgArgs *cfg_args_new(void);
-void cfg_args_free(CfgArgs *self);
 
 /* token block objects */
 
@@ -207,6 +202,14 @@ gboolean cfg_block_generate(CfgLexer *lexer, gint context, const gchar *name, Cf
 CfgBlock *cfg_block_new(const gchar *content, CfgArgs *arg_defs);
 void cfg_block_free(CfgBlock *self);
 
+#define CFG_LEXER_ERROR cfg_lexer_error_quark()
 
+GQuark cfg_lexer_error_quark();
+
+enum CfgLexerError
+{
+  CFG_LEXER_MISSING_BACKTICK_PAIR,
+  CFG_LEXER_CANNOT_REPRESENT_APOSTROPHES_IN_QSTRINGS,
+};
 
 #endif

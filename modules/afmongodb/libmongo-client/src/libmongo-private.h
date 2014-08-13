@@ -1,5 +1,5 @@
 /* libmongo-private.h - private headers for libmongo-client
- * Copyright 2011 Gergely Nagy <algernon@balabit.hu>
+ * Copyright 2011, 2012 Gergely Nagy <algernon@balabit.hu>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@ struct _bson
 {
   GByteArray *data; /**< The actual data of the BSON object. */
   gboolean finished; /**< Flag to indicate whether the object is open
-			or finished. */
+                        or finished. */
 };
 
 /** @internal Mongo Connection state object. */
@@ -46,7 +46,7 @@ struct _mongo_sync_connection
 {
   mongo_connection super; /**< The parent object. */
   gboolean slaveok; /**< Whether queries against slave nodes are
-		       acceptable. */
+                       acceptable. */
   gboolean safe_mode; /**< Safe-mode signal flag. */
   gboolean auto_reconnect; /**< Auto-reconnect flag. */
 
@@ -58,10 +58,16 @@ struct _mongo_sync_connection
   } rs;  /**< Replica Set properties. */
 
   gchar *last_error; /**< The last error from the server, caught
-			during queries. */
+                        during queries. */
   gint32 max_insert_size; /**< Maximum number of bytes an insert
-			     command can be before being split to
-			     smaller chunks. Used for bulk inserts. */
+                             command can be before being split to
+                             smaller chunks. Used for bulk inserts. */
+  struct
+  {
+    gchar *db; /**< The database to authenticate against. */
+    gchar *user; /**< The username to authenticate with. */
+    gchar *pw; /**< The password to authenticate with. */
+  } auth; /**< Authentication credentials. These are mlock()'ed. */
 };
 
 /** @internal MongoDB cursor object.
@@ -72,15 +78,15 @@ struct _mongo_sync_connection
 struct _mongo_sync_cursor
 {
   mongo_sync_connection *conn; /**< The connection associated with
-				  the cursor. Owned by the caller. */
+                                  the cursor. Owned by the caller. */
   gchar *ns; /**< The namespace of the cursor. */
   mongo_packet *results; /**< The current result set, as a mongo
-			    packet. */
+                            packet. */
 
   gint32 offset; /**< Offset of the cursor within the active result
-		    set. */
+                    set. */
   mongo_reply_packet_header ph; /**< The reply headers extracted from
-				   the active result set. */
+                                   the active result set. */
 };
 
 /** @internal Synchronous pool connection object. */
@@ -96,7 +102,7 @@ struct _mongo_sync_pool_connection
 struct _mongo_sync_gridfs
 {
   mongo_sync_connection *conn; /**< Connection the object is
-				  associated to. */
+                                  associated to. */
 
   struct
   {
@@ -136,7 +142,7 @@ typedef struct
       const gchar *md5; /**< MD5 sum of the file. */
       gint64 date; /**< The upload date. */
       bson *metadata; /**< Full file metadata, including user-set
-			 keys. */
+                         keys. */
     };
 
     /** Streamed file data */
@@ -178,10 +184,12 @@ struct _mongo_sync_gridfs_stream
        */
       struct
       {
-	const guint8 *data; /**< The current chunk data, pointing
-			       into ->reader.bson. */
-	gint32 size; /**< Size of the current chunk. */
-	gint32 offset; /**< Offset we're into the chunk. */
+        const guint8 *data; /**< The current chunk data, pointing
+                               into ->reader.bson. */
+        gint32 start_offset; /**< Offset to start reading data from,
+                               needed to support the binary subtype. */
+        gint32 size; /**< Size of the current chunk. */
+        gint32 offset; /**< Offset we're into the chunk. */
       } chunk;
     } reader;
 
@@ -194,7 +202,7 @@ struct _mongo_sync_gridfs_stream
       gint32 buffer_offset; /**< Offset into the output buffer. */
 
       GChecksum *checksum; /**< The running checksum of the output
-			      file. */
+                              file. */
     } writer;
   };
 };
@@ -212,7 +220,7 @@ struct _mongo_sync_gridfs_stream
  * anymore.
  */
 mongo_packet *mongo_wire_cmd_kill_cursors_va (gint32 id, gint32 n,
-					      va_list ap);
+                                              va_list ap);
 
 /** @internal Get the header data of a packet, without conversion.
  *
@@ -229,7 +237,7 @@ mongo_packet *mongo_wire_cmd_kill_cursors_va (gint32 id, gint32 n,
  */
 gboolean
 mongo_wire_packet_get_header_raw (const mongo_packet *p,
-				  mongo_packet_header *header);
+                                  mongo_packet_header *header);
 
 /** @internal Set the header data of a packet, without conversion.
  *
@@ -246,6 +254,6 @@ mongo_wire_packet_get_header_raw (const mongo_packet *p,
  */
 gboolean
 mongo_wire_packet_set_header_raw (mongo_packet *p,
-				  const mongo_packet_header *header);
+                                  const mongo_packet_header *header);
 
 #endif

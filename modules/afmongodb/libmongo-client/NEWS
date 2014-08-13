@@ -1,5 +1,136 @@
 #+STARTUP: indent showall			-*- org -*-
 
+* 0.1.7.1 - <2014-03-12 Wed>
+
+** Portability: Support HP-UX
+
+Compatibility code was added to make libmongo-client portable to HP-UX.
+
+** Portability: prove made optional
+
+On platforms where the `prove' utility is not readily available, a
+custom test runner can be used by setting the PROVE environment
+variable when running `make check'.
+
+** Bugfix: Safe-mode robustness improvement
+
+When safe mode is turned on, the code now verifies not only that
+getLastError() doesn't return an error, but also verifies that the
+command succeeds, too.
+
+* 0.1.7 - <2013-12-10 Tue>
+
+** Feature: Automatic re-authentication
+
+This release adds support for automatically re-authenticating when
+reconnecting, by storing the credentials used for the last
+authentication in a safe, memory-locked area.
+
+** New function: mongo_sync_cmd_user_add_with_roles()
+
+A new function was added to create users with their roles already set
+at the same time.
+
+** Bugfix: Enable subdir-objects for automake
+
+Since we have sources that reside in a subdirectory, to avoid
+conflicts and a lot of automake warnings, enable the subdir-objects
+automake option.
+
+* 0.1.6.3 - <2013-08-27 Tue>
+
+Another bugfix release with a couple of important bugfixes, and a few
+minor improvements here and there.
+
+** Improvement: configure.ac updated to modern autotools
+
+The configure.ac script was updated to not use obsolete macros, and to
+work with automake 1.13+ (where the aforementioned macros were
+removed).
+
+** Bugfix: Fix chunked GridFS file retrieval
+
+When retrieving files via the chunked GridFS API, order the chunks by
+their number, so reassembling them will succeed.
+
+** Bugfix: Stop crashing in case verification fails
+
+When safe-mode is enabled, but getLastError() fails, the library
+crashed due to an uninitialised pointer. This has been fixed in this
+release.
+
+* 0.1.6.2 - <2012-12-21 Fri>
+
+Another bugfix release with mostly minor improvements and
+documentation updates.
+
+** Feature: Support for the Binary subtype in GridFS
+
+The GridFS support in the library only supported the "Generic"
+subtype until now, but with this release, the (obsolete) "Binary"
+subtype is supported aswell.
+
+** Bugfix: Plugged a memory leak in the GridFS code
+
+The GridFS code (the chunked file constructor, in particular) leaked
+the generated ObjectId. This has been corrected.
+
+** Documentation: New tutorials
+
+New tutorials were written for showing how to handle indexes, and how
+to run custom commands.
+
+* 0.1.6.1 - <2012-10-14 Sun>
+
+This is a quick bugfix release, that restores ABI compatibility with
+versions prior to 0.1.6, and cleans up a few other minor issues.
+
+* 0.1.6 - <2012-10-14 Sun>
+
+With this release, thanks to Conrad Hoffmann <ch@bitfehler.net>, it is
+now possible to connect to mongodb via unix sockets.
+
+See the documentation and the updated mongo-dump example for details.
+
+* 0.1.5 - <2012-04-13 Fri>
+
+This is a bugfix release, without any new functionality. It is
+expected that this will be the last release before a complete overhaul
+of the library.
+
+** Bugfix: Restore glib 2.12 compatibility
+
+The examples used features not available in glib 2.12, they were
+changed to not do that, and work with this old version too.
+
+** Bugfix: Do not accept invalid index specifications
+
+When creating an index, the library now bails out early with an error
+in case the index specification is not acceptable.
+
+** Bugfix: Fix glib sanity check when glib is on a non-standard path
+
+In case glib was installed to a path that is not on the compiler's
+default search path, the sanity check at configure time failed. This
+has been corrected.
+
+** Bugfix: bson_cursor_find() & co. must match the whole key
+
+Due to a silly matching logic in bson_cursor_find(), and anything that
+built on it (bson_find() included) was able to match keys of which the
+sought name was a prefix of.
+
+This is now fixed, and the find functions will correctly match the
+whole key.
+
+** Bugfix: Fixed OID generation on 64-bit big-endian machines
+
+Due to a rounding error, OID generation on certain 64-bit big-endian
+platforms resulted in the timestamp part always being zeroed out,
+which made OIDs generated on such platforms useless.
+
+The rounding error was eliminated.
+
 * 0.1.4 - <2011-08-27 Sat>
 
 This release is a minor update, with neither new functionality, nor

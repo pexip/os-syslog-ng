@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -39,6 +39,15 @@ log_pipe_init_instance(LogPipe *self)
   self->free_fn = log_pipe_free_method;
 }
 
+LogPipe *
+log_pipe_new(void)
+{
+  LogPipe *self = g_new0(LogPipe, 1);
+
+  log_pipe_init_instance(self);
+  return self;
+}
+
 void
 log_pipe_free_method(LogPipe *self)
 {
@@ -71,7 +80,7 @@ log_pipe_unref(LogPipe *self)
 }
 
 void
-log_pipe_forward_notify(LogPipe *self, LogPipe *sender, gint notify_code, gpointer user_data)
+log_pipe_forward_notify(LogPipe *self, gint notify_code, gpointer user_data)
 {
-  log_pipe_notify(self->pipe_next, self, notify_code, user_data);
+  log_pipe_notify(self->pipe_next, notify_code, user_data);
 }

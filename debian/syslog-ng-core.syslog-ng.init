@@ -42,10 +42,16 @@ case "x$CONSOLE_LOG_LEVEL" in
 esac
 
 create_xconsole() {
-  if [ ! -e /dev/xconsole ]
-  then
-    mknod -m 640 /dev/xconsole p
-  fi
+    XCONSOLE=/dev/xconsole
+    if [ "$(uname -s)" = "GNU/kFreeBSD" ]; then
+        XCONSOLE=/var/run/xconsole
+        ln -sf $XCONSOLE /dev/xconsole
+    fi
+    if [ ! -e $XCONSOLE ]; then
+        mknod -m 640 $XCONSOLE p
+        chown root:adm $XCONSOLE
+        [ -x /sbin/restorecon ] && /sbin/restorecon $XCONSOLE
+    fi
 }
 
 create_pidfiledir() {
@@ -58,6 +64,10 @@ create_pidfiledir() {
 syslogng_wait() {
     if [ "$2" -ne 0 ]; then
         return 1
+    fi
+
+    if [ -n "$DPKG_MAINTSCRIPT_PACKAGE" ]; then
+        return 0
     fi
 
     RET=1
@@ -77,7 +87,6 @@ syslogng_start() {
     log_daemon_msg "Starting system logging" "$NAME"
     create_pidfiledir
     create_xconsole
-    install -d /var/lib/syslog-ng
     start-stop-daemon --start --oknodo --quiet --exec "$SYSLOGNG" \
                       --pidfile "$PIDFILE" -- -p "$PIDFILE" $SYSLOGNG_OPTS
     syslogng_wait 1 $?
@@ -93,7 +102,6 @@ syslogng_stop() {
     syslogng_wait 0 $?
     RET="$?"
     log_end_msg $RET
-    rm -f "$PIDFILE"
     return $RET
 }
 

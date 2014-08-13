@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -27,7 +27,7 @@
 
 #include "syslog-ng.h"
 #include "timeutils.h"
-#include "logproto.h"
+#include "logproto/logproto-server.h"
 
 #include <regex.h>
 
@@ -57,6 +57,7 @@ typedef struct _MsgFormatHandler MsgFormatHandler;
 
 typedef struct _MsgFormatOptions
 {
+  gboolean initialized;
   gchar *format;
   MsgFormatHandler *format_handler;
   guint32 flags;
@@ -64,17 +65,25 @@ typedef struct _MsgFormatOptions
   gchar *recv_time_zone;
   TimeZoneInfo *recv_time_zone_info;
   regex_t *bad_hostname;
+  gint sdata_param_value_max;
 } MsgFormatOptions;
 
 struct _MsgFormatHandler
 {
-  LogProto *(*construct_proto)(MsgFormatOptions *options, LogTransport *transport, guint flags);
-  void (*parse)(MsgFormatOptions *options, const guchar *data, gsize length, LogMessage *msg);
+  /* this method has a chance to change the LogProto related options to
+   * match the requirements of the "format" in question.  This is used by
+   * the "pacct" plugin to set the record length the proper size
+   */
+  LogProtoServer *(*construct_proto)(const MsgFormatOptions *options, LogTransport *transport, const LogProtoServerOptions *proto_options);
+  void (*parse)(const MsgFormatOptions *options, const guchar *data, gsize length, LogMessage *msg);
 };
 
 void msg_format_options_defaults(MsgFormatOptions *options);
 void msg_format_options_init(MsgFormatOptions *parse_options, GlobalConfig *cfg);
 void msg_format_options_destroy(MsgFormatOptions *parse_options);
 
+gboolean msg_format_options_process_flag(MsgFormatOptions *options, gchar *flag);
+
+void msg_format_inject_parse_error(LogMessage *msg, const guchar *data, gsize length);
 
 #endif

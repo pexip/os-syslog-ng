@@ -1,0 +1,2 @@
+# These are ignored due to a Lintian bug: #727683
+syslog-ng-mod-mongodb: binary-or-shlib-defines-rpath usr/lib/syslog-ng/* *

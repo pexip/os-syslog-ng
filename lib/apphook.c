@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -30,12 +30,11 @@
 #include "stats.h"
 #include "tags.h"
 #include "logmsg.h"
-#include "logparser.h"
 #include "timeutils.h"
 #include "logsource.h"
 #include "logwriter.h"
 #include "afinter.h"
-#include "templates.h"
+#include "template/templates.h"
 
 #include <iv.h>
 #include <iv_work.h>
@@ -73,6 +72,29 @@ register_application_hook(gint type, ApplicationHookFunc func, gpointer user_dat
     }
 }
 
+void
+unregister_application_hook(gint type, ApplicationHookFunc func, gpointer user_data)
+{
+  GList *l, *l_next;
+
+  for (l = application_hooks; l; l = l_next)
+    {
+      ApplicationHookEntry *e = l->data;
+
+      if (e->type == type && e->func == func && e->user_data == user_data)
+        {
+          l_next = l->next;
+          application_hooks = g_list_remove_link(application_hooks, l);
+          g_free(e);
+          g_list_free_1(l);
+        }
+      else
+        {
+          l_next = l->next;
+        }
+    }
+}
+
 static void
 run_application_hook(gint type)
 {
@@ -102,12 +124,19 @@ run_application_hook(gint type)
 
 }
 
+static void
+app_fatal(const char *msg)
+{
+  fprintf(stderr, "%s\n", msg);
+}
+
 void 
 app_startup(void)
 {
   main_thread_handle = g_thread_self();
 
   msg_init(FALSE);
+  iv_set_fatal_msg_handler(app_fatal);
   iv_init();
   g_thread_init(NULL);
   afinter_global_init();
@@ -144,11 +173,15 @@ void
 app_shutdown(void)
 {
   run_application_hook(AH_SHUTDOWN);
+  log_template_global_deinit();
   log_tags_deinit();
+  log_msg_global_deinit();
+
   stats_destroy();
   dns_cache_destroy();
   child_manager_deinit();
   g_list_foreach(application_hooks, (GFunc) g_free, NULL);
   g_list_free(application_hooks);
   msg_deinit();
+  iv_deinit();
 }

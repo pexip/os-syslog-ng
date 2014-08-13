@@ -1,4 +1,0 @@
-no_make_in_debian.patch
-afmongodb-Fix-a-deadlock-at-deinit-time.patch
-afsql-Fix-a-deadlock-when-using-explicit-commits.patch
-logproto.c-Invalid-Frame-Header-in-syslog-protocol.patch

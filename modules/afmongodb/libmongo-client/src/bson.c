@@ -1,5 +1,5 @@
 /* bson.c - libmongo-client's BSON implementation
- * Copyright 2011 Gergely Nagy <algernon@balabit.hu>
+ * Copyright 2011, 2012 Gergely Nagy <algernon@balabit.hu>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,12 +33,12 @@ struct _bson_cursor
 {
   const bson *obj; /**< The BSON object this is a cursor for. */
   const gchar *key; /**< Pointer within the BSON object to the
-		       current key. */
+                       current key. */
   size_t pos; /**< Position within the BSON object, pointing at the
-		 element type. */
+                 element type. */
   size_t value_pos; /**< The start of the value within the BSON
-		       object, pointing right after the end of the
-		       key. */
+                       object, pointing right after the end of the
+                       key. */
 };
 
 /** @internal Append a byte to a BSON stream.
@@ -97,7 +97,7 @@ _bson_append_element_header (bson *b, bson_type type, const gchar *name)
 
   _bson_append_byte (b, (guint8) type);
   b->data = g_byte_array_append (b->data, (const guint8 *)name,
-				 strlen (name) + 1);
+                                 strlen (name) + 1);
 
   return TRUE;
 }
@@ -121,7 +121,7 @@ _bson_append_element_header (bson *b, bson_type type, const gchar *name)
  */
 static gboolean
 _bson_append_string_element (bson *b, bson_type type, const gchar *name,
-			     const gchar *val, gint32 length)
+                             const gchar *val, gint32 length)
 {
   size_t len;
 
@@ -160,7 +160,7 @@ _bson_append_string_element (bson *b, bson_type type, const gchar *name,
  */
 static gboolean
 _bson_append_document_element (bson *b, bson_type type, const gchar *name,
-			       const bson *doc)
+                               const bson *doc)
 {
   if (bson_size (doc) < 0)
     return FALSE;
@@ -183,7 +183,7 @@ _bson_append_document_element (bson *b, bson_type type, const gchar *name,
  */
 static inline gboolean
 _bson_append_int64_element (bson *b, bson_type type, const gchar *name,
-			    gint64 i)
+                            gint64 i)
 {
   if (!_bson_append_element_header (b, type, name))
     return FALSE;
@@ -303,144 +303,144 @@ bson_new_from_data (const guint8 *data, gint32 size)
       case BSON_TYPE_NONE:						\
       case BSON_TYPE_UNDEFINED:						\
       case BSON_TYPE_DBPOINTER:						\
-	single_result = FALSE;						\
-	break;								\
+        single_result = FALSE;						\
+        break;								\
       case BSON_TYPE_MIN:						\
       case BSON_TYPE_MAX:						\
       default:								\
-	single_result = FALSE;						\
-	break;								\
+        single_result = FALSE;						\
+        break;								\
       case BSON_TYPE_DOUBLE:						\
-	{								\
-	  gdouble d = (gdouble)va_arg (ap, gdouble);			\
-	  bson_append_double (b, name, d);				\
-	  break;							\
-	}								\
+        {								\
+          gdouble d = (gdouble)va_arg (ap, gdouble);			\
+          bson_append_double (b, name, d);				\
+          break;							\
+        }								\
       case BSON_TYPE_STRING:						\
-	{								\
-	  gchar *s = (gchar *)va_arg (ap, gpointer);			\
-	  gint32 l = (gint32)va_arg (ap, gint32);			\
-	  bson_append_string (b, name, s, l);				\
-	  if (free_after)						\
-	    g_free (s);							\
-	  break;							\
-	}								\
+        {								\
+          gchar *s = (gchar *)va_arg (ap, gpointer);			\
+          gint32 l = (gint32)va_arg (ap, gint32);			\
+          bson_append_string (b, name, s, l);				\
+          if (free_after)						\
+            g_free (s);							\
+          break;							\
+        }								\
       case BSON_TYPE_DOCUMENT:						\
-	{								\
-	  bson *d = (bson *)va_arg (ap, gpointer);			\
-	  if (free_after && bson_size (d) < 0)				\
-	    bson_finish (d);						\
-	  bson_append_document (b, name, d);				\
-	  if (free_after)						\
-	    bson_free (d);						\
-	  break;							\
-	}								\
+        {								\
+          bson *d = (bson *)va_arg (ap, gpointer);			\
+          if (free_after && bson_size (d) < 0)				\
+            bson_finish (d);						\
+          bson_append_document (b, name, d);				\
+          if (free_after)						\
+            bson_free (d);						\
+          break;							\
+        }								\
       case BSON_TYPE_ARRAY:						\
-	{								\
-	  bson *d = (bson *)va_arg (ap, gpointer);			\
-	  if (free_after && bson_size (d) < 0)				\
-	    bson_finish (d);						\
-	  bson_append_array (b, name, d);				\
-	  if (free_after)						\
-	    bson_free (d);						\
-	  break;							\
-	}								\
+        {								\
+          bson *d = (bson *)va_arg (ap, gpointer);			\
+          if (free_after && bson_size (d) < 0)				\
+            bson_finish (d);						\
+          bson_append_array (b, name, d);				\
+          if (free_after)						\
+            bson_free (d);						\
+          break;							\
+        }								\
       case BSON_TYPE_BINARY:						\
-	{								\
-	  bson_binary_subtype s =					\
-	    (bson_binary_subtype)va_arg (ap, guint);			\
-	  guint8 *d = (guint8 *)va_arg (ap, gpointer);			\
-	  gint32 l = (gint32)va_arg (ap, gint32);			\
-	  bson_append_binary (b, name, s, d, l);			\
-	  if (free_after)						\
-	    g_free (d);							\
-	  break;							\
-	}								\
+        {								\
+          bson_binary_subtype s =					\
+            (bson_binary_subtype)va_arg (ap, guint);			\
+          guint8 *d = (guint8 *)va_arg (ap, gpointer);			\
+          gint32 l = (gint32)va_arg (ap, gint32);			\
+          bson_append_binary (b, name, s, d, l);			\
+          if (free_after)						\
+            g_free (d);							\
+          break;							\
+        }								\
       case BSON_TYPE_OID:						\
-	{								\
-	  guint8 *oid = (guint8 *)va_arg (ap, gpointer);		\
-	  bson_append_oid (b, name, oid);				\
-	  if (free_after)						\
-	    g_free (oid);						\
-	  break;							\
-	}								\
+        {								\
+          guint8 *oid = (guint8 *)va_arg (ap, gpointer);		\
+          bson_append_oid (b, name, oid);				\
+          if (free_after)						\
+            g_free (oid);						\
+          break;							\
+        }								\
       case BSON_TYPE_BOOLEAN:						\
-	{								\
-	  gboolean v = (gboolean)va_arg (ap, guint);			\
-	  bson_append_boolean (b, name, v);				\
-	  break;							\
-	}								\
+        {								\
+          gboolean v = (gboolean)va_arg (ap, guint);			\
+          bson_append_boolean (b, name, v);				\
+          break;							\
+        }								\
       case BSON_TYPE_UTC_DATETIME:					\
-	{								\
-	  gint64 ts = (gint64)va_arg (ap, gint64);			\
-	  bson_append_utc_datetime (b, name, ts);			\
-	  break;							\
-	}								\
+        {								\
+          gint64 ts = (gint64)va_arg (ap, gint64);			\
+          bson_append_utc_datetime (b, name, ts);			\
+          break;							\
+        }								\
       case BSON_TYPE_NULL:						\
-	{								\
-	  bson_append_null (b, name);					\
-	  break;							\
-	}								\
+        {								\
+          bson_append_null (b, name);					\
+          break;							\
+        }								\
       case BSON_TYPE_REGEXP:						\
-	{								\
-	  gchar *r = (gchar *)va_arg (ap, gpointer);			\
-	  gchar *o = (gchar *)va_arg (ap, gpointer);			\
-	  bson_append_regex (b, name, r, o);				\
-	  if (free_after)						\
-	    {								\
-	      g_free (r);						\
-	      g_free (o);						\
-	    }								\
-	  break;							\
+        {								\
+          gchar *r = (gchar *)va_arg (ap, gpointer);			\
+          gchar *o = (gchar *)va_arg (ap, gpointer);			\
+          bson_append_regex (b, name, r, o);				\
+          if (free_after)						\
+            {								\
+              g_free (r);						\
+              g_free (o);						\
+            }								\
+          break;							\
       }									\
       case BSON_TYPE_JS_CODE:						\
-	{								\
-	  gchar *s = (gchar *)va_arg (ap, gpointer);			\
-	  gint32 l = (gint32)va_arg (ap, gint32);			\
-	  bson_append_javascript (b, name, s, l);			\
-	  if (free_after)						\
-	    g_free (s);							\
-	  break;							\
-	}								\
+        {								\
+          gchar *s = (gchar *)va_arg (ap, gpointer);			\
+          gint32 l = (gint32)va_arg (ap, gint32);			\
+          bson_append_javascript (b, name, s, l);			\
+          if (free_after)						\
+            g_free (s);							\
+          break;							\
+        }								\
       case BSON_TYPE_SYMBOL:						\
-	{								\
-	  gchar *s = (gchar *)va_arg (ap, gpointer);			\
-	  gint32 l = (gint32)va_arg (ap, gint32);			\
-	  bson_append_symbol (b, name, s, l);				\
-	  if (free_after)						\
-	    g_free (s);							\
-	  break;							\
-	}								\
+        {								\
+          gchar *s = (gchar *)va_arg (ap, gpointer);			\
+          gint32 l = (gint32)va_arg (ap, gint32);			\
+          bson_append_symbol (b, name, s, l);				\
+          if (free_after)						\
+            g_free (s);							\
+          break;							\
+        }								\
       case BSON_TYPE_JS_CODE_W_SCOPE:					\
-	{								\
-	  gchar *s = (gchar *)va_arg (ap, gpointer);			\
-	  gint32 l = (gint32)va_arg (ap, gint32);			\
-	  bson *scope = (bson *)va_arg (ap, gpointer);			\
-	  if (free_after && bson_size (scope) < 0)			\
-	    bson_finish (scope);					\
-	  bson_append_javascript_w_scope (b, name, s, l, scope);	\
-	  if (free_after)						\
-	    bson_free (scope);						\
-	  break;							\
-	}								\
+        {								\
+          gchar *s = (gchar *)va_arg (ap, gpointer);			\
+          gint32 l = (gint32)va_arg (ap, gint32);			\
+          bson *scope = (bson *)va_arg (ap, gpointer);			\
+          if (free_after && bson_size (scope) < 0)			\
+            bson_finish (scope);					\
+          bson_append_javascript_w_scope (b, name, s, l, scope);	\
+          if (free_after)						\
+            bson_free (scope);						\
+          break;							\
+        }								\
       case BSON_TYPE_INT32:						\
-	{								\
-	  gint32 l = (gint32)va_arg (ap, gint32);			\
-	  bson_append_int32 (b, name, l);				\
-	  break;							\
-	}								\
+        {								\
+          gint32 l = (gint32)va_arg (ap, gint32);			\
+          bson_append_int32 (b, name, l);				\
+          break;							\
+        }								\
       case BSON_TYPE_TIMESTAMP:						\
-	{								\
-	  gint64 ts = (gint64)va_arg (ap, gint64);			\
-	  bson_append_timestamp (b, name, ts);				\
-	  break;							\
-	}								\
+        {								\
+          gint64 ts = (gint64)va_arg (ap, gint64);			\
+          bson_append_timestamp (b, name, ts);				\
+          break;							\
+        }								\
       case BSON_TYPE_INT64:						\
-	{								\
-	  gint64 l = (gint64)va_arg (ap, gint64);			\
-	  bson_append_int64 (b, name, l);				\
-	  break;							\
-	}								\
+        {								\
+          gint64 l = (gint64)va_arg (ap, gint64);			\
+          bson_append_int64 (b, name, l);				\
+          break;							\
+        }								\
       }									\
   }
 
@@ -469,11 +469,11 @@ bson_build (bson_type type, const gchar *name, ...)
       n = (const gchar *)va_arg (ap, gpointer);
       _bson_build_add_single (b, t, n, FALSE, ap);
       if (!single_result)
-	{
-	  bson_free (b);
-	  va_end (ap);
-	  return NULL;
-	}
+        {
+          bson_free (b);
+          va_end (ap);
+          return NULL;
+        }
     }
   va_end (ap);
 
@@ -506,11 +506,11 @@ bson_build_full (bson_type type, const gchar *name, gboolean free_after, ...)
       f = (gboolean)va_arg (ap, gint);
       _bson_build_add_single (b, t, n, f, ap);
       if (!single_result)
-	{
-	  bson_free (b);
-	  va_end (ap);
-	  return NULL;
-	}
+        {
+          bson_free (b);
+          va_end (ap);
+          return NULL;
+        }
     }
   va_end (ap);
 
@@ -588,7 +588,7 @@ bson_free (bson *b)
 
 gboolean
 bson_validate_key (const gchar *key, gboolean forbid_dots,
-		   gboolean no_dollar)
+                   gboolean no_dollar)
 {
   if (!key)
     {
@@ -624,7 +624,7 @@ bson_append_double (bson *b, const gchar *name, gdouble val)
 
 gboolean
 bson_append_string (bson *b, const gchar *name, const gchar *val,
-		    gint32 length)
+                    gint32 length)
 {
   return _bson_append_string_element (b, BSON_TYPE_STRING, name, val, length);
 }
@@ -643,7 +643,7 @@ bson_append_array (bson *b, const gchar *name, const bson *array)
 
 gboolean
 bson_append_binary (bson *b, const gchar *name, bson_binary_subtype subtype,
-		    const guint8 *data, gint32 size)
+                    const guint8 *data, gint32 size)
 {
   if (!data || !size || size <= 0)
     return FALSE;
@@ -695,7 +695,7 @@ bson_append_null (bson *b, const gchar *name)
 
 gboolean
 bson_append_regex (bson *b, const gchar *name, const gchar *regexp,
-		   const gchar *options)
+                   const gchar *options)
 {
   if (!regexp || !options)
     return FALSE;
@@ -704,31 +704,31 @@ bson_append_regex (bson *b, const gchar *name, const gchar *regexp,
     return FALSE;
 
   b->data = g_byte_array_append (b->data, (const guint8 *)regexp,
-				 strlen (regexp) + 1);
+                                 strlen (regexp) + 1);
   b->data = g_byte_array_append (b->data, (const guint8 *)options,
-				 strlen (options) + 1);
+                                 strlen (options) + 1);
 
   return TRUE;
 }
 
 gboolean
 bson_append_javascript (bson *b, const gchar *name, const gchar *js,
-			gint32 len)
+                        gint32 len)
 {
   return _bson_append_string_element (b, BSON_TYPE_JS_CODE, name, js, len);
 }
 
 gboolean
 bson_append_symbol (bson *b, const gchar *name, const gchar *symbol,
-		    gint32 len)
+                    gint32 len)
 {
   return _bson_append_string_element (b, BSON_TYPE_SYMBOL, name, symbol, len);
 }
 
 gboolean
 bson_append_javascript_w_scope (bson *b, const gchar *name,
-				const gchar *js, gint32 len,
-				const bson *scope)
+                                const gchar *js, gint32 len,
+                                const bson *scope)
 {
   gint size;
   size_t length;
@@ -752,7 +752,7 @@ bson_append_javascript_w_scope (bson *b, const gchar *name,
 
   /* Append the scope */
   b->data = g_byte_array_append (b->data, bson_data (scope),
-				 bson_size (scope));
+                                 bson_size (scope));
 
   return TRUE;
 }
@@ -832,7 +832,7 @@ _bson_get_block_size (bson_type type, const guint8 *data)
       return sizeof (gdouble);
     case BSON_TYPE_BINARY:
       return bson_stream_doc_size (data, 0) +
-	sizeof (gint32) + sizeof (guint8);
+        sizeof (gint32) + sizeof (guint8);
     case BSON_TYPE_OID:
       return 12;
     case BSON_TYPE_BOOLEAN:
@@ -876,7 +876,7 @@ bson_cursor_next (bson_cursor *c)
     {
       bs = _bson_get_block_size (bson_cursor_type (c), d + c->value_pos);
       if (bs == -1)
-	return FALSE;
+        return FALSE;
       pos = c->value_pos + bs;
     }
 
@@ -892,7 +892,7 @@ bson_cursor_next (bson_cursor *c)
 
 static inline gboolean
 _bson_cursor_find (const bson *b, const gchar *name, size_t start_pos,
-		   gint32 end_pos, gboolean wrap_over, bson_cursor *dest_c)
+                   gint32 end_pos, gboolean wrap_over, bson_cursor *dest_c)
 {
   gint32 pos = start_pos, bs;
   const guint8 *d;
@@ -909,24 +909,24 @@ _bson_cursor_find (const bson *b, const gchar *name, size_t start_pos,
       gint32 key_len = strlen (key);
       gint32 value_pos = pos + key_len + 2;
 
-      if (!memcmp (key, name, (name_len <= key_len) ? name_len : key_len))
-	{
-	  dest_c->obj = b;
-	  dest_c->key = key;
-	  dest_c->pos = pos;
-	  dest_c->value_pos = value_pos;
+      if (key_len == name_len && memcmp (key, name, key_len) == 0)
+        {
+          dest_c->obj = b;
+          dest_c->key = key;
+          dest_c->pos = pos;
+          dest_c->value_pos = value_pos;
 
-	  return TRUE;
-	}
+          return TRUE;
+        }
       bs = _bson_get_block_size (t, &d[value_pos]);
       if (bs == -1)
-	return FALSE;
+        return FALSE;
       pos = value_pos + bs;
     }
 
   if (wrap_over)
     return _bson_cursor_find (b, name, sizeof (gint32), start_pos,
-			      FALSE, dest_c);
+                              FALSE, dest_c);
 
   return FALSE;
 }
@@ -938,7 +938,7 @@ bson_cursor_find (bson_cursor *c, const gchar *name)
     return FALSE;
 
   return _bson_cursor_find (c->obj, name, c->pos, bson_size (c->obj) - 1,
-			    TRUE, c);
+                            TRUE, c);
 }
 
 gboolean
@@ -948,7 +948,7 @@ bson_cursor_find_next (bson_cursor *c, const gchar *name)
     return FALSE;
 
   return _bson_cursor_find (c->obj, name, c->pos, bson_size (c->obj) - 1,
-			    FALSE, c);
+                            FALSE, c);
 }
 
 bson_cursor *
@@ -961,7 +961,7 @@ bson_find (const bson *b, const gchar *name)
 
   c = bson_cursor_new (b);
   if (_bson_cursor_find (b, name, sizeof (gint32), bson_size (c->obj) - 1,
-			 FALSE, c))
+                         FALSE, c))
     return c;
   bson_cursor_free (c);
   return NULL;
@@ -1045,8 +1045,8 @@ bson_cursor_get_document (const bson_cursor *c, bson **dest)
     sizeof (gint32) - 1;
   b = bson_new_sized (size);
   b->data = g_byte_array_append (b->data,
-				 bson_data (c->obj) + c->value_pos +
-				 sizeof (gint32), size);
+                                 bson_data (c->obj) + c->value_pos +
+                                 sizeof (gint32), size);
   bson_finish (b);
 
   *dest = b;
@@ -1069,8 +1069,8 @@ bson_cursor_get_array (const bson_cursor *c, bson **dest)
     sizeof (gint32) - 1;
   b = bson_new_sized (size);
   b->data = g_byte_array_append (b->data,
-				 bson_data (c->obj) + c->value_pos +
-				 sizeof (gint32), size);
+                                 bson_data (c->obj) + c->value_pos +
+                                 sizeof (gint32), size);
   bson_finish (b);
 
   *dest = b;
@@ -1080,8 +1080,8 @@ bson_cursor_get_array (const bson_cursor *c, bson **dest)
 
 gboolean
 bson_cursor_get_binary (const bson_cursor *c,
-			bson_binary_subtype *subtype,
-			const guint8 **data, gint32 *size)
+                        bson_binary_subtype *subtype,
+                        const guint8 **data, gint32 *size)
 {
   if (!subtype || !size || !data)
     return FALSE;
@@ -1090,7 +1090,7 @@ bson_cursor_get_binary (const bson_cursor *c,
 
   *size = bson_stream_doc_size (bson_data(c->obj), c->value_pos);
   *subtype = (bson_binary_subtype)(bson_data (c->obj)[c->value_pos +
-						      sizeof (gint32)]);
+                                                      sizeof (gint32)]);
   *data = (guint8 *)(bson_data (c->obj) + c->value_pos + sizeof (gint32) + 1);
 
   return TRUE;
@@ -1124,7 +1124,7 @@ bson_cursor_get_boolean (const bson_cursor *c, gboolean *dest)
 
 gboolean
 bson_cursor_get_utc_datetime (const bson_cursor *c,
-			      gint64 *dest)
+                              gint64 *dest)
 {
   if (!dest)
     return FALSE;
@@ -1139,7 +1139,7 @@ bson_cursor_get_utc_datetime (const bson_cursor *c,
 
 gboolean
 bson_cursor_get_regex (const bson_cursor *c, const gchar **regex,
-		       const gchar **options)
+                       const gchar **options)
 {
   if (!regex || !options)
     return FALSE;
@@ -1180,8 +1180,8 @@ bson_cursor_get_symbol (const bson_cursor *c, const gchar **dest)
 
 gboolean
 bson_cursor_get_javascript_w_scope (const bson_cursor *c,
-				    const gchar **js,
-				    bson **scope)
+                                    const gchar **js,
+                                    bson **scope)
 {
   bson *b;
   gint32 size, docpos;
@@ -1192,14 +1192,14 @@ bson_cursor_get_javascript_w_scope (const bson_cursor *c,
   BSON_CURSOR_CHECK_TYPE (c, BSON_TYPE_JS_CODE_W_SCOPE);
 
   docpos = bson_stream_doc_size (bson_data (c->obj),
-				  c->value_pos + sizeof (gint32)) +
+                                  c->value_pos + sizeof (gint32)) +
     sizeof (gint32) * 2;
   size = bson_stream_doc_size (bson_data (c->obj), c->value_pos + docpos) -
     sizeof (gint32) - 1;
   b = bson_new_sized (size);
   b->data = g_byte_array_append (b->data,
-				 bson_data (c->obj) + c->value_pos + docpos +
-				 sizeof (gint32), size);
+                                 bson_data (c->obj) + c->value_pos + docpos +
+                                 sizeof (gint32), size);
   bson_finish (b);
 
   *scope = b;

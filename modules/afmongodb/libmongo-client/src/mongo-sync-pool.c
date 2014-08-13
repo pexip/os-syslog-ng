@@ -1,5 +1,5 @@
 /* mongo-sync-pool.c - libmongo-client connection pool implementation
- * Copyright 2011 Gergely Nagy <algernon@balabit.hu>
+ * Copyright 2011, 2012 Gergely Nagy <algernon@balabit.hu>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -52,8 +52,8 @@ _mongo_sync_pool_connect (const gchar *host, gint port, gboolean slaveok)
 
 mongo_sync_pool *
 mongo_sync_pool_new (const gchar *host,
-		     gint port,
-		     gint nmasters, gint nslaves)
+                     gint port,
+                     gint nmasters, gint nslaves)
 {
   mongo_sync_pool *pool;
   mongo_sync_pool_connection *conn;
@@ -113,31 +113,31 @@ mongo_sync_pool_new (const gchar *host,
       l = g_list_nth (conn->super.rs.hosts, j);
 
       do
-	{
-	  j++;
-	  if (l && mongo_util_parse_addr ((gchar *)l->data, &shost, &sport))
-	    {
-	      if (sport != port || strcmp (host, shost) != 0)
-		{
-		  found = TRUE;
-		  break;
-		}
-	    }
-	  l = g_list_next (l);
-	  if (!l && need_restart)
-	    {
-	      need_restart = FALSE;
-	      j = 0;
-	      l = g_list_nth (conn->super.rs.hosts, j);
-	    }
-	}
+        {
+          j++;
+          if (l && mongo_util_parse_addr ((gchar *)l->data, &shost, &sport))
+            {
+              if (sport != port || strcmp (host, shost) != 0)
+                {
+                  found = TRUE;
+                  break;
+                }
+            }
+          l = g_list_next (l);
+          if (!l && need_restart)
+            {
+              need_restart = FALSE;
+              j = 0;
+              l = g_list_nth (conn->super.rs.hosts, j);
+            }
+        }
       while (l);
 
       if (!found)
-	{
-	  pool->nslaves = i - 1;
-	  break;
-	}
+        {
+          pool->nslaves = i - 1;
+          break;
+        }
 
       /* Connect to it*/
       c = _mongo_sync_pool_connect (shost, sport, TRUE);
@@ -177,7 +177,7 @@ mongo_sync_pool_free (mongo_sync_pool *pool)
 
 mongo_sync_pool_connection *
 mongo_sync_pool_pick (mongo_sync_pool *pool,
-		      gboolean want_master)
+                      gboolean want_master)
 {
   GList *l;
 
@@ -192,17 +192,17 @@ mongo_sync_pool_pick (mongo_sync_pool *pool,
       l = pool->slaves;
 
       while (l)
-	{
-	  mongo_sync_pool_connection *c;
+        {
+          mongo_sync_pool_connection *c;
 
-	  c = (mongo_sync_pool_connection *)l->data;
-	  if (!c->in_use)
-	    {
-	      c->in_use = TRUE;
-	      return c;
-	    }
-	  l = g_list_next (l);
-	}
+          c = (mongo_sync_pool_connection *)l->data;
+          if (!c->in_use)
+            {
+              c->in_use = TRUE;
+              return c;
+            }
+          l = g_list_next (l);
+        }
     }
 
   l = pool->masters;
@@ -212,10 +212,10 @@ mongo_sync_pool_pick (mongo_sync_pool *pool,
 
       c = (mongo_sync_pool_connection *)l->data;
       if (!c->in_use)
-	{
-	  c->in_use = TRUE;
-	  return c;
-	}
+        {
+          c->in_use = TRUE;
+          return c;
+        }
       l = g_list_next (l);
     }
 
@@ -225,7 +225,7 @@ mongo_sync_pool_pick (mongo_sync_pool *pool,
 
 gboolean
 mongo_sync_pool_return (mongo_sync_pool *pool,
-			mongo_sync_pool_connection *conn)
+                        mongo_sync_pool_connection *conn)
 {
   if (!pool)
     {
@@ -243,14 +243,14 @@ mongo_sync_pool_return (mongo_sync_pool *pool,
       mongo_sync_pool_connection *c;
 
       if (conn->pool_id - pool->nmasters > pool->nslaves ||
-	  pool->nslaves == 0)
-	{
-	  errno = ERANGE;
-	  return FALSE;
-	}
+          pool->nslaves == 0)
+        {
+          errno = ERANGE;
+          return FALSE;
+        }
 
       c = (mongo_sync_pool_connection *)g_list_nth_data
-	(pool->slaves, conn->pool_id - pool->nmasters - 1);
+        (pool->slaves, conn->pool_id - pool->nmasters - 1);
       c->in_use = FALSE;
       return TRUE;
     }
@@ -259,7 +259,7 @@ mongo_sync_pool_return (mongo_sync_pool *pool,
       mongo_sync_pool_connection *c;
 
       c = (mongo_sync_pool_connection *)g_list_nth_data (pool->masters,
-							 conn->pool_id);
+                                                         conn->pool_id);
       c->in_use = FALSE;
       return TRUE;
     }

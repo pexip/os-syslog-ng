@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2013 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -62,6 +62,13 @@ enum
   LM_V_MSGID,
   LM_V_SOURCE,
   LM_V_LEGACY_MSGHDR,
+
+  /* NOTE: this is used as the number of "statically" allocated elements in
+   * an NVTable.  NVTable may impose restrictions on this value (for
+   * instance had to be an even number earlier).  So be sure to validate
+   * whether LM_V_MAX would fit NVTable if you add further enums here.
+   */
+
   LM_V_MAX,
 };
 
@@ -94,9 +101,6 @@ enum
   LF_STATE_OWN_SDATA   = 0x0080,
   LF_STATE_OWN_MASK    = 0x00F0,
 
-  /* mark messages whose payload is referenced by a clone */
-  LF_STATE_REFERENCED  = 0x0100,
-
   LF_CHAINED_HOSTNAME  = 0x00010000,
 
   /* originally parsed from RFC 3164 format and the legacy message header
@@ -109,7 +113,7 @@ enum
 
 typedef struct _LogMessageQueueNode
 {
-  struct list_head list;
+  struct iv_list_head list;
   LogMessage *msg;
   gboolean ack_needed:1, embedded:1;
 } LogMessageQueueNode;
@@ -158,7 +162,7 @@ struct _LogMessage
   guint32 flags;
   guint16 pri;
   guint8 initial_parse:1,
-    recurse_count:7;
+    recursed:1;
   guint8 num_matches;
   guint8 num_tags;
   guint8 alloc_sdata;
@@ -167,6 +171,7 @@ struct _LogMessage
 
   guint8 num_nodes;
   guint8 cur_node;
+  guint8 protect_cnt;
 
   /* preallocated LogQueueNodes used to insert this message into a LogQueue */
   LogMessageQueueNode nodes[0];
@@ -181,7 +186,10 @@ extern gint logmsg_node_max;
 
 LogMessage *log_msg_ref(LogMessage *m);
 void log_msg_unref(LogMessage *m);
-LogMessage *log_msg_clone_cow(LogMessage *m, const LogPathOptions *path_options);
+void log_msg_write_protect(LogMessage *m);
+void log_msg_write_unprotect(LogMessage *m);
+LogMessage *log_msg_clone_cow(LogMessage *msg, const LogPathOptions *path_options);
+LogMessage *log_msg_make_writable(LogMessage **pmsg, const LogPathOptions *path_options);
 
 gboolean log_msg_write(LogMessage *self, SerializeArchive *sa);
 gboolean log_msg_read(LogMessage *self, SerializeArchive *sa);
@@ -189,10 +197,17 @@ gboolean log_msg_read(LogMessage *self, SerializeArchive *sa);
 /* generic values that encapsulate log message fields, dynamic values and structured data */
 NVHandle log_msg_get_value_handle(const gchar *value_name);
 const gchar *log_msg_get_value_name(NVHandle handle, gssize *name_len);
+gboolean log_msg_is_value_name_valid(const gchar *value);
 
 gboolean log_msg_is_handle_macro(NVHandle handle);
 gboolean log_msg_is_handle_sdata(NVHandle handle);
 gboolean log_msg_is_handle_match(NVHandle handle);
+
+static inline gboolean
+log_msg_is_handle_settable_with_an_indirect_value(NVHandle handle)
+{
+  return (handle >= LM_V_MAX);
+}
 
 const gchar *log_msg_get_macro_value(LogMessage *self, gint id, gssize *value_len);
 
@@ -203,7 +218,7 @@ log_msg_get_value(LogMessage *self, NVHandle handle, gssize *value_len)
 
   flags = nv_registry_get_handle_flags(logmsg_registry, handle);
   if ((flags & LM_VF_MACRO) == 0)
-    return __nv_table_get_value(self->payload, handle, NV_TABLE_BOUND_NUM_STATIC(LM_V_MAX), value_len);
+    return __nv_table_get_value(self->payload, handle, LM_V_MAX, value_len);
   else
     return log_msg_get_macro_value(self, flags >> 8, value_len);
 }
@@ -219,6 +234,7 @@ void log_msg_clear_matches(LogMessage *self);
 void log_msg_append_format_sdata(LogMessage *self, GString *result, guint32 seq_num);
 void log_msg_format_sdata(LogMessage *self, GString *result, guint32 seq_num);
 
+void log_msg_set_tag_by_id_onoff(LogMessage *self, LogTagId id, gboolean on);
 void log_msg_set_tag_by_id(LogMessage *self, LogTagId id);
 void log_msg_set_tag_by_name(LogMessage *self, const gchar *name);
 void log_msg_clear_tag_by_id(LogMessage *self, LogTagId id);
@@ -254,5 +270,6 @@ void log_msg_registry_deinit();
 void log_msg_global_init();
 void log_msg_global_deinit(void);
 
+gboolean log_msg_nv_table_foreach(NVTable *self, NVTableForeachFunc func, gpointer user_data);
 
 #endif

@@ -29,11 +29,11 @@ test_bson_array (void)
 
   cmp_ok (bson_size (b), "==", 58, "BSON array element size check");
   ok (memcmp (bson_data (b),
-	      "\072\000\000\000\004\060\000\062\000\000\000\002\060\000\004"
-	      "\000\000\000\142\141\162\000\004\061\000\037\000\000\000\020"
-	      "\060\000\300\007\000\000\002\061\000\014\000\000\000\150\145"
-	      "\154\154\157\040\167\157\162\154\144\000\000\000\000",
-	      bson_size (b)) == 0,
+              "\072\000\000\000\004\060\000\062\000\000\000\002\060\000\004"
+              "\000\000\000\142\141\162\000\004\061\000\037\000\000\000\020"
+              "\060\000\300\007\000\000\002\061\000\014\000\000\000\150\145"
+              "\154\154\157\040\167\157\162\154\144\000\000\000\000",
+              bson_size (b)) == 0,
       "BSON array element contents check");
 
   bson_free (b);
@@ -53,7 +53,7 @@ test_bson_array (void)
       "bson_append_array() with a NULL BSON should fail");
   bson_finish (b);
   cmp_ok (bson_size (b), "==", 5,
-	  "BSON object should be empty");
+          "BSON object should be empty");
 
   ok (bson_append_array (b, "array", e1) == FALSE,
       "Appending to a finished element should fail");

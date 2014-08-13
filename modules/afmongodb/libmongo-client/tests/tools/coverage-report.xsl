@@ -34,7 +34,7 @@
           tbody tr.odd td.label {
             background: rgb(200,200,200);
           }
-          
+
           thead, tfoot {
             background: rgb(60,60,60);
             color: white;
@@ -80,7 +80,7 @@
       <xsl:with-param name="type" select="'function'"/>
     </xsl:call-template>
   </xsl:template>
-  
+
 
   <xsl:template match="files">
     <h2>File coverage</h2>
@@ -137,7 +137,7 @@
       </tfoot>
     </table>
   </xsl:template>
-  
+
   <xsl:template name="entry">
     <xsl:param name="type"/>
     <xsl:param name="class"/>
@@ -184,7 +184,7 @@
 
     </tr>
   </xsl:template>
-  
+
   <xsl:template match="lines">
     <xsl:call-template name="row"/>
   </xsl:template>
@@ -228,7 +228,7 @@
         </xsl:otherwise>
       </xsl:choose>
     </xsl:variable>
-    
+
     <td class="{$quality}"><xsl:value-of select="@coverage"/>% of <xsl:value-of select="@count"/></td>
   </xsl:template>
 

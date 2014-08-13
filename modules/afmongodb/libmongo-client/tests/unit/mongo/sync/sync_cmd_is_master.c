@@ -9,11 +9,11 @@ test_mongo_sync_cmd_is_master_net_secondary (void)
   mongo_sync_connection *conn;
 
   skip (!config.secondary_host, 1,
-	"Secondary server not configured");
+        "Secondary server not configured");
 
   errno = 0;
   conn = mongo_sync_connect (config.secondary_host, config.secondary_port,
-			     TRUE);
+                             TRUE);
   ok (mongo_sync_cmd_is_master (conn) == FALSE && errno == 0,
       "mongo_sync_cmd_is_master() works correctly on a secondary");
   mongo_sync_disconnect (conn);
@@ -49,13 +49,13 @@ test_mongo_sync_cmd_is_master (void)
   ok (mongo_sync_cmd_is_master (NULL) == FALSE,
       "mongo_sync_cmd_is_master fails with a NULL connection");
   cmp_ok (errno, "==", ENOTCONN,
-	  "errno is set to ENOTCONN");
+          "errno is set to ENOTCONN");
 
   errno = 0;
   ok (mongo_sync_cmd_is_master (c) == FALSE,
       "mongo_sync_cmd_is_master() works");
   cmp_ok (errno, "!=", 0,
-	  "errno is not 0");
+          "errno is not 0");
 
   mongo_sync_disconnect (c);
 

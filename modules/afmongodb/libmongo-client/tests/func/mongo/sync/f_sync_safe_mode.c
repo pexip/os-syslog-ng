@@ -7,7 +7,7 @@
 #include "libmongo-private.h"
 
 void
-test_func_mongo_sync_safe_mode (void)
+test_func_mongo_sync_safe_mode_basics (void)
 {
   mongo_sync_connection *conn;
   const bson *docs[10];
@@ -34,7 +34,7 @@ test_func_mongo_sync_safe_mode (void)
   docs[3] = b4;
 
   conn = mongo_sync_connect (config.primary_host, config.primary_port,
-			     FALSE);
+                             FALSE);
 
   /* Test inserts */
   mongo_sync_conn_set_safe_mode (conn, FALSE);
@@ -76,4 +76,39 @@ test_func_mongo_sync_safe_mode (void)
   bson_free (b4);
 }
 
-RUN_NET_TEST (4, func_mongo_sync_safe_mode);
+#define INVALID_NS "1234567890123456789012345678901234567890123456789012345678901234567890.test"
+
+void
+test_func_mongo_sync_safe_mode_invalid_db (void)
+{
+  mongo_sync_connection *conn;
+  gchar *error = NULL;
+  gboolean res;
+  bson *b;
+  const bson *docs[1];
+
+  b = bson_new ();
+  bson_append_int32 (b, "int32", 1984);
+  bson_finish (b);
+
+  docs[0] = b;
+
+  conn = mongo_sync_connect (config.primary_host, config.primary_port,
+                             TRUE);
+  mongo_sync_conn_set_safe_mode (conn, TRUE);
+
+  ok (mongo_sync_cmd_insert_n (conn, INVALID_NS, 1, docs) == FALSE,
+      "mongo_sync_cmd_insert_n() should fail with safe mode on and an invalid NS");
+
+  mongo_sync_disconnect (conn);
+  bson_free (b);
+}
+
+void
+test_func_mongo_sync_safe_mode (void)
+{
+  test_func_mongo_sync_safe_mode_basics ();
+  test_func_mongo_sync_safe_mode_invalid_db ();
+}
+
+RUN_NET_TEST (5, func_mongo_sync_safe_mode);

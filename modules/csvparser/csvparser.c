@@ -1,18 +1,18 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published
  * by the Free Software Foundation, or (at your option) any later version.
  *
- * This library is distributed in the hope that it will be useful,
+ * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  * As an additional exemption you are allowed to compile & link against the
@@ -22,7 +22,7 @@
  */
 
 #include "csvparser.h"
-#include "logparser.h"
+#include "parser/parser-expr.h"
 
 #include <string.h>
 
@@ -107,14 +107,16 @@ log_csv_parser_set_null_value(LogColumnParser *s, const gchar *null_value)
 }
 
 static gboolean
-log_csv_parser_process(LogParser *s, LogMessage *msg, const gchar *input)
+log_csv_parser_process(LogParser *s, LogMessage **pmsg, const LogPathOptions *path_options, const gchar *input, gsize input_len)
 {
   LogCSVParser *self = (LogCSVParser *) s;
   const gchar *src;
   GList *cur_column = self->super.columns;
   gint len;
+  LogMessage *msg;
 
   src = input;
+  msg = log_msg_make_writable(pmsg, path_options);
   if ((self->flags & LOG_CSV_PARSER_ESCAPE_NONE) || ((self->flags & LOG_CSV_PARSER_ESCAPE_MASK) == 0))
     {
       /* no escaping, no need to keep state, we split input and trim if necessary */
@@ -334,7 +336,7 @@ log_csv_parser_process(LogParser *s, LogMessage *msg, const gchar *input)
 }
 
 static LogPipe *
-log_csv_parser_clone(LogProcessPipe *s)
+log_csv_parser_clone(LogPipe *s)
 {
   LogCSVParser *self = (LogCSVParser *) s;
   LogCSVParser *cloned;
@@ -356,7 +358,7 @@ log_csv_parser_clone(LogProcessPipe *s)
     {
       cloned->super.columns = g_list_append(cloned->super.columns, g_strdup(l->data));
     }
-  return &cloned->super.super.super.super;
+  return &cloned->super.super.super;
 }
 
 static void
@@ -384,7 +386,7 @@ log_csv_parser_new(void)
   LogCSVParser *self = g_new0(LogCSVParser, 1);
 
   log_column_parser_init_instance(&self->super);
-  self->super.super.super.super.free_fn = log_csv_parser_free;
+  self->super.super.super.free_fn = log_csv_parser_free;
   self->super.super.super.clone = log_csv_parser_clone;
   self->super.super.process = log_csv_parser_process;
   log_csv_parser_set_delimiters(&self->super, " ");

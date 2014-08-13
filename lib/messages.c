@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -34,10 +34,21 @@
 
 #include <evtlog.h>
 
+enum
+{
+  /* processing a non-internal message, we're definitely not recursing */
+  RECURSE_STATE_OK = 0,
+  /* processing an internal message currently, followup internal messages will be suppressed */
+  RECURSE_STATE_WATCH = 1,
+  /* supress all internal messages */
+  RECURSE_STATE_SUPPRESS = 2
+};
+
 typedef struct _MsgContext
 {
-  guint16 recurse_count;
+  guint16 recurse_state;
   gboolean recurse_warning:1;
+  gchar recurse_trigger[128];
 } MsgContext;
 
 gboolean debug_flag = 0;
@@ -45,11 +56,9 @@ gboolean verbose_flag = 0;
 gboolean trace_flag = 0;
 gboolean log_stderr = FALSE;
 static MsgPostFunc msg_post_func;
-static gboolean log_syslog = FALSE;
 static EVTCONTEXT *evt_context;
 static GStaticPrivate msg_context_private = G_STATIC_PRIVATE_INIT;
 static GStaticMutex evtlog_lock = G_STATIC_MUTEX_INIT;
-
 
 static MsgContext *
 msg_get_context(void)
@@ -72,33 +81,19 @@ msg_set_context(LogMessage *msg)
   
   if (msg && (msg->flags & LF_INTERNAL))
     {
-      context->recurse_count = msg->recurse_count + 1;
+      if (msg->recursed)
+        context->recurse_state = RECURSE_STATE_SUPPRESS;
+      else
+        context->recurse_state = RECURSE_STATE_WATCH;
     }
   else
     {
-      context->recurse_count = 0;
+      context->recurse_state = RECURSE_STATE_OK;
     }
 }
 
-void
-msg_set_post_func(MsgPostFunc func)
-{
-  msg_post_func = func;
-}
-
-void
-msg_post_message(LogMessage *msg)
-{
-  if (msg_post_func)
-    msg_post_func(msg);
-  else
-    log_msg_unref(msg);
-}
-
-#define MAX_RECURSIONS 1
-
-gboolean
-msg_limit_internal_message(void)
+static gboolean
+msg_limit_internal_message(const gchar *msg)
 {
   MsgContext *context;
   
@@ -107,13 +102,14 @@ msg_limit_internal_message(void)
 
   context = msg_get_context();
   
-  if (context->recurse_count > MAX_RECURSIONS)
+  if (context->recurse_state >= RECURSE_STATE_SUPPRESS)
     {
       if (!context->recurse_warning)
         {
           msg_event_send(
-            msg_event_create(EVT_PRI_WARNING, "syslog-ng internal() messages are looping back, preventing loop by suppressing further messages", 
-                             evt_tag_int("recurse_count", context->recurse_count),
+            msg_event_create(EVT_PRI_WARNING, "internal() messages are looping back, preventing loop by suppressing all internal messages until the current message is processed",
+                             evt_tag_str("trigger-msg", context->recurse_trigger),
+                             evt_tag_str("first-suppressed-msg", msg),
                              NULL));
           context->recurse_warning = TRUE;
         }
@@ -124,7 +120,7 @@ msg_limit_internal_message(void)
 
 
 static void
-msg_send_internal_message(int prio, const char *msg)
+msg_send_formatted_message(int prio, const char *msg)
 {
   if (G_UNLIKELY(log_stderr || (msg_post_func == NULL && (prio & 0x7) <= EVT_PRI_WARNING)))
     {
@@ -136,14 +132,40 @@ msg_send_internal_message(int prio, const char *msg)
       
       MsgContext *context = msg_get_context();
 
-      if (context->recurse_count == 0)
-        context->recurse_warning = FALSE;
+      if (context->recurse_state == RECURSE_STATE_OK)
+        {
+          context->recurse_warning = FALSE;
+          g_strlcpy(context->recurse_trigger, msg, sizeof(context->recurse_trigger));
+        }
       m = log_msg_new_internal(prio, msg);
-      m->recurse_count = context->recurse_count;
+      m->recursed = context->recurse_state >= RECURSE_STATE_WATCH;
       msg_post_message(m);
     }
 }
 
+static void
+msg_event_send_with_suppression(EVTREC *e, gboolean (*suppress)(const gchar *msg))
+{
+  gchar *msg;
+
+  msg = evt_format(e);
+  if (!suppress || suppress(msg))
+    msg_send_formatted_message(evt_rec_get_syslog_pri(e) | EVT_FAC_SYSLOG, msg);
+  free(msg);
+  msg_event_free(e);
+}
+
+void
+msg_event_send(EVTREC *e)
+{
+  msg_event_send_with_suppression(e, NULL);
+}
+
+void
+msg_event_suppress_recursions_and_send(EVTREC *e)
+{
+  msg_event_send_with_suppression(e, msg_limit_internal_message);
+}
 
 EVTREC *
 msg_event_create(gint prio, const gchar *desc, EVTTAG *tag1, ...)
@@ -165,20 +187,8 @@ msg_event_create(gint prio, const gchar *desc, EVTTAG *tag1, ...)
 }
 
 void
-msg_event_send(EVTREC *e)
+msg_event_free(EVTREC *e)
 {
-  gchar *msg;
-  
-  msg = evt_format(e);
-  if (log_syslog)
-    {
-      syslog(evt_rec_get_syslog_pri(e), "%s", msg);
-    }
-  else
-    {
-      msg_send_internal_message(evt_rec_get_syslog_pri(e) | EVT_FAC_SYSLOG, msg); 
-    }
-  free(msg);
   g_static_mutex_lock(&evtlog_lock);
   evt_rec_free(e);
   g_static_mutex_unlock(&evtlog_lock);
@@ -197,19 +207,30 @@ msg_log_func(const gchar *log_domain, GLogLevelFlags log_flags, const gchar *msg
     pri = EVT_PRI_ERR;
     
   pri |= EVT_FAC_SYSLOG;
-  msg_send_internal_message(pri, msg);
+  msg_send_formatted_message(pri, msg);
 }
 
 void
-msg_redirect_to_syslog(const gchar *program_name)
+msg_set_post_func(MsgPostFunc func)
 {
-  log_syslog = TRUE;
-  openlog(program_name, LOG_NDELAY | LOG_PID, LOG_SYSLOG);
+  msg_post_func = func;
+}
+
+void
+msg_post_message(LogMessage *msg)
+{
+  if (msg_post_func)
+    msg_post_func(msg);
+  else
+    log_msg_unref(msg);
 }
 
 void
 msg_init(gboolean interactive)
 {
+  if (evt_context)
+    return;
+
   if (!interactive)
     {
       g_log_set_handler(G_LOG_DOMAIN, 0xff, msg_log_func, NULL);

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -41,6 +41,8 @@ static CfgLexerKeyword main_keywords[] = {
   { "rewrite",            KW_REWRITE, 0x0300, },
   { "destination",        KW_DESTINATION },
   { "log",                KW_LOG },
+  { "junction",           KW_JUNCTION, 0x0304 },
+  { "channel",            KW_CHANNEL, 0x0304 },
   { "options",            KW_OPTIONS },
   { "include",            KW_INCLUDE, 0x0300, },
   { "block",              KW_BLOCK, 0x0302 },
@@ -60,12 +62,18 @@ static CfgLexerKeyword main_keywords[] = {
   { "pair",               KW_PAIR, 0x0303 },
   { "key",                KW_KEY, 0x0303 },
   { "scope",              KW_SCOPE, 0x0303 },
+  { "rekey",              KW_REKEY, 0x0303 },
+  { "shift",              KW_SHIFT, 0x0303 },
+  { "add_prefix",         KW_ADD_PREFIX, 0x0303 },
+  { "replace",            KW_REPLACE_PREFIX, 0x0303, KWS_OBSOLETE, "replace_prefix" },
+  { "replace_prefix",     KW_REPLACE_PREFIX, 0x0304 },
 
   /* option items */
   { "flags",              KW_FLAGS },
   { "pad_size",           KW_PAD_SIZE },
   { "mark_freq",          KW_MARK_FREQ },
   { "mark",               KW_MARK_FREQ, 0, KWS_OBSOLETE, "mark_freq" },
+  { "mark_mode",          KW_MARK_MODE, 0x0304 },
   { "stats_freq",         KW_STATS_FREQ },
   { "stats_level",        KW_STATS_LEVEL },
   { "stats",              KW_STATS_FREQ, 0, KWS_OBSOLETE, "stats_freq" },
@@ -94,7 +102,7 @@ static CfgLexerKeyword main_keywords[] = {
   { "use_dns",            KW_USE_DNS },
   { "time_reopen",        KW_TIME_REOPEN },
   { "time_reap",          KW_TIME_REAP },
-  { "time_sleep",         KW_TIME_SLEEP, 0, KWS_OBSOLETE, "time_sleep() has been deprecated since OSE 3.3" },
+  { "time_sleep",         KW_TIME_SLEEP, 0, KWS_OBSOLETE, "time_sleep() has been deprecated since " VERSION_3_3 },
   { "file_template",      KW_FILE_TEMPLATE },
   { "proto_template",     KW_PROTO_TEMPLATE },
   { "default_level",      KW_DEFAULT_LEVEL, 0x0300 },
@@ -124,6 +132,7 @@ static CfgLexerKeyword main_keywords[] = {
   { "dir_perm",           KW_DIR_PERM },
   { "template",           KW_TEMPLATE },
   { "template_escape",    KW_TEMPLATE_ESCAPE },
+  { "on_error",           KW_ON_ERROR },
   { "persist_only",       KW_PERSIST_ONLY },
   { "dns_cache_hosts",    KW_DNS_CACHE_HOSTS },
   { "dns_cache",          KW_DNS_CACHE },

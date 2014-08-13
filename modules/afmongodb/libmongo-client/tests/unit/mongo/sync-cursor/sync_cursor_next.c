@@ -26,7 +26,7 @@ test_mongo_sync_cursor_next (void)
       "mongo_sync_cursor_next() should fail with a NULL cursor");
   for (i = 0; i < 2; i++)
     r &= mongo_sync_cursor_next (c);
-  
+
   ok (r == TRUE,
       "mongo_sync_cursor_next() works");
   ok (mongo_sync_cursor_next (c) == FALSE,

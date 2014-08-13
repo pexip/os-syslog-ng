@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -253,13 +253,13 @@ log_matcher_posix_re_new(void)
   self->super.replace = log_matcher_posix_re_replace;
   self->super.free_fn = log_matcher_posix_re_free;
 
-  if (configuration && configuration->version < 0x0300)
+  if (configuration && cfg_is_config_version_older(configuration, 0x0300))
     {
       static gboolean warn_written = FALSE;
 
       if (!warn_written)
         {
-          msg_warning("WARNING: filters do not store matches in macros by default in 3.0, please update your configuration by using an explicit 'store-matches' flag to achieve that",
+          msg_warning("WARNING: filters do not store matches in macros by default in " VERSION_3_0 ", please update your configuration by using an explicit 'store-matches' flag to achieve that",
                       NULL);
           warn_written = TRUE;
         }

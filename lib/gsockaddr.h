@@ -56,30 +56,30 @@ typedef struct _GSockAddr
 
 struct _GSockAddrFuncs 
 {
-  GIOStatus (*sa_bind_prepare)   (int sock, GSockAddr *addr);
-  GIOStatus (*sa_bind)		(int sock, GSockAddr *addr);
-  gchar   *(*sa_format)         (GSockAddr *addr,   /* format to text form */
-  				 gchar *text,
-  				 gulong n,
-  				 gint format);
-  void     (*freefn)            (GSockAddr *addr);
+  GIOStatus (*bind_prepare)(gint sock, GSockAddr *addr);
+  GIOStatus (*bind)(int sock, GSockAddr *addr);
+  gchar   *(*format)(GSockAddr *addr, gchar *text, gulong n, gint format);
+  guint16  (*get_port)          (GSockAddr *addr);
+  void     (*set_port)          (GSockAddr *addr, guint16 port);
 };
 
-GSockAddr *g_sockaddr_new(struct sockaddr *sa, int salen);
 gchar *g_sockaddr_format(GSockAddr *a, gchar *text, gulong n, gint format);
+guint16 g_sockaddr_get_port(GSockAddr *a);
+void g_sockaddr_set_port(GSockAddr *a, guint16 port);
+
+GSockAddr *g_sockaddr_new(struct sockaddr *sa, int salen);
 GSockAddr *g_sockaddr_ref(GSockAddr *a);
 void g_sockaddr_unref(GSockAddr *a);
-
-gboolean g_sockaddr_inet_check(GSockAddr *a);
-GSockAddr *g_sockaddr_inet_new(gchar *ip, guint16 port);
-GSockAddr *g_sockaddr_inet_new2(struct sockaddr_in *sin);
-GSockAddr *g_sockaddr_inet_range_new(gchar *ip, guint16 min_port, guint16 max_port);
 
 static inline struct sockaddr *
 g_sockaddr_get_sa(GSockAddr *self)
 {
   return &self->sa;
-}  
+}
+
+gboolean g_sockaddr_inet_check(GSockAddr *a);
+GSockAddr *g_sockaddr_inet_new(gchar *ip, guint16 port);
+GSockAddr *g_sockaddr_inet_new2(struct sockaddr_in *sin);
 
 static inline struct sockaddr_in *
 g_sockaddr_inet_get_sa(GSockAddr *s)
@@ -116,36 +116,6 @@ g_sockaddr_inet_set_address(GSockAddr *s, struct in_addr addr)
 {
   g_sockaddr_inet_get_sa(s)->sin_addr = addr;
 }
-
-/**
- * g_sockaddr_inet_get_port:
- * @s: GSockAddrInet instance
- *
- * This GSockAddrInet specific function returns the port part of the
- * address.
- *
- * Returns: the port in host byte order
- *
- **/
-static inline guint16
-g_sockaddr_inet_get_port(GSockAddr *s)
-{
-  return ntohs(g_sockaddr_inet_get_sa(s)->sin_port);
-}
-
-/**
- * g_sockaddr_inet_set_port:
- * @s: GSockAddrInet instance
- * @port: new port in host byte order
- *
- *
- **/
-static inline void
-g_sockaddr_inet_set_port(GSockAddr *s, guint16 port)
-{
-  g_sockaddr_inet_get_sa(s)->sin_port = htons(port);
-}
-
 
 
 #if ENABLE_IPV6
@@ -187,39 +157,9 @@ g_sockaddr_inet6_set_address(GSockAddr *s, struct in6_addr *addr)
 {
   g_sockaddr_inet6_get_sa(s)->sin6_addr = *addr;
 }
-
-/**
- * g_sockaddr_inet6_get_port:
- * @s: GSockAddrInet instance
- *
- * This GSockAddrInet specific function returns the port part of the
- * address.
- *
- * Returns: the port in host byte order
- *
- **/
-static inline guint16
-g_sockaddr_inet6_get_port(GSockAddr *s)
-{
-  return ntohs(g_sockaddr_inet6_get_sa(s)->sin6_port);
-}
-
-/**
- * g_sockaddr_inet6_set_port:
- * @s: GSockAddrInet instance
- * @port: new port in host byte order
- *
- *
- **/
-static inline void
-g_sockaddr_inet6_set_port(GSockAddr *s, guint16 port)
-{
-  g_sockaddr_inet6_get_sa(s)->sin6_port = htons(port);
-}
 #endif
 
 GSockAddr *g_sockaddr_unix_new(const gchar *name);
 GSockAddr *g_sockaddr_unix_new2(struct sockaddr_un *s_un, int sunlen);
-
 
 #endif

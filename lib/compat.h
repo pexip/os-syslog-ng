@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -69,5 +69,8 @@ char *strcasestr(const char *s, const char *find);
 const void *memrchr(const void *s, int c, size_t n);
 #endif
 
+#if !HAVE_G_MAPPED_FILE_UNREF
+#define g_mapped_file_unref g_mapped_file_free
+#endif
 
 #endif

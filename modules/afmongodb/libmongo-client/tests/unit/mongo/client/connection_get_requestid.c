@@ -29,12 +29,12 @@ test_mongo_connection_get_requestid (void)
 
   conn = mongo_connect (config.primary_host, config.primary_port);
   cmp_ok ((reqid = mongo_connection_get_requestid (conn)), "==", 0,
-	  "Initial request id is 0");
+          "Initial request id is 0");
   mongo_packet_send (conn, p);
   mongo_wire_packet_free (p);
 
   cmp_ok (reqid, "<", mongo_connection_get_requestid (conn),
-	  "Old request ID is smaller than the new one");
+          "Old request ID is smaller than the new one");
 
   mongo_disconnect (conn);
 

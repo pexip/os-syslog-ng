@@ -10,7 +10,7 @@ test_func_mongo_sync_conn_seed_add (void)
   GList *l;
 
   conn = mongo_sync_connect (config.primary_host, config.primary_port,
-			     FALSE);
+                             FALSE);
   close (conn->super.fd);
 
   l = conn->rs.hosts;
@@ -34,7 +34,7 @@ test_func_mongo_sync_conn_seed_add (void)
       "mongo_sync_reconnect() fails without seeds or discovery");
 
   conn = mongo_sync_connect (config.primary_host, config.primary_port,
-			     FALSE);
+                             FALSE);
   close (conn->super.fd);
   l = conn->rs.hosts;
   while (l)
@@ -45,7 +45,7 @@ test_func_mongo_sync_conn_seed_add (void)
   conn->rs.hosts = NULL;
 
   ok (mongo_sync_conn_seed_add (conn, config.primary_host,
-				config.primary_port),
+                                config.primary_port),
       "mongo_sync_conn_seed_add() works");
 
   conn = mongo_sync_reconnect (conn, TRUE);

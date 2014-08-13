@@ -14,14 +14,14 @@ test_func_mongo_sync_pool_secondary (void)
   gboolean ret = TRUE;
 
   skip (!config.secondary_host, 14,
-	"Secondary server not configured");
+        "Secondary server not configured");
 
   ok (mongo_sync_pool_new (config.secondary_host,
-			   config.secondary_port, 1, 10) == NULL,
+                           config.secondary_port, 1, 10) == NULL,
       "mongo_sync_pool_new() should fail when connecting to a secondary");
 
   pool = mongo_sync_pool_new (config.primary_host,
-			      config.primary_port, 1, 10);
+                              config.primary_port, 1, 10);
   ok (pool != NULL,
       "mongo_sync_pool_new() works with slaves too");
 
@@ -35,7 +35,7 @@ test_func_mongo_sync_pool_secondary (void)
   while ((conn[i] = mongo_sync_pool_pick (pool, FALSE)) != NULL)
     i++;
   cmp_ok (i, "==", 10,
-	  "Successfully connect to secondaries on 10 sockets");
+          "Successfully connect to secondaries on 10 sockets");
   ok (mongo_sync_pool_pick (pool, FALSE) == NULL,
       "mongo_sync_pool_pick() should fail if there are no free connections");
 
@@ -98,7 +98,7 @@ test_func_mongo_sync_pool (void)
    * First we test that connecting to an invalid host fails.
    */
   pool = mongo_sync_pool_new ("invalid.example.com",
-			      config.primary_port, 10, 10);
+                              config.primary_port, 10, 10);
   ok (pool == NULL,
       "mongo_sync_pool_new() should fail with an invalid host");
 
@@ -108,8 +108,8 @@ test_func_mongo_sync_pool (void)
    */
 
   pool = mongo_sync_pool_new (config.primary_host,
-			      config.primary_port,
-			      10, 0);
+                              config.primary_port,
+                              10, 0);
 
   ok (pool != NULL,
       "mongo_sync_pool_new() works");
@@ -117,7 +117,7 @@ test_func_mongo_sync_pool (void)
   while ((conn[c] = mongo_sync_pool_pick (pool, TRUE)) != NULL)
     c++;
   cmp_ok (c, "==", 10,
-	  "Successfully connect to the master on 10 sockets");
+          "Successfully connect to the master on 10 sockets");
 
   t = mongo_sync_pool_pick (pool, TRUE);
   ok (t == NULL && errno == EAGAIN,
@@ -144,16 +144,16 @@ test_func_mongo_sync_pool (void)
       "Two picked connections are not the same");
 
   b = bson_build (BSON_TYPE_STRING, "test-name", __FILE__, -1,
-		  BSON_TYPE_INT32, "i32", 1984,
-		  BSON_TYPE_NONE);
+                  BSON_TYPE_INT32, "i32", 1984,
+                  BSON_TYPE_NONE);
   bson_finish (b);
 
   ok (mongo_sync_cmd_insert ((mongo_sync_connection *)conn[0],
-			     config.ns, b, NULL) == TRUE,
+                             config.ns, b, NULL) == TRUE,
       "mongo_sync_cmd_insert() works on a picked connection");
 
   p = mongo_sync_cmd_query ((mongo_sync_connection *)conn[1],
-			    config.ns, 0, 0, 1, b, NULL);
+                            config.ns, 0, 0, 1, b, NULL);
   ok (p != NULL,
       "mongo_sync_cmd_query() works on a different picked connection");
   mongo_wire_packet_free (p);

@@ -17,7 +17,7 @@ test_mongo_utils_oid_new_with_time (void)
   ok ((oid1 = mongo_util_oid_new_with_time (0, 1)) != NULL,
       "mongo_util_oid_new_with_time() works");
   cmp_ok (oid1[11], "==", 1,
-	  "mongo_util_oid_new_with_time() returns an OID with the currect seq ID");
+          "mongo_util_oid_new_with_time() returns an OID with the currect seq ID");
 
   oid2 = mongo_util_oid_new_with_time (0, 2);
   oid3 = mongo_util_oid_new_with_time (0, 2);

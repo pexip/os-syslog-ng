@@ -44,9 +44,9 @@ test_mongo_wire_cmd_update (void)
 
   mongo_wire_packet_get_header (p, &hdr);
   cmp_ok ((data_size = mongo_wire_packet_get_data (p, &data)), "!=", -1,
-	  "Packet data size looks fine");
+          "Packet data size looks fine");
   cmp_ok (hdr.length, "==", sizeof (mongo_packet_header) + data_size,
-	  "Packet header length is OK");
+          "Packet header length is OK");
   cmp_ok (hdr.id, "==", 1, "Packet request ID is ok");
   cmp_ok (hdr.resp_to, "==", 0, "Packet reply ID is ok");
 
@@ -63,7 +63,7 @@ test_mongo_wire_cmd_update (void)
   ok ((c = bson_find (sel, "_id")) != NULL,
       "BSON contains an _id");
   cmp_ok (bson_cursor_type (c), "==", BSON_TYPE_NULL,
-	  "_id has correct type");
+          "_id has correct type");
   bson_cursor_free (c);
   bson_free (sel);
 
@@ -72,19 +72,19 @@ test_mongo_wire_cmd_update (void)
    */
   pos += (gint32)data[pos];
   ok ((tmp = bson_new_from_data (data + pos,
-				 bson_stream_doc_size (data, pos) - 1)) != NULL,
+                                 bson_stream_doc_size (data, pos) - 1)) != NULL,
       "Packet contains a valid BSON update document");
   bson_finish (tmp);
   cmp_ok (bson_size (upd), "==", bson_size (tmp),
-	  "Packet's update document has the correct size");
+          "Packet's update document has the correct size");
 
   ok ((c = bson_find (tmp, "int32")) != NULL,
       "BSON contains 'int32'");
   cmp_ok (bson_cursor_type (c), "==", BSON_TYPE_INT32,
-	  "int32 has correct type");
+          "int32 has correct type");
   bson_cursor_next (c);
   cmp_ok (bson_cursor_type (c), "==", BSON_TYPE_INT64,
-	  "next element has correct type too");
+          "next element has correct type too");
   ok (bson_cursor_next (c) == FALSE,
       "No more data after the update BSON object");
 

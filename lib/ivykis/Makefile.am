@@ -1,6 +1,9 @@
-ACLOCAL_AMFLAGS = -I m4
-SUBDIRS = lib modules misc
+SUBDIRS = src test
+if HAVE_POSIX
+SUBDIRS += contrib misc
+if !BUILD_ON_CYGWIN
+SUBDIRS += man3
+endif
+endif
 
-EXTRA_DIST = DEDICATION ivykis.spec configure.gnu
-DIST_SUBDIRS = lib modules contrib misc
-
+EXTRA_DIST = DEDICATION libivykis.posix.ver libivykis.win32.ver

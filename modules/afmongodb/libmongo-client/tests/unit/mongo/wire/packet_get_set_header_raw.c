@@ -27,7 +27,7 @@ test_mongo_wire_packet_get_set_header_raw (void)
       "mongo_wire_packet_get_header_raw() works on a fresh packet");
   /* Need to convert from LE, because _new() sets the length to LE. */
   cmp_ok (GINT32_FROM_LE (ph2.length), "==", sizeof (mongo_packet_header),
-	  "Initial packet length is the length of the header");
+          "Initial packet length is the length of the header");
 
   ph1.length = sizeof (mongo_packet_header);
   ph1.id = 1;
@@ -42,13 +42,13 @@ test_mongo_wire_packet_get_set_header_raw (void)
       "mongo_wire_packet_get_header_raw() works");
 
   cmp_ok (ph1.length, "==", ph2.length,
-	  "Packet lengths match");
+          "Packet lengths match");
   cmp_ok (ph1.id, "==", ph2.id,
-	  "Sequence IDs match");
+          "Sequence IDs match");
   cmp_ok (ph1.resp_to, "==", ph2.resp_to,
-	  "Response IDs match");
+          "Response IDs match");
   cmp_ok (ph1.opcode, "==", ph2.opcode,
-	  "OPCodes match");
+          "OPCodes match");
 
   mongo_wire_packet_free (p);
 }

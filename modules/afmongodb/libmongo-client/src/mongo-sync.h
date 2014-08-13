@@ -1,5 +1,5 @@
 /* mongo-sync.h - libmongo-client synchronous wrapper API
- * Copyright 2011 Gergely Nagy <algernon@balabit.hu>
+ * Copyright 2011, 2012, 2013 Gergely Nagy <algernon@balabit.hu>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -54,8 +54,9 @@ typedef struct _mongo_sync_connection mongo_sync_connection;
  *
  * Sets up a synchronous connection to a MongoDB server.
  *
- * @param host is the address of the server.
- * @param port is the port to connect to.
+ * @param address is the address of the server (IP or unix socket path).
+ * @param port is the port to connect to, or #MONGO_CONN_LOCAL if
+ * address is a unix socket.
  * @param slaveok signals whether queries made against a slave are
  * acceptable.
  *
@@ -63,9 +64,9 @@ typedef struct _mongo_sync_connection mongo_sync_connection;
  * error. It is the responsibility of the caller to close and free the
  * connection when appropriate.
  */
-mongo_sync_connection *mongo_sync_connect (const gchar *host,
-					   gint port,
-					   gboolean slaveok);
+mongo_sync_connection *mongo_sync_connect (const gchar *address,
+                                           gint port,
+                                           gboolean slaveok);
 
 /** Add a seed to an existing MongoDB connection.
  *
@@ -79,7 +80,7 @@ mongo_sync_connection *mongo_sync_connect (const gchar *host,
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_sync_conn_seed_add (mongo_sync_connection *conn,
-				   const gchar *host, gint port);
+                                   const gchar *host, gint port);
 
 /** Attempt to connect to another member of a replica set.
  *
@@ -96,7 +97,7 @@ gboolean mongo_sync_conn_seed_add (mongo_sync_connection *conn,
  * @note The original connection object will be updated too!
  */
 mongo_sync_connection *mongo_sync_reconnect (mongo_sync_connection *conn,
-					     gboolean force_master);
+                                             gboolean force_master);
 
 /** Close and free a synchronous MongoDB connection.
  *
@@ -122,7 +123,7 @@ gboolean mongo_sync_conn_get_slaveok (const mongo_sync_connection *conn);
  * @returns TRUE on sucess, FALSE otherwise.
  */
 gboolean mongo_sync_conn_set_slaveok (mongo_sync_connection *conn,
-				      gboolean slaveok);
+                                      gboolean slaveok);
 
 /** Retrieve the state of the safe mode flag from a sync connection.
  *
@@ -147,7 +148,7 @@ gboolean mongo_sync_conn_get_safe_mode (const mongo_sync_connection *conn);
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_sync_conn_set_safe_mode (mongo_sync_connection *conn,
-					gboolean safe_mode);
+                                        gboolean safe_mode);
 
 /** Get the state of the auto-reconnect flag from a sync connection.
  *
@@ -173,7 +174,7 @@ gboolean mongo_sync_conn_get_auto_reconnect (const mongo_sync_connection *conn);
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_sync_conn_set_auto_reconnect (mongo_sync_connection *conn,
-					     gboolean auto_reconnect);
+                                             gboolean auto_reconnect);
 
 /** Get the maximum size of a bulk insert package.
  *
@@ -196,7 +197,7 @@ gint32 mongo_sync_conn_get_max_insert_size (mongo_sync_connection *conn);
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_sync_conn_set_max_insert_size (mongo_sync_connection *conn,
-					      gint32 max_size);
+                                              gint32 max_size);
 
 /** Send an update command to MongoDB.
  *
@@ -213,9 +214,9 @@ gboolean mongo_sync_conn_set_max_insert_size (mongo_sync_connection *conn,
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_sync_cmd_update (mongo_sync_connection *conn,
-				const gchar *ns,
-				gint32 flags, const bson *selector,
-				const bson *update);
+                                const gchar *ns,
+                                gint32 flags, const bson *selector,
+                                const bson *update);
 
 /** Send an insert command to MongoDB.
  *
@@ -229,7 +230,7 @@ gboolean mongo_sync_cmd_update (mongo_sync_connection *conn,
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_sync_cmd_insert (mongo_sync_connection *conn,
-				const gchar *ns, ...) G_GNUC_NULL_TERMINATED;
+                                const gchar *ns, ...) G_GNUC_NULL_TERMINATED;
 
 
 /** Send an insert command to MongoDB.
@@ -245,8 +246,8 @@ gboolean mongo_sync_cmd_insert (mongo_sync_connection *conn,
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_sync_cmd_insert_n (mongo_sync_connection *conn,
-				  const gchar *ns, gint32 n,
-				  const bson **docs);
+                                  const gchar *ns, gint32 n,
+                                  const bson **docs);
 
 /** Send a query command to MongoDB.
  *
@@ -265,9 +266,9 @@ gboolean mongo_sync_cmd_insert_n (mongo_sync_connection *conn,
  * anymore.
  */
 mongo_packet *mongo_sync_cmd_query (mongo_sync_connection *conn,
-				    const gchar *ns, gint32 flags,
-				    gint32 skip, gint32 ret, const bson *query,
-				    const bson *sel);
+                                    const gchar *ns, gint32 flags,
+                                    gint32 skip, gint32 ret, const bson *query,
+                                    const bson *sel);
 
 /** Send a get more command to MongoDB.
  *
@@ -282,8 +283,8 @@ mongo_packet *mongo_sync_cmd_query (mongo_sync_connection *conn,
  * used anymore.
  */
 mongo_packet *mongo_sync_cmd_get_more (mongo_sync_connection *conn,
-				       const gchar *ns,
-				       gint32 ret, gint64 cursor_id);
+                                       const gchar *ns,
+                                       gint32 ret, gint64 cursor_id);
 
 /** Send a delete command to MongoDB.
  *
@@ -296,7 +297,7 @@ mongo_packet *mongo_sync_cmd_get_more (mongo_sync_connection *conn,
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_sync_cmd_delete (mongo_sync_connection *conn, const gchar *ns,
-				gint32 flags, const bson *sel);
+                                gint32 flags, const bson *sel);
 
 /** Send a kill_cursors command to MongoDB.
  *
@@ -309,7 +310,7 @@ gboolean mongo_sync_cmd_delete (mongo_sync_connection *conn, const gchar *ns,
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_sync_cmd_kill_cursors (mongo_sync_connection *conn,
-				      gint32 n, ...);
+                                      gint32 n, ...);
 
 /** Send a custom command to MongoDB.
  *
@@ -325,8 +326,8 @@ gboolean mongo_sync_cmd_kill_cursors (mongo_sync_connection *conn,
  * used anymore.
  */
 mongo_packet *mongo_sync_cmd_custom (mongo_sync_connection *conn,
-				     const gchar *db,
-				     const bson *command);
+                                     const gchar *db,
+                                     const bson *command);
 
 /** Send a count() command to MongoDB.
  *
@@ -342,8 +343,8 @@ mongo_packet *mongo_sync_cmd_custom (mongo_sync_connection *conn,
  * @returns The number of matching documents, or -1 on error.
  */
 gdouble mongo_sync_cmd_count (mongo_sync_connection *conn,
-			      const gchar *db, const gchar *coll,
-			      const bson *query);
+                              const gchar *db, const gchar *coll,
+                              const bson *query);
 
 /** Flags that can be set during collection creation. */
 enum
@@ -357,7 +358,7 @@ enum
     /** The collection's _id should be autoindexed. */
     MONGO_COLLECTION_AUTO_INDEX_ID = 1 << 2,
     /** The collection needs to be pre-allocated. */
-    MONGO_COLLECTION_SIZED = 1 << 3,
+    MONGO_COLLECTION_SIZED = 1 << 3
   };
 
 /** Create a new MongoDB collection.
@@ -382,8 +383,8 @@ enum
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_sync_cmd_create (mongo_sync_connection *conn,
-				const gchar *db, const gchar *coll,
-				gint flags, ...);
+                                const gchar *db, const gchar *coll,
+                                gint flags, ...);
 
 /** Check whether a collection exists in MongoDB.
  *
@@ -396,7 +397,7 @@ gboolean mongo_sync_cmd_create (mongo_sync_connection *conn,
  * the caller to free the BSON object once it is no longer needed.
  */
 bson *mongo_sync_cmd_exists (mongo_sync_connection *conn,
-			     const gchar *db, const gchar *coll);
+                             const gchar *db, const gchar *coll);
 
 /** Send a drop() command to MongoDB.
  *
@@ -409,7 +410,7 @@ bson *mongo_sync_cmd_exists (mongo_sync_connection *conn,
  * @returns TRUE if the collection was dropped, FALSE otherwise.
  */
 gboolean mongo_sync_cmd_drop (mongo_sync_connection *conn,
-			      const gchar *db, const gchar *coll);
+                              const gchar *db, const gchar *coll);
 
 /** Get the last error from MongoDB.
  *
@@ -425,7 +426,7 @@ gboolean mongo_sync_cmd_drop (mongo_sync_connection *conn,
  * is returning TRUE.
  */
 gboolean mongo_sync_cmd_get_last_error (mongo_sync_connection *conn,
-					const gchar *db, gchar **error);
+                                        const gchar *db, gchar **error);
 
 /** Reset the last error variable in MongoDB.
  *
@@ -435,7 +436,7 @@ gboolean mongo_sync_cmd_get_last_error (mongo_sync_connection *conn,
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_sync_cmd_reset_error (mongo_sync_connection *conn,
-				     const gchar *db);
+                                     const gchar *db);
 
 /** Check whether the current node is the master.
  *
@@ -464,9 +465,25 @@ gboolean mongo_sync_cmd_ping (mongo_sync_connection *conn);
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_sync_cmd_user_add (mongo_sync_connection *conn,
-				  const gchar *db,
-				  const gchar *user,
-				  const gchar *pw);
+                                  const gchar *db,
+                                  const gchar *user,
+                                  const gchar *pw);
+
+/** Add a user to MongoDB, with roles.
+ *
+ * @param conn is the connection to work with.
+ * @param db is the database to add the user to.
+ * @param user is the user to add.
+ * @param pw is the password.
+ * @param roles is a BSON array containing the roles for the user.
+ *
+ * @returns TRUE on success, FALSE otherwise.
+ */
+gboolean mongo_sync_cmd_user_add_with_roles (mongo_sync_connection *conn,
+                                             const gchar *db,
+                                             const gchar *user,
+                                             const gchar *pw,
+                                             const bson *roles);
 
 /** Remove a user from MongoDB.
  *
@@ -477,8 +494,8 @@ gboolean mongo_sync_cmd_user_add (mongo_sync_connection *conn,
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_sync_cmd_user_remove (mongo_sync_connection *conn,
-				     const gchar *db,
-				     const gchar *user);
+                                     const gchar *db,
+                                     const gchar *user);
 
 /** Authenticate a user with MongoDB.
  *
@@ -490,19 +507,19 @@ gboolean mongo_sync_cmd_user_remove (mongo_sync_connection *conn,
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_sync_cmd_authenticate (mongo_sync_connection *conn,
-				      const gchar *db,
-				      const gchar *user,
-				      const gchar *pw);
+                                      const gchar *db,
+                                      const gchar *user,
+                                      const gchar *pw);
 
 /** Flags that can be set at index creation. */
 enum
   {
     MONGO_INDEX_UNIQUE = 0x01, /**< Create a unique index. */
     MONGO_INDEX_DROP_DUPS = 0x02, /**< Drop duplicate entries when
-				     creating the indexes. */
+                                     creating the indexes. */
     MONGO_INDEX_BACKGROUND = 0x04, /**< Create indexes in the
-				      background. */
-    MONGO_INDEX_SPARSE = 0x08, /**< Create sparse indexes. */
+                                      background. */
+    MONGO_INDEX_SPARSE = 0x08 /**< Create sparse indexes. */
   };
 
 /** Create an index.
@@ -515,9 +532,9 @@ enum
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_sync_cmd_index_create (mongo_sync_connection *conn,
-				      const gchar *ns,
-				      const bson *key,
-				      gint options);
+                                      const gchar *ns,
+                                      const bson *key,
+                                      gint options);
 
 /** Drop an index.
  *
@@ -528,8 +545,8 @@ gboolean mongo_sync_cmd_index_create (mongo_sync_connection *conn,
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_sync_cmd_index_drop (mongo_sync_connection *conn,
-				    const gchar *ns,
-				    const bson *key);
+                                    const gchar *ns,
+                                    const bson *key);
 
 /** Drop all indexes from a namespace.
  *
@@ -539,7 +556,7 @@ gboolean mongo_sync_cmd_index_drop (mongo_sync_connection *conn,
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_sync_cmd_index_drop_all (mongo_sync_connection *conn,
-					const gchar *ns);
+                                        const gchar *ns);
 
 /** @} */
 

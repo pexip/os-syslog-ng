@@ -1,5 +1,5 @@
 /* compat.h - Various compatibility functions
- * Copyright 2011 Gergely Nagy <algernon@balabit.hu>
+ * Copyright 2011, 2012 Gergely Nagy <algernon@balabit.hu>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,10 +19,12 @@
 
 #include "config.h"
 
+#include <sys/types.h>
+#include <sys/socket.h>
+
 #if WITH_OPENSSL
 
 #include <openssl/md5.h>
-#include <sys/types.h>
 
 typedef enum {
   G_CHECKSUM_MD5,
@@ -35,10 +37,14 @@ typedef struct _GChecksum GChecksum;
 GChecksum *g_checksum_new (GChecksumType checksum_type);
 void g_checksum_free (GChecksum *checksum);
 void g_checksum_update (GChecksum *checksum,
-			const unsigned char *data,
-			ssize_t length);
+                        const unsigned char *data,
+                        ssize_t length);
 const char *g_checksum_get_string (GChecksum *checksum);
 
 #endif /* WITH_OPENSSL */
+
+#ifndef MSG_WAITALL
+#define MSG_WAITALL 0x40
+#endif
 
 #endif

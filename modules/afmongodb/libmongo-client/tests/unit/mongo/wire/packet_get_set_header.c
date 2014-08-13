@@ -24,7 +24,7 @@ test_mongo_wire_packet_get_set_header (void)
   ok (mongo_wire_packet_get_header (p, &ph2),
       "mongo_wire_packet_get_header() works on a fresh packet");
   cmp_ok (ph2.length, "==", sizeof (mongo_packet_header),
-	  "Initial packet length is the length of the header");
+          "Initial packet length is the length of the header");
 
   ph1.length = sizeof (mongo_packet_header);
   ph1.id = 1;
@@ -39,13 +39,13 @@ test_mongo_wire_packet_get_set_header (void)
       "mongo_wire_packet_get_header() works");
 
   cmp_ok (ph1.length, "==", ph2.length,
-	  "Packet lengths match");
+          "Packet lengths match");
   cmp_ok (ph1.id, "==", ph2.id,
-	  "Sequence IDs match");
+          "Sequence IDs match");
   cmp_ok (ph1.resp_to, "==", ph2.resp_to,
-	  "Response IDs match");
+          "Response IDs match");
   cmp_ok (ph1.opcode, "==", ph2.opcode,
-	  "OPCodes match");
+          "OPCodes match");
 
   ph1.length = GINT32_TO_LE (1);
   ok (mongo_wire_packet_set_header (p, &ph1) == FALSE,

@@ -14,13 +14,13 @@ test_mongo_sync_reconnect (void)
   ok (mongo_sync_reconnect (NULL, FALSE) == NULL,
       "mongo_sync_reconnect() fails with a NULL connection");
   cmp_ok (errno, "==", ENOTCONN,
-	  "errno is ENOTCONN");
+          "errno is ENOTCONN");
 
   conn = test_make_fake_sync_conn (-1, FALSE);
   ok (mongo_sync_reconnect (conn, FALSE) == NULL,
       "mongo_sync_reconnect() fails with a bogus FD");
   cmp_ok (errno, "==", EHOSTUNREACH,
-	  "errno is EHOSTUNREACH");
+          "errno is EHOSTUNREACH");
 
   mongo_sync_disconnect (conn);
 
@@ -28,7 +28,7 @@ test_mongo_sync_reconnect (void)
 
   /* Connect & reconnect to master */
   o = conn = mongo_sync_connect (config.primary_host,
-				 config.primary_port, TRUE);
+                                 config.primary_port, TRUE);
   ok ((conn = mongo_sync_reconnect (conn, TRUE)) != NULL,
       "mongo_sync_reconnect() works when reconnecting to self");
   ok (o == conn,
@@ -37,7 +37,7 @@ test_mongo_sync_reconnect (void)
 
   /* Connect to master, kill FD, reconnect */
   conn = mongo_sync_connect (config.primary_host,
-			     config.primary_port, TRUE);
+                             config.primary_port, TRUE);
   mongo_sync_cmd_is_master (conn);
 
   shutdown (conn->super.fd, SHUT_RDWR);
@@ -49,7 +49,7 @@ test_mongo_sync_reconnect (void)
 
   /* Connect, kill, reconnect; w/o knowing other hosts */
   o = conn = mongo_sync_connect (config.primary_host,
-				 config.primary_port, TRUE);
+                                 config.primary_port, TRUE);
   shutdown (conn->super.fd, SHUT_RDWR);
   sleep (3);
   l = conn->rs.hosts;
@@ -76,10 +76,10 @@ test_mongo_sync_reconnect (void)
 
   /* Gracefully ignore unparsable hosts during reconnect */
   o = conn = mongo_sync_connect (config.primary_host,
-				 config.primary_port, TRUE);
+                                 config.primary_port, TRUE);
   mongo_sync_cmd_is_master (conn);
   conn->rs.hosts = g_list_prepend (conn->rs.hosts,
-				   g_strdup ("invalid:-42"));
+                                   g_strdup ("invalid:-42"));
   shutdown (conn->super.fd, SHUT_RDWR);
   sleep (3);
   conn = mongo_sync_reconnect (conn, TRUE);
@@ -91,10 +91,10 @@ test_mongo_sync_reconnect (void)
 
   /* Ignore unreachable hosts during reconnect */
   o = conn = mongo_sync_connect (config.primary_host,
-				 config.primary_port, TRUE);
+                                 config.primary_port, TRUE);
   mongo_sync_cmd_is_master (conn);
   conn->rs.hosts = g_list_prepend (conn->rs.hosts,
-				   g_strdup ("example.com:27017"));
+                                   g_strdup ("example.com:27017"));
   shutdown (conn->super.fd, SHUT_RDWR);
   sleep (3);
   conn = mongo_sync_reconnect (conn, TRUE);
@@ -109,11 +109,11 @@ test_mongo_sync_reconnect (void)
    */
 
   skip (!config.secondary_host, 9,
-	"Secondary host not set up");
+        "Secondary host not set up");
 
   /* Connect to secondary & reconnect to master */
   o = conn = mongo_sync_connect (config.secondary_host,
-				 config.secondary_port, TRUE);
+                                 config.secondary_port, TRUE);
   ok (conn != NULL, "Connecting to secondary");
   ok (mongo_sync_cmd_is_master (conn) == FALSE,
       "Connected to a secondary");
@@ -126,7 +126,7 @@ test_mongo_sync_reconnect (void)
 
   /* Connect to secondary & reconnect to self */
   o = conn = mongo_sync_connect (config.secondary_host,
-				 config.secondary_port, TRUE);
+                                 config.secondary_port, TRUE);
   ok (conn != NULL, "Connecting to secondary");
   ok ((conn = mongo_sync_reconnect (conn, FALSE)) != NULL,
       "Reconnecting from slave to self succeeds");

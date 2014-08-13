@@ -63,17 +63,17 @@ main (void)
   print_coll_info (mongo_sync_cmd_exists (conn, "lmc", "cmd_create"));
 
   mongo_sync_cmd_create (conn, "lmc", "cmd_create_capped",
-			 MONGO_COLLECTION_CAPPED, 655360);
+                         MONGO_COLLECTION_CAPPED, 655360);
   print_coll_info (mongo_sync_cmd_exists (conn, "lmc", "cmd_create_capped"));
 
   mongo_sync_cmd_create (conn, "lmc", "cmd_create_capped_max",
-			 MONGO_COLLECTION_CAPPED | MONGO_COLLECTION_CAPPED_MAX,
-			 655360, 100);
+                         MONGO_COLLECTION_CAPPED | MONGO_COLLECTION_CAPPED_MAX,
+                         655360, 100);
   print_coll_info (mongo_sync_cmd_exists (conn, "lmc",
-					  "cmd_create_capped_max"));
+                                          "cmd_create_capped_max"));
 
   mongo_sync_cmd_create (conn, "lmc", "cmd_create_sized",
-			 MONGO_COLLECTION_SIZED, 655360);
+                         MONGO_COLLECTION_SIZED, 655360);
   print_coll_info (mongo_sync_cmd_exists (conn, "lmc", "cmd_create_sized"));
 
   mongo_sync_disconnect (conn);

@@ -16,9 +16,9 @@ test_bson_utc_datetime (void)
 
   cmp_ok (bson_size (b), "==", 19, "BSON UTC datetime element size check");
   ok (memcmp (bson_data (b),
-	      "\023\000\000\000\011\144\141\164\145\000\210\154\266\173\055"
-	      "\001\000\000\000",
-	      bson_size (b)) == 0,
+              "\023\000\000\000\011\144\141\164\145\000\210\154\266\173\055"
+              "\001\000\000\000",
+              bson_size (b)) == 0,
       "BSON UTC datetime element contents check");
 
   bson_free (b);
@@ -30,7 +30,7 @@ test_bson_utc_datetime (void)
       "bson_append_utc_datetime() without a BSON object should fail");
   bson_finish (b);
   cmp_ok (bson_size (b), "==", 5,
-	  "BSON object should be empty");
+          "BSON object should be empty");
 
   ok (bson_append_utc_datetime (b, "date", 1294860709000) == FALSE,
       "Appending to a finished element should fail");

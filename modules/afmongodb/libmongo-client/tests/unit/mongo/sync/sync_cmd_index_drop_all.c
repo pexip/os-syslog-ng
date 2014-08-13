@@ -10,10 +10,10 @@ test_mongo_sync_cmd_index_drop_all (void)
   c = test_make_fake_sync_conn (-1, FALSE);
   doc = test_bson_generate_full ();
   indexes = bson_build (BSON_TYPE_INT32, "sex", 1,
-			BSON_TYPE_DOUBLE, "double", 1.0,
-			BSON_TYPE_BOOLEAN, "TRUE", TRUE,
-			BSON_TYPE_INT64, "print", (gint64)-1,
-			BSON_TYPE_NONE);
+                        BSON_TYPE_DOUBLE, "double", 1.0,
+                        BSON_TYPE_BOOLEAN, "TRUE", TRUE,
+                        BSON_TYPE_INT64, "print", (gint64)-1,
+                        BSON_TYPE_NONE);
   bson_finish (indexes);
 
   ok (mongo_sync_cmd_index_drop_all (NULL, "test.ns") == FALSE,
@@ -30,7 +30,7 @@ test_mongo_sync_cmd_index_drop_all (void)
   begin_network_tests (1);
 
   c = mongo_sync_connect (config.primary_host, config.primary_port,
-			  TRUE);
+                          TRUE);
   mongo_sync_cmd_insert (c, config.ns, doc, NULL);
 
   mongo_sync_cmd_index_create (c, config.ns, indexes, 0);

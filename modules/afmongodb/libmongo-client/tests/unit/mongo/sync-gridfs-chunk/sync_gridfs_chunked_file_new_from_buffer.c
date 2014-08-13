@@ -19,12 +19,12 @@ test_mongo_sync_gridfs_chunked_file_new_from_buffer (void)
   gfs = mongo_sync_gridfs_new (conn, config.gfs_prefix);
 
   metadata = bson_build (BSON_TYPE_STRING, "filename",
-			 "gridfs_file_new_from_buffer", -1,
-			 BSON_TYPE_NONE);
+                         "gridfs_file_new_from_buffer", -1,
+                         BSON_TYPE_NONE);
   bson_finish (metadata);
 
   ok (mongo_sync_gridfs_chunked_file_new_from_buffer (NULL, metadata,
-						      buffer, BUFFER_SIZE) == FALSE,
+                                                      buffer, BUFFER_SIZE) == FALSE,
       "mongo_sync_gridfs_chunked_file_new_from_buffer() fails with a NULL GridFS");
 
   mongo_sync_gridfs_free (gfs, TRUE);
@@ -35,27 +35,27 @@ test_mongo_sync_gridfs_chunked_file_new_from_buffer (void)
   gfs = mongo_sync_gridfs_new (conn, config.gfs_prefix);
 
   ok (mongo_sync_gridfs_chunked_file_new_from_buffer (gfs, metadata,
-						      NULL, BUFFER_SIZE) == FALSE,
+                                                      NULL, BUFFER_SIZE) == FALSE,
       "mongo_sync_gridfs_chunked_file_new_from_buffer() fails with NULL data");
 
   ok (mongo_sync_gridfs_chunked_file_new_from_buffer (gfs, metadata,
-						      buffer, 0) == FALSE,
+                                                      buffer, 0) == FALSE,
       "mongo_sync_gridfs_chunked_file_new_from_buffer() fails with an invalid data size");
 
   ok (mongo_sync_gridfs_chunked_file_new_from_buffer (gfs, metadata, buffer,
-						      BUFFER_SIZE) == FALSE,
+                                                      BUFFER_SIZE) == FALSE,
       "mongo_sync_gridfs_chunked_file_new_from_buffer() fails with uninitialized OID");
 
   mongo_util_oid_init (0);
 
   gfile = mongo_sync_gridfs_chunked_file_new_from_buffer (gfs, metadata,
-							  buffer, BUFFER_SIZE);
+                                                          buffer, BUFFER_SIZE);
   ok (gfile != NULL,
       "mongo_sync_gridfs_chunked_file_new_from_buffer() works with metadata");
   mongo_sync_gridfs_chunked_file_free (gfile);
 
   gfile = mongo_sync_gridfs_chunked_file_new_from_buffer (gfs, NULL,
-							  buffer, BUFFER_SIZE);
+                                                          buffer, BUFFER_SIZE);
   ok (gfile != NULL,
       "mongo_sync_gridfs_chunked_file_new_from_buffer() works without metadata");
   mongo_sync_gridfs_chunked_file_free (gfile);

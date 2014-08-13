@@ -1,5 +1,5 @@
 /* sync-gridfs-stream.h - libmong-client GridFS streaming API
- * Copyright 2011 Gergely Nagy <algernon@balabit.hu>
+ * Copyright 2011, 2012 Gergely Nagy <algernon@balabit.hu>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -62,7 +62,7 @@ typedef struct _mongo_sync_gridfs_stream mongo_sync_gridfs_stream;
  * it is no longer needed.
  */
 mongo_sync_gridfs_stream *mongo_sync_gridfs_stream_find (mongo_sync_gridfs *gfs,
-							 const bson *query);
+                                                         const bson *query);
 
 /** Create a new GridFS stream writer.
  *
@@ -76,7 +76,7 @@ mongo_sync_gridfs_stream *mongo_sync_gridfs_stream_find (mongo_sync_gridfs *gfs,
  * it is no longer needed.
  */
 mongo_sync_gridfs_stream *mongo_sync_gridfs_stream_new (mongo_sync_gridfs *gfs,
-							const bson *metadata);
+                                                        const bson *metadata);
 
 /** Read an arbitrary number of bytes from a GridFS stream.
  *
@@ -90,8 +90,8 @@ mongo_sync_gridfs_stream *mongo_sync_gridfs_stream_new (mongo_sync_gridfs *gfs,
  * hold at most @a size bytes.
  */
 gint64 mongo_sync_gridfs_stream_read (mongo_sync_gridfs_stream *stream,
-				      guint8 *buffer,
-				      gint64 size);
+                                      guint8 *buffer,
+                                      gint64 size);
 
 /** Write an arbitrary number of bytes to a GridFS stream.
  *
@@ -102,8 +102,8 @@ gint64 mongo_sync_gridfs_stream_read (mongo_sync_gridfs_stream *stream,
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_sync_gridfs_stream_write (mongo_sync_gridfs_stream *stream,
-					 const guint8 *buffer,
-					 gint64 size);
+                                         const guint8 *buffer,
+                                         gint64 size);
 
 /** Seek to an arbitrary position in a GridFS stream.
  *
@@ -117,8 +117,8 @@ gboolean mongo_sync_gridfs_stream_write (mongo_sync_gridfs_stream *stream,
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_sync_gridfs_stream_seek (mongo_sync_gridfs_stream *stream,
-					gint64 pos,
-					gint whence);
+                                        gint64 pos,
+                                        gint whence);
 
 /** Close a GridFS stream.
  *

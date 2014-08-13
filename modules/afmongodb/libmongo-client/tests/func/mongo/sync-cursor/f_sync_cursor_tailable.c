@@ -23,9 +23,9 @@ test_func_mongo_sync_cursor_tailable (void)
   bson_finish (query);
 
   p = mongo_sync_cmd_query (conn, config.ns,
-			    MONGO_WIRE_FLAG_QUERY_TAILABLE_CURSOR |
-			    MONGO_WIRE_FLAG_QUERY_NO_CURSOR_TIMEOUT,
-			    0, 3, query, NULL);
+                            MONGO_WIRE_FLAG_QUERY_TAILABLE_CURSOR |
+                            MONGO_WIRE_FLAG_QUERY_NO_CURSOR_TIMEOUT,
+                            0, 3, query, NULL);
   ok (p == NULL,
       "Tailable cursors should not work on non-capped collections");
 
@@ -33,9 +33,9 @@ test_func_mongo_sync_cursor_tailable (void)
   capped_ns = g_strconcat (config.ns, ".capped", NULL);
 
   query = bson_build (BSON_TYPE_STRING, "create", capped_coll, -1,
-		      BSON_TYPE_BOOLEAN, "capped", TRUE,
-		      BSON_TYPE_INT32, "size", 64 * 1024 * 10,
-		      BSON_TYPE_NONE);
+                      BSON_TYPE_BOOLEAN, "capped", TRUE,
+                      BSON_TYPE_INT32, "size", 64 * 1024 * 10,
+                      BSON_TYPE_NONE);
   bson_finish (query);
 
   mongo_sync_cmd_drop (conn, config.db, capped_coll);
@@ -62,15 +62,15 @@ test_func_mongo_sync_cursor_tailable (void)
   bson_finish (query);
 
   tc = mongo_sync_cursor_new (conn, capped_ns,
-			      mongo_sync_cmd_query (conn, capped_ns,
-						    MONGO_WIRE_FLAG_QUERY_TAILABLE_CURSOR |
-						    MONGO_WIRE_FLAG_QUERY_NO_CURSOR_TIMEOUT,
-						    0, 3, query, NULL));
+                              mongo_sync_cmd_query (conn, capped_ns,
+                                                    MONGO_WIRE_FLAG_QUERY_TAILABLE_CURSOR |
+                                                    MONGO_WIRE_FLAG_QUERY_NO_CURSOR_TIMEOUT,
+                                                    0, 3, query, NULL));
 
   sc = mongo_sync_cursor_new (conn, capped_ns,
-			      mongo_sync_cmd_query (conn, capped_ns,
-						    0,
-						    0, 3, query, NULL));
+                              mongo_sync_cmd_query (conn, capped_ns,
+                                                    0,
+                                                    0, 3, query, NULL));
 
   bson_free (query);
 

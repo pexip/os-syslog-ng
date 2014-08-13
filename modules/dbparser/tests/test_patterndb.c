@@ -2,9 +2,10 @@
 #include "tags.h"
 #include "logmsg.h"
 #include "messages.h"
-#include "filter.h"
+#include "filter/filter-expr.h"
 #include "patterndb.h"
 #include "plugin.h"
+#include "cfg.h"
 #include "patterndb-int.h"
 
 #include <stdio.h>
@@ -68,8 +69,11 @@ create_pattern_db(gchar *pdb)
 void
 clean_pattern_db(void)
 {
-  g_ptr_array_foreach(messages, (GFunc) log_msg_unref, NULL);
-  g_ptr_array_free(messages, TRUE);
+  if (messages)
+    {
+      g_ptr_array_foreach(messages, (GFunc) log_msg_unref, NULL);
+      g_ptr_array_free(messages, TRUE);
+    }
   pattern_db_free(patterndb);
   patterndb = NULL;
 
@@ -141,20 +145,22 @@ test_clean_state(void)
 }
 
 void
-test_rule_value(const gchar *pattern, const gchar *name, const gchar *value)
+test_rule_value_without_clean(const gchar *program, const gchar *pattern,
+                              const gchar *name, const gchar *value)
 {
   gboolean result;
   LogMessage *msg = log_msg_new_empty();
   gboolean found = FALSE;
   const gchar *val;
   gssize len;
+  PDBInput input;
 
   log_msg_set_value(msg, LM_V_MESSAGE, pattern, strlen(pattern));
-  log_msg_set_value(msg, LM_V_PROGRAM, "prog1", 5);
+  log_msg_set_value(msg, LM_V_PROGRAM, program, 5);
   log_msg_set_value(msg, LM_V_HOST, MYHOST, strlen(MYHOST));
   log_msg_set_value(msg, LM_V_PID, MYPID, strlen(MYPID));
 
-  result = pattern_db_process(patterndb, msg);
+  result = pattern_db_process(patterndb, PDB_INPUT_WRAP_MESSAGE(&input, msg));
   val = log_msg_get_value(msg, log_msg_get_value_handle(name), &len);
   if (value)
     found = strcmp(val, value) == 0;
@@ -163,6 +169,12 @@ test_rule_value(const gchar *pattern, const gchar *name, const gchar *value)
     test_fail("Value '%s' is %smatching for pattern '%s' (%d)\n", name, found ? "" : "not ", pattern, !!result);
 
   log_msg_unref(msg);
+}
+
+void
+test_rule_value(const gchar *pattern, const gchar *name, const gchar *value)
+{
+  test_rule_value_without_clean("prog1", pattern, name, value);
   test_clean_state();
 }
 
@@ -171,13 +183,14 @@ test_rule_tag(const gchar *pattern, const gchar *tag, gboolean set)
 {
   LogMessage *msg = log_msg_new_empty();
   gboolean found, result;
+  PDBInput input;
 
   log_msg_set_value(msg, LM_V_MESSAGE, pattern, strlen(pattern));
   log_msg_set_value(msg, LM_V_PROGRAM, "prog2", 5);
   log_msg_set_value(msg, LM_V_HOST, MYHOST, strlen(MYHOST));
   log_msg_set_value(msg, LM_V_PID, MYPID, strlen(MYPID));
 
-  result = pattern_db_process(patterndb, msg);
+  result = pattern_db_process(patterndb, PDB_INPUT_WRAP_MESSAGE(&input, msg));
   found = log_msg_is_tag_by_name(msg, tag);
 
   if (set ^ found)
@@ -194,6 +207,7 @@ test_rule_action_message_value(const gchar *pattern, gint timeout, gint ndx, con
   gboolean found = FALSE, result;
   const gchar *val;
   gssize len;
+  PDBInput input;
 
   log_msg_set_value(msg, LM_V_MESSAGE, pattern, strlen(pattern));
   log_msg_set_value(msg, LM_V_PROGRAM, "prog2", 5);
@@ -201,7 +215,7 @@ test_rule_action_message_value(const gchar *pattern, gint timeout, gint ndx, con
   log_msg_set_value(msg, LM_V_PID, MYPID, strlen(MYPID));
   msg->timestamps[LM_TS_STAMP].tv_sec = msg->timestamps[LM_TS_RECVD].tv_sec;
 
-  result = pattern_db_process(patterndb, msg);
+  result = pattern_db_process(patterndb, PDB_INPUT_WRAP_MESSAGE(&input, msg));
   if (timeout)
     timer_wheel_set_time(patterndb->timer_wheel, timer_wheel_get_time(patterndb->timer_wheel) + timeout + 1);
 
@@ -228,6 +242,7 @@ test_rule_action_message_tag(const gchar *pattern, gint timeout, gint ndx, const
 {
   LogMessage *msg = log_msg_new_empty();
   gboolean found, result;
+  PDBInput input;
 
   log_msg_set_value(msg, LM_V_MESSAGE, pattern, strlen(pattern));
   log_msg_set_value(msg, LM_V_PROGRAM, "prog2", 5);
@@ -235,7 +250,7 @@ test_rule_action_message_tag(const gchar *pattern, gint timeout, gint ndx, const
   log_msg_set_value(msg, LM_V_PID, MYPID, strlen(MYPID));
   msg->timestamps[LM_TS_STAMP].tv_sec = msg->timestamps[LM_TS_RECVD].tv_sec;
 
-  result = pattern_db_process(patterndb, msg);
+  result = pattern_db_process(patterndb, PDB_INPUT_WRAP_MESSAGE(&input, msg));
   if (timeout)
     timer_wheel_set_time(patterndb->timer_wheel, timer_wheel_get_time(patterndb->timer_wheel) + timeout + 5);
   if (ndx >= messages->len)
@@ -284,6 +299,7 @@ test_patterndb_rule(void)
   test_rule_value("pattern11", "n11-2", "v11-2");
   test_rule_value("pattern11", "n11-3", NULL);
   test_rule_value("pattern11", "context-id", "999");
+  test_rule_value("pattern11", ".classifier.context_id", "999");
   test_rule_value("pattern11a", "n11-1", "v11-1");
   test_rule_value("pattern11a", "n11-2", "v11-2");
   test_rule_value("pattern11a", "n11-3", NULL);
@@ -334,6 +350,8 @@ test_pattern(const gchar *pattern, const gchar *rule, gboolean match)
   GString *res = g_string_sized_new(128);
   static TimeZoneInfo *tzinfo = NULL;
 
+  PDBInput input;
+
   if (!tzinfo)
     tzinfo = time_zone_info_new(NULL);
   if (!templ)
@@ -346,7 +364,7 @@ test_pattern(const gchar *pattern, const gchar *rule, gboolean match)
   log_msg_set_value(msg, LM_V_PROGRAM, "test", strlen(MYHOST));
   log_msg_set_value(msg, LM_V_MESSAGE, pattern, strlen(pattern));
 
-  result = pattern_db_process(patterndb, msg);
+  result = pattern_db_process(patterndb, PDB_INPUT_WRAP_MESSAGE(&input, msg));
 
   log_template_format(templ, msg, NULL, LTZ_LOCAL, 0, NULL, res);
 
@@ -436,6 +454,16 @@ NULL, // not match
 };
 
 gchar * test6 [] = {
+"@SET:TEST: 	@",
+" a ",
+"  a ",
+" 	a ",
+" 	 a ",
+NULL, // not match
+"ab1234",NULL
+};
+
+gchar * test7 [] = {
 "@IPv4:TEST@",
 "1.2.3.4",
 "0.0.0.0",
@@ -449,7 +477,7 @@ NULL,
 "1,2,3,4",NULL
 };
 
-gchar * test7 [] = {
+gchar * test8 [] = {
 "@IPv6:TEST@",
 "2001:0db8:0000:0000:0000:0000:1428:57ab",
 "2001:0db8:0000:0000:0000::1428:57ab",
@@ -461,7 +489,7 @@ NULL,
 "2001:0db8::34d2::1428:57ab",NULL
 };
 
-gchar * test8 [] = {
+gchar * test9 [] = {
 "@IPvANY:TEST@",
 "1.2.3.4",
 "0.0.0.0",
@@ -482,7 +510,7 @@ NULL,
 "2001:0db8::34d2::1428:57ab",NULL
 };
 
-gchar * test9 [] = {
+gchar * test10 [] = {
 "@NUMBER:TEST@",
 "1234",
 "1.2",
@@ -493,7 +521,7 @@ NULL,
 "1,2",NULL
 };
 
-gchar * test10 [] = {
+gchar * test11 [] = {
 "@QSTRING:TEST:&lt;&gt;@",
 "<aa bb>",
 "< aabb >",
@@ -502,7 +530,7 @@ NULL,
 "<aabb",NULL
 };
 
-gchar * test11 [] = {
+gchar * test12 [] = {
 "@STRING:TEST@",
 "aabb",
 "aa bb",
@@ -514,7 +542,7 @@ NULL,
 "aa bb",NULL
 };
 
-gchar **parsers[] = {test1, test2, test3, test4, test5, test6, test7, test8, test9, test10, test11, NULL};
+gchar **parsers[] = {test1, test2, test3, test4, test5, test6, test7, test8, test9, test10, test11, test12, NULL};
 
 void
 test_patterndb_parsers()
@@ -525,6 +553,175 @@ test_patterndb_parsers()
     {
       test_parser(parsers[i]);
     }
+}
+
+gchar *pdb_inheritance_skeleton = "<patterndb version='3' pub_date='2010-02-22'>\
+ <ruleset name='testset' id='1'>\
+  <patterns>\
+   <pattern>prog2</pattern>\
+  </patterns>\
+  <rule provider='test' id='11' class='system' context-scope='program'\
+        context-id='$PID' context-timeout='60'>\
+   <patterns>\
+    <pattern>pattern11</pattern>\
+   </patterns>\
+   <tags>\
+    <tag>tag11-1</tag>\
+    <tag>tag11-2</tag>\
+   </tags>\
+   <values>\
+    <value name='n11-1'>v11-1</value>\
+    <value name='vvv'>${HOST}</value>\
+    <value name='context-id'>${CONTEXT_ID}</value>\
+   </values>\
+   <actions>\
+    <action rate='1/60' condition='\"${n11-1}\" == \"v11-1\"' trigger='match'>\
+     <message inherit-properties='TRUE'>\
+      <value name='context-id'>${CONTEXT_ID}</value>\
+      <tags>\
+       <tag>tag11-3</tag>\
+      </tags>\
+     </message>\
+    </action>\
+   </actions>\
+  </rule>\
+  <rule provider='test' id='12' class='system' context-scope='program'\
+        context-id='$PID' context-timeout='60'>\
+   <patterns>\
+    <pattern>pattern12</pattern>\
+   </patterns>\
+   <tags>\
+    <tag>tag12-1</tag>\
+    <tag>tag12-2</tag>\
+   </tags>\
+   <values>\
+    <value name='n12-1'>v12-1</value>\
+    <value name='vvv'>${HOST}</value>\
+    <value name='context-id'>${CONTEXT_ID}</value>\
+   </values>\
+   <actions>\
+    <action rate='1/60' condition='\"${n12-1}\" == \"v12-1\"' trigger='match'>\
+     <message inherit-properties='FALSE'>\
+      <value name='context-id'>${CONTEXT_ID}</value>\
+      <tags>\
+       <tag>tag12-3</tag>\
+      </tags>\
+     </message>\
+    </action>\
+   </actions>\
+  </rule>\
+ </ruleset>\
+</patterndb>";
+
+void
+test_patterndb_message_property_inheritance()
+{
+  create_pattern_db(pdb_inheritance_skeleton);
+
+  test_rule_action_message_value("pattern11", 0, 1, "MESSAGE", "pattern11");
+  test_rule_action_message_value("pattern12", 0, 1, "MESSAGE", NULL);
+
+  test_rule_action_message_tag("pattern11", 0, 1, "tag11-1", TRUE);
+  test_rule_action_message_tag("pattern11", 0, 1, "tag11-2", TRUE);
+  test_rule_action_message_tag("pattern11", 0, 1, "tag11-3", TRUE);
+
+  test_rule_action_message_tag("pattern12", 0, 1, "tag12-1", FALSE);
+  test_rule_action_message_tag("pattern12", 0, 1, "tag12-2", FALSE);
+  test_rule_action_message_tag("pattern12", 0, 1, "tag12-3", TRUE);
+
+  clean_pattern_db();
+}
+
+gchar *pdb_msg_count_skeleton = "<patterndb version='3' pub_date='2010-02-22'>\
+ <ruleset name='testset' id='1'>\
+  <patterns>\
+   <pattern>prog1</pattern>\
+   <pattern>prog2</pattern>\
+  </patterns>\
+  <rule provider='test' id='13' class='system' context-scope='program'\
+        context-id='$PID' context-timeout='60'>\
+   <patterns>\
+    <pattern>pattern13</pattern>\
+   </patterns>\
+   <values>\
+    <value name='n13-1'>v13-1</value>\
+   </values>\
+   <actions>\
+    <action condition='\"${n13-1}\" == \"v13-1\"' trigger='match'>\
+     <message inherit-properties='TRUE'>\
+      <value name='CONTEXT_LENGTH'>$(context-length)</value>\
+     </message>\
+    </action>\
+   </actions>\
+  </rule>\
+  <rule provider='test' id='14' class='system' context-scope='program'\
+        context-id='$PID' context-timeout='60'>\
+   <patterns>\
+    <pattern>pattern14</pattern>\
+   </patterns>\
+   <actions>\
+    <action condition='\"$(context-length)\" == \"1\"' trigger='match'>\
+     <message inherit-properties='TRUE'>\
+      <value name='CONTEXT_LENGTH'>$(context-length)</value>\
+     </message>\
+    </action>\
+   </actions>\
+  </rule>\
+  <rule provider='test' id='15' class='system' context-scope='program'\
+        context-id='$PID' context-timeout='60'>\
+   <patterns>\
+    <pattern>pattern15@ANYSTRING:p15@</pattern>\
+   </patterns>\
+   <actions>\
+    <action condition='\"$(context-length)\" == \"2\"' trigger='match'>\
+     <message inherit-properties='FALSE'>\
+      <value name='fired'>true</value>\
+     </message>\
+    </action>\
+   </actions>\
+  </rule>\
+ </ruleset>\
+</patterndb>";
+
+void
+test_patterndb_context_length()
+{
+  create_pattern_db(pdb_msg_count_skeleton);
+
+  test_rule_action_message_value("pattern13", 0, 1, "CONTEXT_LENGTH", "1");
+  test_rule_action_message_value("pattern14", 0, 1, "CONTEXT_LENGTH", "1");
+
+  test_rule_value_without_clean("prog2", "pattern15-a", "p15", "-a");
+  test_rule_action_message_value("pattern15-b", 0, 2, "fired", "true");
+
+  clean_pattern_db();
+}
+
+gchar *tag_outside_of_rule_skeleton = "<patterndb version='3' pub_date='2010-02-22'>\
+ <ruleset name='testset' id='1'>\
+  <patterns>\
+   <pattern>prog1</pattern>\
+  </patterns>\
+  <tags>\
+   <tag>tag1</tag>\
+  </tags>\
+ </ruleset>\
+</patterndb>";
+
+void
+test_patterndb_tags_outside_of_rule()
+{
+  patterndb = pattern_db_new();
+  messages = NULL;
+
+  g_file_open_tmp("patterndbXXXXXX.xml", &filename, NULL);
+  g_file_set_contents(filename, tag_outside_of_rule_skeleton,
+                      strlen(tag_outside_of_rule_skeleton), NULL);
+
+  if (pattern_db_reload_ruleset(patterndb, configuration, filename))
+    fail = TRUE;
+
+  clean_pattern_db();
 }
 
 int
@@ -539,12 +736,16 @@ main(int argc, char *argv[])
   msg_init(TRUE);
 
   configuration = cfg_new(0x0302);
+  plugin_load_module("basicfuncs", configuration, NULL);
   plugin_load_module("syslogformat", configuration, NULL);
 
   pattern_db_global_init();
 
   test_patterndb_rule();
   test_patterndb_parsers();
+  test_patterndb_message_property_inheritance();
+  test_patterndb_context_length();
+  test_patterndb_tags_outside_of_rule();
 
   app_shutdown();
   return  (fail ? 1 : 0);

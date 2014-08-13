@@ -18,7 +18,7 @@ test_func_mongo_sync_auto_reconnect (void)
   bson_finish (b);
 
   conn = mongo_sync_connect (config.primary_host, config.primary_port,
-			     TRUE);
+                             TRUE);
   ok (mongo_sync_cmd_insert (conn, config.ns, b, NULL) == TRUE);
 
   shutdown (conn->super.fd, SHUT_RDWR);

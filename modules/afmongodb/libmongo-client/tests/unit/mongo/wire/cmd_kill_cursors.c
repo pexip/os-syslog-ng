@@ -27,9 +27,9 @@ test_mongo_wire_cmd_kill_cursors (void)
   /* Verify the header */
   mongo_wire_packet_get_header (p, &hdr);
   cmp_ok ((data_size = mongo_wire_packet_get_data (p, &data)), "!=", -1,
-	  "Packet data size looks fine");
+          "Packet data size looks fine");
   cmp_ok (hdr.length, "==", sizeof (mongo_packet_header) + data_size,
-	  "Packet header length is OK");
+          "Packet header length is OK");
   cmp_ok (hdr.id, "==", 1, "Packet request ID is ok");
   cmp_ok (hdr.resp_to, "==", 0, "Packet reply ID is ok");
 

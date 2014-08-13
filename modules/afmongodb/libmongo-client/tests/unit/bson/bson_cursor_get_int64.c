@@ -22,14 +22,14 @@ test_bson_cursor_get_int64 (void)
   ok (bson_cursor_get_int64 (c, &d) == FALSE,
       "bson_cursor_get_int64() at the initial position fails");
   cmp_ok (d, "==", 987654,
-	  "destination remains unchanged after failed cursor operations");
+          "destination remains unchanged after failed cursor operations");
   bson_cursor_free (c);
 
   c = bson_find (b, "int64");
   ok (bson_cursor_get_int64 (c, &d),
       "bson_cursor_get_int64() works");
   cmp_ok (d, "==", (gint64)-42,
-	  "bson_cursor_get_int64() returns the correct result");
+          "bson_cursor_get_int64() returns the correct result");
 
   bson_cursor_free (c);
 

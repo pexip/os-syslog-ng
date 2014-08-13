@@ -9,7 +9,7 @@ test_mongo_sync_gridfs_stream_find (void)
   bson *query;
 
   query = bson_build (BSON_TYPE_STRING, "filename", "bogus-fn", -1,
-		      BSON_TYPE_NONE);
+                      BSON_TYPE_NONE);
   bson_finish (query);
 
   ok (mongo_sync_gridfs_stream_find (NULL, query) == NULL,

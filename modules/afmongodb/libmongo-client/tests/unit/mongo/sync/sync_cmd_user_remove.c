@@ -13,7 +13,7 @@ test_mongo_sync_cmd_user_remove_net_secondary (void)
   gboolean ret;
 
   skip (!config.secondary_host, 1,
-	"Secondary server not configured");
+        "Secondary server not configured");
 
   c = mongo_sync_connect (config.secondary_host, config.secondary_port, TRUE);
   mongo_sync_conn_set_auto_reconnect (c, TRUE);
@@ -67,19 +67,19 @@ test_mongo_sync_cmd_user_remove (void)
   ok (mongo_sync_cmd_user_remove (NULL, "test", "test") == FALSE,
       "mongo_sync_cmd_user_remove() fails with a NULL connection");
   cmp_ok (errno, "==", ENOTCONN,
-	  "errno is set to ENOTCONN");
+          "errno is set to ENOTCONN");
 
   errno = 0;
   ok (mongo_sync_cmd_user_remove (c, NULL, "test") == FALSE,
       "mongo_sync_cmd_user_remove() fails with a NULL db");
   cmp_ok (errno, "==", EINVAL,
-	  "errno is set to EINVAL");
+          "errno is set to EINVAL");
 
   errno = 0;
   ok (mongo_sync_cmd_user_remove (c, "test", NULL) == FALSE,
       "mongo_sync_cmd_user_remove() fails with a NULL user");
   cmp_ok (errno, "==", EINVAL,
-	  "errno is set to EINVAL");
+          "errno is set to EINVAL");
 
   ok (mongo_sync_cmd_user_remove (c, "test", "test") == FALSE,
       "mongo_sync_cmd_user_remove() fails with a bogus FD");

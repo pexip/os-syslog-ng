@@ -54,18 +54,18 @@ test_mongo_sync_cmd_update (void)
   bson_finish (upd);
 
   c = mongo_sync_connect (config.primary_host, config.primary_port,
-			  FALSE);
+                          FALSE);
   mongo_sync_conn_set_auto_reconnect (c, TRUE);
 
   ok (mongo_sync_cmd_update (c, config.ns,
-			     MONGO_WIRE_FLAG_UPDATE_UPSERT, sel, upd) == TRUE,
+                             MONGO_WIRE_FLAG_UPDATE_UPSERT, sel, upd) == TRUE,
       "mongo_sync_cmd_update() works");
 
   shutdown (c->super.fd, SHUT_RDWR);
   sleep (3);
 
   ok (mongo_sync_cmd_update (c, config.ns,
-			     MONGO_WIRE_FLAG_UPDATE_UPSERT, sel, upd) == TRUE,
+                             MONGO_WIRE_FLAG_UPDATE_UPSERT, sel, upd) == TRUE,
       "mongo_sync_cmd_update() automatically reconnects");
 
   mongo_sync_disconnect (c);
@@ -74,17 +74,17 @@ test_mongo_sync_cmd_update (void)
    * Tests involving a secondary
    */
   skip (!config.secondary_host, 2,
-	"Secondary host not set up");
+        "Secondary host not set up");
 
   c = mongo_sync_connect (config.secondary_host, config.secondary_port,
-			  TRUE);
+                          TRUE);
   mongo_sync_conn_set_auto_reconnect (c, TRUE);
 
   ok (mongo_sync_cmd_is_master (c) == FALSE,
       "Connected to a secondary");
 
   ok (mongo_sync_cmd_update (c, config.ns,
-			     MONGO_WIRE_FLAG_UPDATE_UPSERT, sel, upd) == TRUE,
+                             MONGO_WIRE_FLAG_UPDATE_UPSERT, sel, upd) == TRUE,
       "mongo_sync_cmd_update() automatically reconnects to master");
   mongo_sync_disconnect (c);
   endskip;

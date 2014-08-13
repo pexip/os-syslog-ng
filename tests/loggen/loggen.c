@@ -1,3 +1,5 @@
+#include "syslog-ng.h"
+
 #include <config.h>
 #include <stdio.h>
 #include <sys/types.h>
@@ -69,7 +71,35 @@ typedef ssize_t (*send_data_t)(void *user_data, void *buf, size_t length);
 static ssize_t
 send_plain(void *user_data, void *buf, size_t length)
 {
-  return send((long)user_data, buf, length, 0);
+  int fd = (int) ((long) user_data);
+  int cc;
+
+  for (;;)
+    {
+      cc = send(fd, buf, length, 0);
+      if (cc > 0)
+          break;
+      if (cc < 0 && errno == ENOBUFS)
+        {
+          /*
+           * SendQ for the network interface is full.  Give it a chance to
+           * drain.  This is most likely for non-TCP transmissions.  NOTE
+           * that we're using blocking mode here, however BSDs seem to
+           * return ENOBUFS even in this case if we're overflowing the
+           * sendq without blocking.
+           */
+          struct timespec tspec;
+
+          /* wait 1 msec */
+          tspec.tv_sec = 0;
+          tspec.tv_nsec = 1e6;
+          while (nanosleep(&tspec, &tspec) < 0 && errno == EINTR)
+            ;
+        }
+      else
+        return -1;
+    }
+  return (cc);
 }
 
 #if ENABLE_SSL
@@ -310,7 +340,6 @@ gen_messages(send_data_t send_func, void *send_func_ud, int thread_id, FILE *rea
   struct timeval diff_tv;
   int pos_timestamp1 = 0, pos_timestamp2 = 0, pos_seq = 0;
   int rc, hdr_len = 0;
-  unsigned int counter = 0;
   gint64 sum_linelen = 0;
   char *testsdata = NULL;
 
@@ -368,7 +397,6 @@ gen_messages(send_data_t send_func, void *send_func_ud, int thread_id, FILE *rea
 
   /* NOTE: all threads calculate raw_message_length. This code could use some refactorization. */
   raw_message_length = linelen = strlen(linebuf);
-  counter = 0;
   while (time_val_diff_in_usec(&now, &start) < ((int64_t)interval) * USEC_PER_SEC)
     {
       if(number_of_messages != 0 && count >= number_of_messages)
@@ -393,15 +421,13 @@ gen_messages(send_data_t send_func, void *send_func_ud, int thread_id, FILE *rea
 
       if (buckets == 0)
         {
-          struct timespec tspec, trem;
+          struct timespec tspec;
           long msec = (1000 / rate) + 1;
 
           tspec.tv_sec = msec / 1000;
           tspec.tv_nsec = (msec % 1000) * 1e6;
-          while (nanosleep(&tspec, &trem) < 0 && errno == EINTR)
-            {
-              tspec = trem;
-            }
+          while (nanosleep(&tspec, &tspec) < 0 && errno == EINTR)
+            ;
           continue;
         }
 
@@ -649,7 +675,7 @@ static GOptionEntry loggen_options[] = {
   { "size", 's', 0, G_OPTION_ARG_INT, &message_length, "Specify the size of the syslog message", "<size>" },
   { "interval", 'I', 0, G_OPTION_ARG_INT, &interval, "Number of seconds to run the test for", "<sec>" },
   { "syslog-proto", 'P', 0, G_OPTION_ARG_NONE, &syslog_proto, "Use the new syslog-protocol message format (see also framing)", NULL },
-  { "sdata", 'p', 0, G_OPTION_ARG_STRING, &sdata_value, "Send the given sdata (e.g. \"[test name=\\\"value\\\"]) in case of syslog-proto", NULL },
+  { "sdata", 'p', 0, G_OPTION_ARG_STRING, &sdata_value, "Send the given sdata (e.g. \"[test name=\\\"value\\\"]\") in case of syslog-proto", NULL },
   { "no-framing", 'F', G_OPTION_FLAG_REVERSE, G_OPTION_ARG_NONE, &framing, "Don't use syslog-protocol style framing, even if syslog-proto is set", NULL },
   { "active-connections", 0, 0, G_OPTION_ARG_INT, &active_connections, "Number of active connections to the server (default = 1)", "<number>" },
   { "idle-connections", 0, 0, G_OPTION_ARG_INT, &idle_connections, "Number of inactive connections to the server (default = 0)", "<number>" },
@@ -738,9 +764,6 @@ main(int argc, char *argv[])
       message_length = MAX_MESSAGE_LENGTH;
     }
 
-  if (syslog_proto)
-    framing = 1;
-
   if (read_file != NULL)
     {
       if (read_file[0] == '-' && read_file[1] == '\0')
@@ -820,6 +843,12 @@ main(int argc, char *argv[])
   else
     {
       static struct sockaddr_un saun;
+
+      if (argc < 1)
+        {
+          fprintf(stderr, "No target path specified\n");
+          return 1;
+        }
 
       saun.sun_family = AF_UNIX;
       strncpy(saun.sun_path, argv[0], sizeof(saun.sun_path));

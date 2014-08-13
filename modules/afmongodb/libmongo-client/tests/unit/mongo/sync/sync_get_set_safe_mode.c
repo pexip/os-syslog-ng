@@ -14,21 +14,21 @@ test_mongo_sync_get_set_safe_mode (void)
   ok (mongo_sync_conn_get_safe_mode (NULL) == FALSE,
       "mongo_sync_conn_get_safe_mode() returns FALSE with a NULL connection");
   cmp_ok (errno, "==", ENOTCONN,
-	  "errno is now set to ENOTCONN");
+          "errno is now set to ENOTCONN");
 
   ok (mongo_sync_conn_get_safe_mode (c) == FALSE,
       "mongo_sync_get_safe_mode() works");
   cmp_ok (errno, "==", 0,
-	  "errno is now cleared");
+          "errno is now cleared");
 
   errno = 0;
   mongo_sync_conn_set_safe_mode (NULL, TRUE);
   cmp_ok (errno, "==", ENOTCONN,
-	  "errno is set to ENOTCONN after mongo_sync_conn_get_safe_mode(NULL)");
+          "errno is set to ENOTCONN after mongo_sync_conn_get_safe_mode(NULL)");
 
   mongo_sync_conn_set_safe_mode (c, TRUE);
   cmp_ok (errno, "==", 0,
-	  "errno is cleared");
+          "errno is cleared");
   ok (mongo_sync_conn_get_safe_mode (c) == TRUE,
       "mongo_sync_set_safe_mode() worked");
 

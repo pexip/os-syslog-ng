@@ -15,7 +15,7 @@ test_mongo_sync_gridfs_stream_write (void)
   mongo_util_oid_init (0);
 
   meta = bson_build (BSON_TYPE_STRING, "my-id", "sync_gridfs_stream_write", -1,
-		     BSON_TYPE_NONE);
+                     BSON_TYPE_NONE);
   bson_finish (meta);
 
   ok (mongo_sync_gridfs_stream_write (NULL, buffer, sizeof (buffer)) == FALSE,

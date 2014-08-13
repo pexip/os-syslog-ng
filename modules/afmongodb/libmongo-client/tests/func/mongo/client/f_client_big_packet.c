@@ -20,7 +20,7 @@ test_func_client_big_packet (void)
   memset (data, 'z', BIG_PACKET_SIZE);
   bson_append_boolean (b, "big_packet_size", TRUE);
   bson_append_binary (b, "bighead", BSON_BINARY_SUBTYPE_GENERIC,
-		      data, BIG_PACKET_SIZE);
+                      data, BIG_PACKET_SIZE);
   bson_finish (b);
   exp_size = bson_size (b);
 
@@ -47,7 +47,7 @@ test_func_client_big_packet (void)
   mongo_wire_packet_free (p);
 
   cmp_ok (exp_size + 17, "==", bson_size (b), /* +17: _id + value */
-	  "Huge packet receiving works, and returns a same sized packet");
+          "Huge packet receiving works, and returns a same sized packet");
 
   bson_free (b);
 

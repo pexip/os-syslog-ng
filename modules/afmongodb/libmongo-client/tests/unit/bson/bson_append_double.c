@@ -16,9 +16,9 @@ test_bson_double (void)
 
   cmp_ok (bson_size (b), "==", 21, "BSON double element size check");
   ok (memcmp (bson_data (b),
-	      "\025\000\000\000\001\144\157\165\142\154\145\000\037\205\353"
-	      "\121\270\036\011\100\000",
-	      bson_size (b)) == 0,
+              "\025\000\000\000\001\144\157\165\142\154\145\000\037\205\353"
+              "\121\270\036\011\100\000",
+              bson_size (b)) == 0,
       "BSON double element contents check");
 
   bson_free (b);
@@ -30,7 +30,7 @@ test_bson_double (void)
       "bson_append_double() without a BSON object should fail");
   bson_finish (b);
   cmp_ok (bson_size (b), "==", 5,
-	  "BSON object should be empty");
+          "BSON object should be empty");
 
   ok (bson_append_double (b, "d", d) == FALSE,
       "Appending to a finished element should fail");

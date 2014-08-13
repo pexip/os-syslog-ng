@@ -21,7 +21,7 @@ test_func_mongo_sync_oidtest (void)
   bson_finish (boid);
 
   conn = mongo_sync_connect (config.primary_host, config.primary_port,
-			     FALSE);
+                             FALSE);
 
   p = mongo_sync_cmd_custom (conn, config.db, boid);
   ok (p != NULL,
