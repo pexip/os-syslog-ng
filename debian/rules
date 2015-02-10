@@ -110,7 +110,6 @@ override_dh_auto_configure:
 		${SYSTEMD_SUPPORT} \
 		${LINUX_CAP_SUPPORT} \
 		\
-		--with-libmongo-client=system \
 		--with-ivykis=system \
 		\
 		--with-module-dir='$${exec_prefix}/lib/syslog-ng/$${VERSION}' \
