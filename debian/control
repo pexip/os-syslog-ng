@@ -7,6 +7,7 @@ Build-Depends: debhelper (>= 8), dh-autoreconf, libnet1-dev, libevtlog-dev (>= 0
 Build-Conflicts: autoconf2.13
 Standards-Version: 3.9.2
 Homepage: http://www.balabit.com/network-security/syslog-ng/opensource-logging-system
+XS-Pexip-Upstream: http://ftp.debian.org/debian/ jessie
 
 Package: syslog-ng
 Architecture: all
