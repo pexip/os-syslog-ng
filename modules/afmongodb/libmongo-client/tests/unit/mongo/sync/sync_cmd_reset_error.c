@@ -16,7 +16,7 @@ test_mongo_sync_cmd_reset_error (void)
   ok (mongo_sync_cmd_reset_error (NULL, config.db) == FALSE,
       "mongo_sync_cmd_reset_error() fails with a NULL connection");
   cmp_ok (errno, "==", ENOTCONN,
-	  "errno is set to ENOTCONN");
+          "errno is set to ENOTCONN");
 
   ok (mongo_sync_cmd_reset_error (c, NULL) == FALSE,
       "mongo_sync_cmd_reset_error() fails with a NULL db");

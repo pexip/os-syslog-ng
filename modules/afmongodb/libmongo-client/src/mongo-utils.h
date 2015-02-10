@@ -1,5 +1,5 @@
 /* mongo-utils.h - libmongo-client utility functions
- * Copyright 2011 Gergely Nagy <algernon@balabit.hu>
+ * Copyright 2011, 2012 Gergely Nagy <algernon@balabit.hu>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -112,7 +112,7 @@ gchar *mongo_util_oid_as_string (const guint8 *oid);
  * will be set to NULL, and port to -1.
  */
 gboolean mongo_util_parse_addr (const gchar *addr, gchar **host,
-				gint *port);
+                                gint *port);
 
 /** @} */
 

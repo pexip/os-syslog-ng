@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2011 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -64,7 +64,7 @@ void tls_session_free(TLSSession *self);
 struct _TLSContext
 {
   TLSMode mode;
-  TLSVerifyMode verify_mode;
+  gint verify_mode;
   gchar *key_file;
   gchar *cert_file;
   gchar *ca_dir;
@@ -87,6 +87,7 @@ TLSVerifyMode tls_lookup_verify_mode(const gchar *mode_str);
 void tls_log_certificate_validation_progress(int ok, X509_STORE_CTX *ctx);
 gboolean tls_verify_certificate_name(X509 *cert, const gchar *hostname);
 
+void tls_x509_format_dn(X509_NAME *name, GString *dn);
 #else
 
 typedef struct _TLSContext TLSContext;

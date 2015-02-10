@@ -12,16 +12,16 @@ tut_bson (void)
     (BSON_TYPE_STRING, "author", FALSE, "Gergely Nagy", -1,
      BSON_TYPE_ARRAY, "pages", TRUE,
        bson_build_full (BSON_TYPE_DOCUMENT, "1", TRUE,
-			bson_build (BSON_TYPE_STRING, "title", "BSON tutorial", -1,
-				    BSON_TYPE_STRING, "content", "...", -1,
-				    BSON_TYPE_INT32, "importance", 1,
-				    BSON_TYPE_NONE),
-			BSON_TYPE_DOCUMENT, "2", TRUE,
-			bson_build (BSON_TYPE_STRING, "title", "Some other thing", -1,
-				    BSON_TYPE_STRING, "content", "...", -1,
-				    BSON_TYPE_INT32, "importance", 0,
-				    BSON_TYPE_NONE),
-			BSON_TYPE_NONE),
+                        bson_build (BSON_TYPE_STRING, "title", "BSON tutorial", -1,
+                                    BSON_TYPE_STRING, "content", "...", -1,
+                                    BSON_TYPE_INT32, "importance", 1,
+                                    BSON_TYPE_NONE),
+                        BSON_TYPE_DOCUMENT, "2", TRUE,
+                        bson_build (BSON_TYPE_STRING, "title", "Some other thing", -1,
+                                    BSON_TYPE_STRING, "content", "...", -1,
+                                    BSON_TYPE_INT32, "importance", 0,
+                                    BSON_TYPE_NONE),
+                        BSON_TYPE_NONE),
      BSON_TYPE_BOOLEAN, "inline", FALSE, TRUE,
      BSON_TYPE_NONE);
   bson_finish (b);
@@ -61,22 +61,22 @@ main (void)
   bson_cursor_free (c);
 
   printf ("Author: %s; inline: %s; (bson_find)\n",
-	  v_str, (v_bool) ? "TRUE" : "FALSE");
+          v_str, (v_bool) ? "TRUE" : "FALSE");
 
   c = bson_find (doc, "author");
   bson_cursor_get_string (c, &v_str);
   while (bson_cursor_next (c))
     {
       if (strcmp (bson_cursor_key (c), "inline") == 0)
-	{
-	  bson_cursor_get_boolean (c, &v_bool);
-	  break;
-	}
+        {
+          bson_cursor_get_boolean (c, &v_bool);
+          break;
+        }
     }
   bson_cursor_free (c);
 
   printf ("Author: %s; inline: %s; (bson_cursor_next)\n",
-	  v_str, (v_bool) ? "TRUE" : "FALSE");
+          v_str, (v_bool) ? "TRUE" : "FALSE");
 
   c = bson_find (doc, "author");
   bson_cursor_get_string (c, &v_str);
@@ -85,7 +85,7 @@ main (void)
   bson_cursor_free (c);
 
   printf ("Author: %s; inline: %s; (bson_cursor_find_next)\n",
-	  v_str, (v_bool) ? "TRUE" : "FALSE");
+          v_str, (v_bool) ? "TRUE" : "FALSE");
 
   c = bson_find (doc, "pages");
   bson_cursor_find (c, "inline");
@@ -95,13 +95,13 @@ main (void)
   bson_cursor_free (c);
 
   printf ("Author: %s; inline: %s; (bson_cursor_find)\n",
-	  v_str, (v_bool) ? "TRUE" : "FALSE");
+          v_str, (v_bool) ? "TRUE" : "FALSE");
 
   c = bson_cursor_new (doc);
   while (bson_cursor_next (c))
     {
       printf ("Key: %s; type=%s\n", bson_cursor_key (c),
-	      bson_cursor_type_as_string (c));
+              bson_cursor_type_as_string (c));
     }
   bson_cursor_free (c);
 

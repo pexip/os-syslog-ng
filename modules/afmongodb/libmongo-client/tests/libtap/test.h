@@ -37,12 +37,12 @@ extern func_config_t config;
     } while (0)
 
 #define RUN_TEST(n, t) \
-  int		       \
-  main (void)	       \
-  {		       \
-    plan (n);	       \
+  int                  \
+  main (void)          \
+  {                    \
+    plan (n);          \
     test_##t ();       \
-    return 0;	       \
+    return 0;          \
   }
 
 gboolean test_env_setup (void);
@@ -56,8 +56,8 @@ void test_env_free (void);
       printf ("1..0 # skip, Environment not set up for network tests"); \
     else								\
       {									\
-	plan (n);							\
-	test_##t ();							\
+        plan (n);							\
+        test_##t ();							\
       }									\
     test_env_free ();							\
     return 0;								\
@@ -65,10 +65,10 @@ void test_env_free (void);
 
 bson *test_bson_generate_full (void);
 mongo_packet *test_mongo_wire_generate_reply (gboolean valid,
-					      gint32 nreturn,
-					      gboolean with_docs);
+                                              gint32 nreturn,
+                                              gboolean with_docs);
 mongo_sync_connection *test_make_fake_sync_conn (gint fd,
-						 gboolean slaveok);
+                                                 gboolean slaveok);
 
 #define SAVE_OLD_FUNC(n)				\
   static void *(*func_##n)();				\

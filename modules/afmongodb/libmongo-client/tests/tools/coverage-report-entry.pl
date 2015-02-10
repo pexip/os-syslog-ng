@@ -43,22 +43,22 @@ while (<>) {
     s/>/&gt;/g;
 
     if (/^\s*function (\S+) called (\d+) returned \d+% blocks executed \d+%/) {
-	my $class = $2 > 0 ? "perfect" : "terrible";
-	$_ = "<span class=\"$class\" id=\"" . $1 . "\">$_</span>";
+        my $class = $2 > 0 ? "perfect" : "terrible";
+        $_ = "<span class=\"$class\" id=\"" . $1 . "\">$_</span>";
     } elsif (/^\s*branch\s+\d+\s+taken\s+(\d+)%\s+.*$/) {
-	my $class = $1 > 0 ? "perfect" : "terrible";
-	$_ = "<span class=\"$class\">$_</span>";
+        my $class = $1 > 0 ? "perfect" : "terrible";
+        $_ = "<span class=\"$class\">$_</span>";
     } elsif (/^\s*branch\s+\d+\s+never executed.*$/) {
-	my $class = "terrible";
-	$_ = "<span class=\"$class\">$_</span>";
+        my $class = "terrible";
+        $_ = "<span class=\"$class\">$_</span>";
     } elsif (/^\s*call\s+\d+\s+never executed.*$/) {
-	my $class = "terrible";
-	$_ = "<span class=\"$class\">$_</span>";
+        my $class = "terrible";
+        $_ = "<span class=\"$class\">$_</span>";
     } elsif (/^\s*call\s+\d+\s+returned\s+(\d+)%.*$/) {
-	my $class = $1 > 0 ? "perfect" : "terrible";
-	$_ = "<span class=\"$class\">$_</span>";
+        my $class = $1 > 0 ? "perfect" : "terrible";
+        $_ = "<span class=\"$class\">$_</span>";
     }
-    
+
 
     print;
 }

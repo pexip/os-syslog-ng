@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -73,7 +73,6 @@ static GOptionEntry syslogng_options[] =
   { "version",           'V',         0, G_OPTION_ARG_NONE, &display_version, "Display version number (" PACKAGE " " VERSION ")", NULL },
   { "module-path",         0,         0, G_OPTION_ARG_STRING, &module_path, "Set the list of colon separated directories to search for modules, default=" MODULE_PATH, "<path>" },
   { "module-registry",     0,         0, G_OPTION_ARG_NONE, &display_module_registry, "Display module information", NULL },
-  { "default-modules",     0,         0, G_OPTION_ARG_STRING, &default_modules, "Set the set of auto-loaded modules, default=" DEFAULT_MODULES, "<module-list>" },
   { "seed",              'S',         0, G_OPTION_ARG_NONE, &dummy, "Does nothing, the need to seed the random generator is autodetected", NULL},
 #ifdef YYDEBUG
   { "yydebug",           'y',         0, G_OPTION_ARG_NONE, &cfg_parser_debug, "Enable configuration parser debugging", NULL },
@@ -82,6 +81,14 @@ static GOptionEntry syslogng_options[] =
 };
 
 #define INSTALL_DAT_INSTALLER_VERSION "INSTALLER_VERSION"
+
+static void
+interactive_mode(void)
+{
+  debug_flag = FALSE;
+  verbose_flag = FALSE;
+  msg_init(TRUE);
+}
 
 gboolean
 get_installer_version(gchar **inst_version)
@@ -126,10 +133,8 @@ version(void)
 #if WITH_COMPILE_DATE
          "Compile-Date: " __DATE__ " " __TIME__ "\n"
 #endif
-         "Default-Modules: %s\n"
          "Available-Modules: ",
-         installer_version,
-         default_modules);
+         installer_version);
 
   plugin_list_modules(stdout, FALSE);
 
@@ -212,11 +217,13 @@ main(int argc, char *argv[])
 
   if (display_version)
     {
+      interactive_mode();
       version();
       return 0;
     }
   if (display_module_registry)
     {
+      interactive_mode();
       plugin_list_modules(stdout, TRUE);
       return 0;
     }

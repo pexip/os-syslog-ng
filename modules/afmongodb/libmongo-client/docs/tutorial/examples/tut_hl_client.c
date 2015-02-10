@@ -26,11 +26,11 @@ do_inserts (mongo_sync_connection *conn)
       bson_finish (n);
 
       if (!mongo_sync_cmd_insert (conn, "lmc.tutorial", n, NULL))
-	{
-	  fprintf (stderr, "Error inserting document %d: %s\n", i,
-		   strerror (errno));
-	  exit (1);
-	}
+        {
+          fprintf (stderr, "Error inserting document %d: %s\n", i,
+                   strerror (errno));
+          exit (1);
+        }
       bson_free (n);
     }
   bson_free (base);
@@ -49,12 +49,12 @@ do_query (mongo_sync_connection *conn)
   bson_finish (query);
 
   c = mongo_sync_cursor_new (conn, "lmc.tutorial",
-			     mongo_sync_cmd_query (conn, "lmc.tutorial", 0,
-						   0, 10, query, NULL));
+                             mongo_sync_cmd_query (conn, "lmc.tutorial", 0,
+                                                   0, 10, query, NULL));
   if (!c)
     {
       fprintf (stderr, "Error creating the query cursor: %s\n",
-	       strerror (errno));
+               strerror (errno));
       exit (1);
     }
   bson_free (query);
@@ -66,14 +66,14 @@ do_query (mongo_sync_connection *conn)
       gint32 cnt;
 
       if (!b)
-	{
-	  int e = errno;
+        {
+          int e = errno;
 
-	  mongo_sync_cmd_get_last_error (conn, "lmc", &error);
-	  fprintf (stderr, "Error retrieving cursor data: %s\n",
-		   (error) ? error : strerror (e));
-	  exit (1);
-	}
+          mongo_sync_cmd_get_last_error (conn, "lmc", &error);
+          fprintf (stderr, "Error retrieving cursor data: %s\n",
+                   (error) ? error : strerror (e));
+          exit (1);
+        }
 
       bc = bson_find (b, "counter");
       bson_cursor_get_int32 (bc, &cnt);

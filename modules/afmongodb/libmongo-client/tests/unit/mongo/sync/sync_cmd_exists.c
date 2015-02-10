@@ -24,10 +24,10 @@ test_mongo_sync_cmd_exists_net (void)
   mongo_sync_cmd_drop (conn, config.db, cc);
 
   mongo_sync_cmd_create (conn, config.db, config.coll,
-			 MONGO_COLLECTION_DEFAULTS);
+                         MONGO_COLLECTION_DEFAULTS);
   mongo_sync_cmd_create (conn, config.db, cc,
-			 MONGO_COLLECTION_CAPPED,
-			 (gint64) 64 * 1024 * 10);
+                         MONGO_COLLECTION_CAPPED,
+                         (gint64) 64 * 1024 * 10);
 
   r = mongo_sync_cmd_exists (conn, config.db, config.coll);
   c = bson_find (r, "name");
@@ -37,7 +37,7 @@ test_mongo_sync_cmd_exists_net (void)
   bson_cursor_find (c, "capped");
   bson_cursor_get_boolean (c, &capped);
   cmp_ok (capped, "==", FALSE,
-	  "mongo_sync_cmd_exists() returned correct info");
+          "mongo_sync_cmd_exists() returned correct info");
   bson_cursor_free (c);
   bson_free (r);
 
@@ -50,7 +50,7 @@ test_mongo_sync_cmd_exists_net (void)
   bson_cursor_find (c, "capped");
   bson_cursor_get_boolean (c, &capped);
   cmp_ok (capped, "==", FALSE,
-	  "mongo_sync_cmd_exists() returned correct info");
+          "mongo_sync_cmd_exists() returned correct info");
   bson_cursor_free (c);
   g_free (ns);
   bson_free (r);

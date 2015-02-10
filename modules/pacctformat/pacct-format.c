@@ -1,18 +1,18 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published
  * by the Free Software Foundation, or (at your option) any later version.
  *
- * This library is distributed in the hope that it will be useful,
+ * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  * As an additional exemption you are allowed to compile & link against the
@@ -23,6 +23,7 @@
 
 #include "pacct-format.h"
 #include "logmsg.h"
+#include "logproto/logproto-record-server.h"
 
 /* we're using the Linux header as the glibc one is incomplete */
 #include <linux/acct.h>
@@ -96,7 +97,7 @@ pacct_register_handles(void)
 }
 
 void
-pacct_format_handler(MsgFormatOptions *options, const guchar *data, gsize length, LogMessage *msg)
+pacct_format_handler(const MsgFormatOptions *options, const guchar *data, gsize length, LogMessage *msg)
 {
   acct_t *rec;
   gsize len;
@@ -151,10 +152,10 @@ pacct_format_handler(MsgFormatOptions *options, const guchar *data, gsize length
   log_msg_set_value(msg, handle_ac_comm, rec->ac_comm, len);
 }
 
-LogProto *
-pacct_construct_proto(MsgFormatOptions *options, LogTransport *transport, guint flags)
+static LogProtoServer *
+pacct_construct_proto(const MsgFormatOptions *options, LogTransport *transport, const LogProtoServerOptions *proto_options)
 {
-  return log_proto_record_server_new(transport, sizeof(acct_t), flags | LPRS_BINARY);
+  return log_proto_binary_record_server_new(transport, proto_options, sizeof(acct_t));
 }
 
 MsgFormatHandler pacct_handler =

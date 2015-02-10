@@ -1,5 +1,5 @@
 /* mongo-client.h - libmongo-client user API
- * Copyright 2011 Gergely Nagy <algernon@balabit.hu>
+ * Copyright 2011, 2012 Gergely Nagy <algernon@balabit.hu>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,18 +37,27 @@ G_BEGIN_DECLS
 /** Opaque MongoDB connection object type. */
 typedef struct _mongo_connection mongo_connection;
 
+/** Constant to signal that a connection is local (unix socket).
+ *
+ * When passed to mongo_connect() or mongo_sync_connect() as the port
+ * parameter, it signals that the address is to be interpreted as a
+ * unix socket path, not a hostname or IP.
+ */
+#define MONGO_CONN_LOCAL -1
+
 /** Connect to a MongoDB server.
  *
  * Connects to a single MongoDB server.
  *
- * @param host is the IP address of the server.
- * @param port is the port to connect to.
+ * @param address is the address of the server (IP or unix socket path).
+ * @param port is the port to connect to, or #MONGO_CONN_LOCAL if
+ * address is a unix socket.
  *
  * @returns A newly allocated mongo_connection object or NULL on
  * error. It is the responsibility of the caller to free it once it is
  * not used anymore.
  */
-mongo_connection *mongo_connect (const char *host, int port);
+mongo_connection *mongo_connect (const char *address, int port);
 
 /** Disconnect from a MongoDB server.
  *

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -26,7 +26,8 @@
 #define LOGREADER_H_INCLUDED
 
 #include "logsource.h"
-#include "logproto.h"
+#include "logproto/logproto-server.h"
+#include "poll-events.h"
 #include "timeutils.h"
 
 /* flags */
@@ -39,32 +40,27 @@
 
 /* options */
 
-typedef struct _LogReaderWatch LogReaderWatch;
-
 typedef struct _LogReaderOptions
 {
+  gboolean initialized;
   LogSourceOptions super;
   MsgFormatOptions parse_options;
+  LogProtoServerOptionsStorage proto_options;
   guint32 flags;
-  gint padding;
-  gint msg_size;
-  gint follow_freq;
   gint fetch_limit;
-  gchar *text_encoding;
   const gchar *group_name;
-
-  /* source time zone if one is not specified in the message */
   gboolean check_hostname;
 } LogReaderOptions;
 
 typedef struct _LogReader LogReader;
 
-void log_reader_set_options(LogPipe *s, LogPipe *control, LogReaderOptions *options, gint stats_level, gint stats_source, const gchar *stats_id, const gchar *stats_instance);
-void log_reader_set_follow_filename(LogPipe *self, const gchar *follow_filename);
-void log_reader_set_peer_addr(LogPipe *s, GSockAddr *peer_addr);
-void log_reader_set_immediate_check(LogPipe *s);
+void log_reader_set_options(LogReader *s, LogPipe *control, LogReaderOptions *options, gint stats_level, gint stats_source, const gchar *stats_id, const gchar *stats_instance);
+void log_reader_set_follow_filename(LogReader *self, const gchar *follow_filename);
+void log_reader_set_peer_addr(LogReader *s, GSockAddr *peer_addr);
+void log_reader_set_immediate_check(LogReader *s);
+void log_reader_reopen(LogReader *s, LogProtoServer *proto, PollEvents *poll_events);
+LogReader *log_reader_new(void);
 
-LogPipe *log_reader_new(LogProto *proto);
 void log_reader_options_defaults(LogReaderOptions *options);
 void log_reader_options_init(LogReaderOptions *options, GlobalConfig *cfg, const gchar *group_name);
 void log_reader_options_destroy(LogReaderOptions *options);

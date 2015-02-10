@@ -12,10 +12,10 @@ test_mongo_sync_cmd_count_net_secondary (void)
   gdouble d;
 
   skip (!config.secondary_host, 2,
-	"Secondary server not configured");
+        "Secondary server not configured");
 
   conn = mongo_sync_connect (config.secondary_host, config.secondary_port,
-			     TRUE);
+                             TRUE);
   mongo_sync_cmd_is_master (conn);
   mongo_sync_conn_set_auto_reconnect (conn, TRUE);
 

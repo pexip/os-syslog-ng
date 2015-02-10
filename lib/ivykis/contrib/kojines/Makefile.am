@@ -1,11 +1,11 @@
-AM_CPPFLAGS		= -I$(top_srcdir)/lib/include
+AM_CPPFLAGS		= -I$(top_srcdir)/src/include -I$(top_builddir)/src/include
 
-AM_CFLAGS		= -Wall
-
-LDADD			= $(top_srcdir)/lib/libivykis.a
+LDADD			= $(top_builddir)/src/libivykis.la
 
 noinst_PROGRAMS		= kojines
 
-kojines_SOURCES		= main.c kojines.c kojines.h
+kojines_SOURCES		= main.c kojines.c
+
+noinst_HEADERS		= kojines.h
 
 EXTRA_DIST		= 00README.txt

@@ -37,7 +37,7 @@ test_mongo_sync_cmd_insert (void)
   bson_finish (b2);
 
   c = mongo_sync_connect (config.primary_host, config.primary_port,
-			  TRUE);
+                          TRUE);
   mongo_sync_conn_set_auto_reconnect (c, TRUE);
 
   ok (mongo_sync_cmd_insert (c, config.ns, b1, b2, NULL) == TRUE,
@@ -57,7 +57,7 @@ test_mongo_sync_cmd_insert (void)
   skip (!config.secondary_host, 2, "Secondary host not set up");
 
   c = mongo_sync_connect (config.secondary_host, config.secondary_port,
-			  TRUE);
+                          TRUE);
   mongo_sync_conn_set_auto_reconnect (c, TRUE);
 
   ok (c && mongo_sync_cmd_is_master (c) == FALSE,

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2011 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -27,7 +27,7 @@
 #include "cfg-lexer.h"
 #include "cfg-grammar.h"
 #include "messages.h"
-#include "misc.h"
+#include "parse-number.h"
 
 #include <string.h>
 #include <strings.h>
@@ -40,13 +40,15 @@
       {                                                                 \
         gchar *res;                                                     \
         gsize len = strlen(buf);                                        \
+        GError *error = NULL;						\
                                                                         \
         if (YY_START < block)                                           \
-          res = cfg_lexer_subst_args(yyextra->globals, NULL, NULL, buf, &len); \
+          res = cfg_lexer_subst_args(yyextra->globals, NULL, NULL, buf, &len, &error); \
         else                                                            \
           res = FALSE;                                                  \
         if (!res)                                                       \
           {                                                             \
+            g_clear_error(&error);					\
             result = strlen(buf);                                       \
           }                                                             \
         else                                                            \
@@ -158,7 +160,13 @@ word	[^ \#'"\(\)\{\}\\;\n\t,|\.@:]
 (-|\+)?{digit}+\.{digit}+  { yylval->fnum = strtod(yytext, NULL); return LL_FLOAT; }
 0x{xdigit}+ 		   { yylval->num = strtoll(yytext + 2, NULL, 16); return LL_NUMBER; }
 0{odigit}+		   { yylval->num = strtoll(yytext + 1, NULL, 8); return LL_NUMBER; }
-(-|\+)?{digit}+            { yylval->num = strtoll(yytext, NULL, 10); return LL_NUMBER; }
+(-|\+)?{digit}+(M|m|G|g|k|K)?(i|I)?(b|B)? {
+                             if (!parse_number_with_suffix(yytext, &yylval->num))
+                               {
+                                 YY_FATAL_ERROR("Invalid number specification");
+                               }
+                             return LL_NUMBER;
+                           }
 ({word}+(\.)?)*{word}+ 	   { return cfg_lexer_lookup_keyword(yyextra, yylval, yylloc, yytext); }
 \(	      		   |
 \)			   |
@@ -201,8 +209,10 @@ word	[^ \#'"\(\)\{\}\\;\n\t,|\.@:]
 
      /* rules to parse a block as a LL_BLOCK token */
 <block>{white}+            ;
-<block>[^{ \t]+            { return LL_ERROR; }
-<block>\{                  {
+<block>[^{( \t]+           { return LL_ERROR; }
+<block>[{(]                {
+                             if (yytext[0] != yyextra->block_boundary[0])
+                               REJECT;
                              g_string_truncate(yyextra->string_buffer, 0);
                              yyextra->brace_count = 1;
                              yy_push_state(block_content, yyscanner);
@@ -211,7 +221,7 @@ word	[^ \#'"\(\)\{\}\\;\n\t,|\.@:]
 <block_content>\"          {
                              g_string_append_c(yyextra->string_buffer, yytext[0]);
                              yy_push_state(block_string, yyscanner);
-   }
+                           }
 
 <block_content>\'          {
                              g_string_append_c(yyextra->string_buffer, yytext[0]);
@@ -234,12 +244,14 @@ word	[^ \#'"\(\)\{\}\\;\n\t,|\.@:]
                            }
 
 
-<block_content>\{          {
+<block_content>[{(]        {
                              g_string_append_c(yyextra->string_buffer, yytext[0]);
-                             yyextra->brace_count++;
+                             if (yytext[0] == yyextra->block_boundary[0])
+                               yyextra->brace_count++;
                            }
-<block_content>\}          {
-                             yyextra->brace_count--;
+<block_content>[})]        {
+                             if (yytext[0] == yyextra->block_boundary[1])
+                               yyextra->brace_count--;
                              if (yyextra->brace_count == 0)
                                {
                                  yy_pop_state(yyscanner);
@@ -254,7 +266,7 @@ word	[^ \#'"\(\)\{\}\\;\n\t,|\.@:]
 
                            }
 
-<block_content>[^{}\"\'\n\r]+   { g_string_append(yyextra->string_buffer, yytext); }
+<block_content>[^{}()\"\'\n\r]+   { g_string_append(yyextra->string_buffer, yytext); }
 
 <INITIAL><<EOF>>           { if (!cfg_lexer_start_next_include(yyextra)) yyterminate(); }
 
@@ -276,9 +288,10 @@ cfg_lexer_unput_string(CfgLexer *self, const char *str)
 }
 
 void
-_cfg_lexer_force_block_state(yyscan_t yyscanner)
+cfg_lexer_start_block_state(CfgLexer *self, gchar block_boundary[2])
 {
-  yy_push_state(block, yyscanner);
+  memcpy(&self->block_boundary, block_boundary, sizeof(gchar[2]));
+  yy_push_state(block, self->state);
 }
 
 /* avoid warnings of unused symbols */

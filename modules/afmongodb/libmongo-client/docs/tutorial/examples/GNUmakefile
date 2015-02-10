@@ -8,6 +8,8 @@ TUTORIAL_PROGRAMS	= tut/bson_build \
 			  tut/bson_traverse \
 			  tut/mongo_sync \
 			  tut/mongo_sync_cmd_create \
+			  tut/mongo_sync_cmd_custom \
+			  tut/mongo_sync_cmd_index_create \
 			  tut/hl_client \
 			  tut/json2bson
 
@@ -29,6 +31,6 @@ tut/json2bson: TUT_CFLAGS += ${JSON_C_CFLAGS}
 tut/json2bson: TUT_LIBS += ${JSON_C_LIBS}
 ${TUTORIAL_PROGRAMS}: tut/%: tut_%.c
 	@install -d tut
-	${CC} ${TUT_CFLAGS} ${CFLAGS} ${TUT_LIBS} ${LDFLAGS} $< -o $@
+	${CC} ${TUT_CFLAGS} ${CFLAGS} $< ${TUT_LIBS} ${LDFLAGS} -o $@
 
 .PHONY: all clean

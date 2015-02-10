@@ -1,5 +1,5 @@
 /* mongo-wire.h - libmongo-client's MongoDB wire protocoll implementation.
- * Copyright 2011 Gergely Nagy <algernon@balabit.hu>
+ * Copyright 2011, 2012 Gergely Nagy <algernon@balabit.hu>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -53,13 +53,13 @@ G_BEGIN_DECLS
 typedef struct
 {
   gint32 length; /**< Full length of the packet, including the
-		    header. */
+                    header. */
   gint32 id; /**< Sequence ID, used when MongoDB responds to a
-		command. */
+                command. */
   gint32 resp_to; /**< ID the response is an answer to. Only sent by
-		     the MongoDB server, never set on client-side. */
+                     the MongoDB server, never set on client-side. */
   gint32 opcode; /**< The opcode of the command. @see
-		    mongo_wire_opcode. <*/
+                    mongo_wire_opcode. <*/
 } mongo_packet_header;
 
 /** An opaque Mongo Packet on the wire.
@@ -90,7 +90,7 @@ mongo_packet *mongo_wire_packet_new (void);
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_wire_packet_get_header (const mongo_packet *p,
-				       mongo_packet_header *header);
+                                       mongo_packet_header *header);
 
 /** Set the header data of a packet.
  *
@@ -104,7 +104,7 @@ gboolean mongo_wire_packet_get_header (const mongo_packet *p,
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_wire_packet_set_header (mongo_packet *p,
-				       const mongo_packet_header *header);
+                                       const mongo_packet_header *header);
 
 /** Get the data part of a packet.
  *
@@ -135,7 +135,7 @@ gint32 mongo_wire_packet_get_data (const mongo_packet *p, const guint8 **data);
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_wire_packet_set_data (mongo_packet *p, const guint8 *data,
-				     gint32 size);
+                                     gint32 size);
 
 /** Free up a mongo packet.
  *
@@ -165,7 +165,7 @@ enum
      * calls on a tailable cursor. On Mongo >= 1.6, this flag is
      * always set.
      */
-    MONGO_REPLY_FLAG_AWAITCAPABLE = 0x8,
+    MONGO_REPLY_FLAG_AWAITCAPABLE = 0x8
   };
 
 /** Mongo reply packet header.
@@ -175,9 +175,9 @@ typedef struct
 {
   gint32 flags; /**< Response flags. */
   gint64 cursor_id; /**< Cursor ID, in case the client needs to do
-		       get_more requests. */
+                       get_more requests. */
   gint32 start; /**< Starting position of the reply within the
-		   cursor. */
+                   cursor. */
   gint32 returned; /**< Number of documents returned in the reply. */
 } mongo_reply_packet_header;
 #pragma pack()
@@ -194,7 +194,7 @@ typedef struct
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_wire_reply_packet_get_header (const mongo_packet *p,
-					     mongo_reply_packet_header *hdr);
+                                             mongo_reply_packet_header *hdr);
 
 /** Get the full data part of a reply packet.
  *
@@ -210,7 +210,7 @@ gboolean mongo_wire_reply_packet_get_header (const mongo_packet *p,
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_wire_reply_packet_get_data (const mongo_packet *p,
-					   const guint8 **data);
+                                           const guint8 **data);
 
 /** Get the Nth document from a reply packet.
  *
@@ -225,8 +225,8 @@ gboolean mongo_wire_reply_packet_get_data (const mongo_packet *p,
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_wire_reply_packet_get_nth_document (const mongo_packet *p,
-						   gint32 n,
-						   bson **doc);
+                                                   gint32 n,
+                                                   bson **doc);
 
 /** @}*/
 
@@ -248,8 +248,8 @@ enum
     /** When set, inserts if no matching document was found. */
     MONGO_WIRE_FLAG_UPDATE_UPSERT = 0x1,
     /** When set, all matching documents will be updated, not just
-	the first. */
-    MONGO_WIRE_FLAG_UPDATE_MULTI = 0x2,
+        the first. */
+    MONGO_WIRE_FLAG_UPDATE_MULTI = 0x2
   };
 
 /** Construct an update command.
@@ -268,8 +268,8 @@ enum
  * anymore.
  */
 mongo_packet *mongo_wire_cmd_update (gint32 id, const gchar *ns,
-				     gint32 flags, const bson *selector,
-				     const bson *update);
+                                     gint32 flags, const bson *selector,
+                                     const bson *update);
 
 /** Construct an insert command.
  *
@@ -299,7 +299,7 @@ mongo_packet *mongo_wire_cmd_insert (gint32 id, const gchar *ns, ...)
  * anymore.
  */
 mongo_packet *mongo_wire_cmd_insert_n (gint32 id, const gchar *ns, gint32 n,
-				       const bson **docs);
+                                       const bson **docs);
 
 /** Flags available for the query command.
  * @see mongo_wire_cmd_query().
@@ -349,8 +349,8 @@ enum
  * anymore.
  */
 mongo_packet *mongo_wire_cmd_query (gint32 id, const gchar *ns, gint32 flags,
-				    gint32 skip, gint32 ret, const bson *query,
-				    const bson *sel);
+                                    gint32 skip, gint32 ret, const bson *query,
+                                    const bson *sel);
 
 /** Construct a get more command.
  *
@@ -365,7 +365,7 @@ mongo_packet *mongo_wire_cmd_query (gint32 id, const gchar *ns, gint32 flags,
  * anymore.
  */
 mongo_packet *mongo_wire_cmd_get_more (gint32 id, const gchar *ns,
-				       gint32 ret, gint64 cursor_id);
+                                       gint32 ret, gint64 cursor_id);
 
 /** Flags available for the delete command.
  */
@@ -389,7 +389,7 @@ enum
  * anymore.
  */
 mongo_packet *mongo_wire_cmd_delete (gint32 id, const gchar *ns,
-				     gint32 flags, const bson *sel);
+                                     gint32 flags, const bson *sel);
 
 /** Construct a kill cursors command.
  *
@@ -421,8 +421,8 @@ mongo_packet *mongo_wire_cmd_kill_cursors (gint32 id, gint32 n, ...);
  * anymore.
  */
 mongo_packet *mongo_wire_cmd_custom (gint32 id, const gchar *db,
-				     gint32 flags,
-				     const bson *command);
+                                     gint32 flags,
+                                     const bson *command);
 
 /** @} */
 

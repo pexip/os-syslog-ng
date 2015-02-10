@@ -1,5 +1,5 @@
 /* sync-gridfs.c - libmongo-client GridFS implementation
- * Copyright 2011 Gergely Nagy <algernon@balabit.hu>
+ * Copyright 2011, 2012 Gergely Nagy <algernon@balabit.hu>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,7 +25,7 @@
 
 mongo_sync_gridfs *
 mongo_sync_gridfs_new (mongo_sync_connection *conn,
-		       const gchar *ns_prefix)
+                       const gchar *ns_prefix)
 {
   mongo_sync_gridfs *gfs;
   bson *index;
@@ -64,7 +64,7 @@ mongo_sync_gridfs_new (mongo_sync_connection *conn,
   bson_finish (index);
 
   if (!mongo_sync_cmd_index_create (conn, gfs->ns.chunks, index,
-				    MONGO_INDEX_UNIQUE))
+                                    MONGO_INDEX_UNIQUE))
     {
       bson_free (index);
       mongo_sync_gridfs_free (gfs, FALSE);
@@ -111,7 +111,7 @@ mongo_sync_gridfs_get_chunk_size (mongo_sync_gridfs *gfs)
 
 gboolean
 mongo_sync_gridfs_set_chunk_size (mongo_sync_gridfs *gfs,
-				  gint32 chunk_size)
+                                  gint32 chunk_size)
 {
   if (!gfs)
     {
@@ -130,7 +130,7 @@ mongo_sync_gridfs_set_chunk_size (mongo_sync_gridfs *gfs,
 
 mongo_sync_cursor *
 mongo_sync_gridfs_list (mongo_sync_gridfs *gfs,
-			const bson *query)
+                        const bson *query)
 {
   mongo_sync_cursor *cursor;
   bson *q = NULL;
@@ -150,7 +150,7 @@ mongo_sync_gridfs_list (mongo_sync_gridfs *gfs,
   cursor = mongo_sync_cursor_new
     (gfs->conn, gfs->ns.files,
      mongo_sync_cmd_query (gfs->conn, gfs->ns.files, 0, 0, 0,
-			   (q) ? q : query, NULL));
+                           (q) ? q : query, NULL));
   if (!cursor)
     {
       int e = errno;
@@ -282,7 +282,7 @@ mongo_sync_gridfs_file_get_chunks (gpointer gfile)
 
 gboolean
 mongo_sync_gridfs_remove (mongo_sync_gridfs *gfs,
-			  const bson *query)
+                          const bson *query)
 {
   mongo_sync_cursor *fc;
 
@@ -290,7 +290,7 @@ mongo_sync_gridfs_remove (mongo_sync_gridfs *gfs,
   if (!fc)
     {
       if (errno != ENOTCONN)
-	errno = ENOENT;
+        errno = ENOENT;
       return FALSE;
     }
 
@@ -303,38 +303,38 @@ mongo_sync_gridfs_remove (mongo_sync_gridfs *gfs,
 
       c = bson_find (meta, "_id");
       if (!bson_cursor_get_oid (c, &ooid))
-	{
-	  bson_free (meta);
-	  bson_cursor_free (c);
-	  mongo_sync_cursor_free (fc);
+        {
+          bson_free (meta);
+          bson_cursor_free (c);
+          mongo_sync_cursor_free (fc);
 
-	  errno = EPROTO;
-	  return FALSE;
-	}
+          errno = EPROTO;
+          return FALSE;
+        }
       bson_cursor_free (c);
       memcpy (oid, ooid, 12);
       bson_free (meta);
 
       /* Delete metadata */
       q = bson_build (BSON_TYPE_OID, "_id", oid,
-		      BSON_TYPE_NONE);
+                      BSON_TYPE_NONE);
       bson_finish (q);
 
       if (!mongo_sync_cmd_delete (gfs->conn, gfs->ns.files, 0, q))
-	{
-	  bson_free (q);
-	  mongo_sync_cursor_free (fc);
-	  return FALSE;
-	}
+        {
+          bson_free (q);
+          mongo_sync_cursor_free (fc);
+          return FALSE;
+        }
       bson_free (q);
 
       /* Delete chunks */
       q = bson_build (BSON_TYPE_OID, "files_id", oid,
-		      BSON_TYPE_NONE);
+                      BSON_TYPE_NONE);
       bson_finish (q);
 
       /* Chunks may or may not exist, an error in this case is
-	 non-fatal. */
+         non-fatal. */
       mongo_sync_cmd_delete (gfs->conn, gfs->ns.chunks, 0, q);
       bson_free (q);
     }

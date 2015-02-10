@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -30,7 +30,7 @@
 #include "tags.h"
 #include "nvtable.h"
 #include "stats.h"
-#include "templates.h"
+#include "template/templates.h"
 #include "tls-support.h"
 
 #include <sys/types.h>
@@ -190,6 +190,39 @@ static StatsCounterItem *count_payload_reallocs;
 static StatsCounterItem *count_sdata_updates;
 static GStaticPrivate priv_macro_value = G_STATIC_PRIVATE_INIT;
 
+static inline gboolean
+log_msg_is_write_protected(LogMessage *self)
+{
+  return self->protect_cnt > 0;
+}
+
+void
+log_msg_write_protect(LogMessage *self)
+{
+  self->protect_cnt++;
+}
+
+void
+log_msg_write_unprotect(LogMessage *self)
+{
+  self->protect_cnt--;
+}
+
+LogMessage *
+log_msg_make_writable(LogMessage **pself, const LogPathOptions *path_options)
+{
+  if (log_msg_is_write_protected(*pself))
+    {
+      LogMessage *new;
+
+      new = log_msg_clone_cow(*pself, path_options);
+      log_msg_unref(*pself);
+      *pself = new;
+    }
+  return *pself;
+}
+
+
 static void
 log_msg_update_sdata_slow(LogMessage *self, NVHandle handle, const gchar *name, gssize name_len)
 {
@@ -291,7 +324,7 @@ log_msg_get_value_handle(const gchar *value_name)
   handle = nv_registry_alloc_handle(logmsg_registry, value_name);
 
   /* check if name starts with sd_prefix and has at least one additional character */
-  if (strncmp(value_name, logmsg_sd_prefix, sizeof(logmsg_sd_prefix) - 1) == 0 && value_name[6])
+  if (strncmp(value_name, logmsg_sd_prefix, logmsg_sd_prefix_len) == 0 && value_name[6])
     {
       nv_registry_set_handle_flags(logmsg_registry, handle, LM_VF_SDATA);
     }
@@ -304,6 +337,28 @@ log_msg_get_value_name(NVHandle handle, gssize *name_len)
 {
   return nv_registry_get_handle_name(logmsg_registry, handle, name_len);
 }
+
+gboolean
+log_msg_is_value_name_valid(const gchar *value)
+{
+  if (strncmp(value, logmsg_sd_prefix, logmsg_sd_prefix_len) == 0)
+    {
+      const gchar *dot;
+      int dot_found = 0;
+
+      dot = strchr(value, '.');
+      while (dot && strlen(dot) > 1)
+        {
+          dot_found++;
+          dot++;
+          dot = strchr(dot, '.');
+        }
+      return (dot_found >= 3);
+    }
+  else
+    return TRUE;
+}
+
 
 static void
 __free_macro_value(void *val)
@@ -324,7 +379,7 @@ log_msg_get_macro_value(LogMessage *self, gint id, gssize *value_len)
     }
   g_string_truncate(value, 0);
 
-  log_macro_expand(value, id, FALSE, NULL, LTZ_LOCAL, 0, NULL, self);
+  log_macro_expand_simple(value, id, self);
   if (value_len)
     *value_len = value->len;
   return value->str;
@@ -361,10 +416,10 @@ log_msg_is_handle_match(NVHandle handle)
 static void
 log_msg_init_queue_node(LogMessage *msg, LogMessageQueueNode *node, const LogPathOptions *path_options)
 {
-  INIT_LIST_HEAD(&node->list);
+  INIT_IV_LIST_HEAD(&node->list);
   node->ack_needed = path_options->ack_needed;
   node->msg = log_msg_ref(msg);
-  msg->flags |= LF_STATE_REFERENCED;
+  log_msg_write_protect(msg);
 }
 
 /*
@@ -429,6 +484,8 @@ log_msg_set_value(LogMessage *self, NVHandle handle, const gchar *value, gssize 
   const gchar *name;
   gssize name_len;
   gboolean new_entry = FALSE;
+  
+  g_assert(!log_msg_is_write_protected(self));
 
   if (handle == LM_V_NONE)
     return;
@@ -464,7 +521,7 @@ log_msg_set_value(LogMessage *self, NVHandle handle, const gchar *value, gssize 
 
   if (new_entry)
     log_msg_update_sdata(self, handle, name, name_len);
-  if (handle == LM_V_PROGRAM)
+  if (handle == LM_V_PROGRAM || handle == LM_V_PID)
     log_msg_unset_flag(self, LF_LEGACY_MSGHDR);
 }
 
@@ -474,6 +531,8 @@ log_msg_set_value_indirect(LogMessage *self, NVHandle handle, NVHandle ref_handl
   const gchar *name;
   gssize name_len;
   gboolean new_entry = FALSE;
+
+  g_assert(!log_msg_is_write_protected(self));
 
   if (handle == LM_V_NONE)
     return;
@@ -609,13 +668,14 @@ log_msg_get_bit(gulong *tags, gint index)
   return !!(tags[index >> LOGMSG_TAGS_NDX_SHIFT] & ((gulong) (1UL << (index & LOGMSG_TAGS_NDX_MASK))));
 }
 
-static inline void
+void
 log_msg_set_tag_by_id_onoff(LogMessage *self, LogTagId id, gboolean on)
 {
   gulong *old_tags;
   gint old_num_tags;
   gboolean inline_tags;
 
+  g_assert(!log_msg_is_write_protected(self));
   if (!log_msg_chk_flag(self, LF_STATE_OWN_TAGS) && self->num_tags)
     {
       self->tags = g_memdup(self->tags, sizeof(self->tags[0]) * self->num_tags);
@@ -896,6 +956,8 @@ log_msg_print_tags(LogMessage *self, GString *result)
   log_msg_tags_foreach(self, log_msg_append_tags_callback, args);
 }
 
+
+
 /**
  * log_msg_init:
  * @self: LogMessage instance
@@ -935,13 +997,22 @@ log_msg_clear(LogMessage *self)
 
   if (log_msg_chk_flag(self, LF_STATE_OWN_TAGS) && self->tags)
     {
-      memset(self->tags, 0, self->num_tags * sizeof(self->tags[0]));
+      gboolean inline_tags = self->num_tags == 0;
+
+      if (inline_tags)
+        self->tags = NULL;
+      else
+        memset(self->tags, 0, self->num_tags * sizeof(self->tags[0]));
     }
   else
     self->tags = NULL;
 
   self->num_matches = 0;
-  /* alloc_sdata remains */
+  if (!log_msg_chk_flag(self, LF_STATE_OWN_SDATA))
+    {
+      self->sdata = NULL;
+      self->alloc_sdata = 0;
+    }
   self->num_sdata = 0;
 
   if (log_msg_chk_flag(self, LF_STATE_OWN_SADDR) && self->saddr)
@@ -1025,7 +1096,6 @@ log_msg_new_empty(void)
   return self;
 }
 
-
 void
 log_msg_clone_ack(LogMessage *msg, gpointer user_data)
 {
@@ -1055,7 +1125,7 @@ log_msg_clone_cow(LogMessage *msg, const LogPathOptions *path_options)
        * clone. */
       msg = msg->original;
     }
-  msg->flags |= LF_STATE_REFERENCED;
+  log_msg_write_protect(msg);
 
   memcpy(self, msg, sizeof(*msg));
 
@@ -1066,6 +1136,7 @@ log_msg_clone_cow(LogMessage *msg, const LogPathOptions *path_options)
   self->original = log_msg_ref(msg);
   self->ack_and_ref = LOGMSG_REFCACHE_REF_TO_VALUE(1) + LOGMSG_REFCACHE_ACK_TO_VALUE(0);
   self->cur_node = 0;
+  self->protect_cnt = 0;
 
   log_msg_add_ack(self, path_options);
   if (!path_options->ack_needed)
@@ -1391,7 +1462,7 @@ void
 log_msg_refcache_stop(void)
 {
   gint old_value;
-  gint current_cached_refs, current_cached_acks;
+  gint current_cached_acks;
 
   g_assert(logmsg_current != NULL);
 
@@ -1417,43 +1488,57 @@ log_msg_refcache_stop(void)
   g_assert((logmsg_cached_acks < LOGMSG_REFCACHE_BIAS - 1) && (logmsg_cached_acks >= -LOGMSG_REFCACHE_BIAS));
   g_assert((logmsg_cached_refs < LOGMSG_REFCACHE_BIAS - 1) && (logmsg_cached_refs >= -LOGMSG_REFCACHE_BIAS));
 
+  /*
+   * We fold the differences in ack/ref counts in three stages:
+   *
+   *   1) we take a ref of logmsg_current, this is needed so that the
+   *      message is not freed until we return from refcache_stop()
+   *
+   *   2) we add in all the diffs that were accumulated between
+   *      refcache_start and refcache_stop. This gets us a final value of the
+   *      ack counter, ref must be >= as we took a ref ourselves.
+   *
+   *   3) we call the ack handler if needed, this might change ref counters
+   *      recursively (but not ack counters as that already atomically
+   *      dropped to zero)
+   *
+   *   4) drop the ref we took in step 1) above
+   *
+   *   4) then we fold in the net ref results of the ack callback and
+   *      refcache_stop() combined. This either causes the LogMessage to be
+   *      freed (when we were the last), or it stays around because of other
+   *      refs.
+   */
 
-  /* save the differences in local variables to make it possible to know
-   * that the ACK handler recursively changed them */
+  /* 1) take ref */
+  log_msg_ref(logmsg_current);
 
-  current_cached_refs = logmsg_cached_refs;
-  logmsg_cached_refs = 0;
+  /* 2) fold in ref/ack counter diffs into the atomic value */
+
   current_cached_acks = logmsg_cached_acks;
   logmsg_cached_acks = 0;
-  old_value = log_msg_update_ack_and_ref(logmsg_current, current_cached_refs, current_cached_acks);
+  old_value = log_msg_update_ack_and_ref(logmsg_current, 0, current_cached_acks);
 
   if ((LOGMSG_REFCACHE_VALUE_TO_ACK(old_value) == -current_cached_acks) && logmsg_cached_ack_needed)
     {
-      /* ack processing */
+      /* 3) call the ack handler */
       logmsg_current->ack_func(logmsg_current, logmsg_current->ack_userdata);
+
+      /* the ack callback may not change the ack counters, it already
+       * dropped to zero atomically, changing that again is an error */
+
+      g_assert(logmsg_cached_acks == 0);
     }
 
-  /* we need to process the ref count difference in two steps:
-   *   1) we add in the difference that was present when entering the function,
-   *   2) we add in the difference that was created by the ACK callback
-   */
+  /* 4) drop our own ref */
+  log_msg_unref(logmsg_current);
 
-  if (LOGMSG_REFCACHE_VALUE_TO_REF(old_value) == -current_cached_refs)
-    {
-      /* NOTE: if we already decided that this message is to be freed, then
-       * the ACK handler may not have done additional ref/unref operations (above)
-       */
-      g_assert(logmsg_cached_refs == 0);
-      log_msg_free(logmsg_current);
-    }
-  else if (logmsg_cached_refs != 0)
-    {
-      /* process ref count offset that the ack func changed, atomically */
-      old_value = log_msg_update_ack_and_ref(logmsg_current, logmsg_cached_refs, 0);
+  /* 5) fold the combined result of our own ref/unref and ack handler's results */
+  old_value = log_msg_update_ack_and_ref(logmsg_current, logmsg_cached_refs, 0);
 
-      if (LOGMSG_REFCACHE_VALUE_TO_REF(old_value) == -logmsg_cached_refs)
-        log_msg_free(logmsg_current);
-    }
+  if (LOGMSG_REFCACHE_VALUE_TO_REF(old_value) == -logmsg_cached_refs)
+    log_msg_free(logmsg_current);
+  logmsg_cached_refs = 0;
   logmsg_current = NULL;
 }
 
@@ -1505,6 +1590,18 @@ log_msg_global_init(void)
   stats_register_counter(0, SCS_GLOBAL, "payload_reallocs", NULL, SC_TYPE_PROCESSED, &count_payload_reallocs);
   stats_register_counter(0, SCS_GLOBAL, "sdata_updates", NULL, SC_TYPE_PROCESSED, &count_sdata_updates);
   stats_unlock();
+}
+
+const gchar *
+log_msg_get_handle_name(NVHandle handle, gssize *length)
+{
+  return nv_registry_get_handle_name(logmsg_registry, handle, length);
+}
+
+gboolean
+log_msg_nv_table_foreach(NVTable *self, NVTableForeachFunc func, gpointer user_data)
+{
+  return nv_table_foreach(self, logmsg_registry, func, user_data);
 }
 
 void

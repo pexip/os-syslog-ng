@@ -1,6 +1,6 @@
 #include "syslog-ng.h"
 #include "logmsg.h"
-#include "templates.h"
+#include "template/templates.h"
 #include "misc.h"
 #include "apphook.h"
 #include "cfg.h"
@@ -68,7 +68,7 @@ testcase(const gchar *msg_str, gboolean syslog_proto, gchar *template)
       log_template_format(templ, msg, NULL, LTZ_LOCAL, 0, NULL, res);
     }
   g_get_current_time(&end);
-  printf("%-90.*s speed: %12.3f msg/sec\n", (int) strlen(template) - 1, template, i * 1e6 / g_time_val_diff(&end, &start));
+  printf("      %-90.*s speed: %12.3f msg/sec\n", (int) strlen(template) - 1, template, i * 1e6 / g_time_val_diff(&end, &start));
 
   log_template_unref(templ);
   g_string_free(res, TRUE);
@@ -124,6 +124,9 @@ main(int argc G_GNUC_UNUSED, char *argv[] G_GNUC_UNUSED)
 
   testcase("<155>2006-02-11T10:34:56.156+01:00 bzorp syslog-ng[23323]:árvíztűrőtükörfúrógép", FALSE,
            "$(echo $MSG)\n");
+
+  testcase("<155>2006-02-11T10:34:56.156+01:00 bzorp syslog-ng[23323]:árvíztűrőtükörfúrógép", FALSE,
+           "$(+ $FACILITY $FACILITY)\n");
 
   testcase("<155>2006-02-11T10:34:56.156+01:00 bzorp syslog-ng[23323]:árvíztűrőtükörfúrógép", FALSE,
            "$DATE $FACILITY.$PRIORITY $HOST $MSGHDR$MSG $SEQNO\n");

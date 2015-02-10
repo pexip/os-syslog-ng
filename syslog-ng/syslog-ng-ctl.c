@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -131,7 +131,7 @@ slng_verbose(int argc, char *argv[], const gchar *mode)
 {
   gint ret = 0;
   GString *rsp = NULL;
-  gchar buff[256];
+  gchar buff[256], *ubuff;
 
   if (!verbose_set)
     snprintf(buff, 255, "LOG %s\n", mode);
@@ -139,10 +139,14 @@ slng_verbose(int argc, char *argv[], const gchar *mode)
     snprintf(buff, 255, "LOG %s %s\n", mode,
         strncasecmp(verbose_set, "on", 2) == 0 || verbose_set[0] == '1' ? "ON" : "OFF");
 
-  g_strup(buff);
+  ubuff = g_ascii_strup(buff, -1);
 
-  if (!(slng_send_cmd(buff) && ((rsp = slng_read_response()) != NULL)))
-    return 1;
+  if (!(slng_send_cmd(ubuff) && ((rsp = slng_read_response()) != NULL)))
+    {
+      g_free(ubuff);
+      return 1;
+    }
+  g_free(ubuff);
 
   if (!verbose_set)
     printf("%s\n", rsp->str);
@@ -176,10 +180,20 @@ slng_stats(int argc, char *argv[], const gchar *mode)
   return 0;
 }
 
-static GOptionEntry stats_options[] =
+static gint
+slng_reload(int argc, char *argv[], const gchar *mode)
 {
-  { NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL }
-};
+  GString *rsp = NULL;
+
+  if (!(slng_send_cmd("RELOAD\n") && ((rsp = slng_read_response()) != NULL)))
+    return 1;
+
+  printf("%s\n", rsp->str);
+
+  g_string_free(rsp, TRUE);
+
+  return 0;
+}
 
 const gchar *
 slng_mode(int *argc, char **argv[])
@@ -215,7 +229,8 @@ static struct
   gint (*main)(gint argc, gchar *argv[], const gchar *mode);
 } modes[] =
 {
-  { "stats", stats_options, "Dump syslog-ng statistics", slng_stats },
+  { "stats", NULL, "Dump syslog-ng statistics", slng_stats },
+  { "reload", NULL, "Reload syslog-ng", slng_reload },
   { "verbose", verbose_options, "Enable/query verbose messages", slng_verbose },
   { "debug", verbose_options, "Enable/query debug messages", slng_verbose },
   { "trace", verbose_options, "Enable/query trace messages", slng_verbose },
@@ -255,10 +270,11 @@ main(int argc, char *argv[])
       if (strcmp(modes[mode].mode, mode_string) == 0)
         {
           ctx = g_option_context_new(mode_string);
-          #if GLIB_CHECK_VERSION (2, 12, 0)
+#if GLIB_CHECK_VERSION (2, 12, 0)
           g_option_context_set_summary(ctx, modes[mode].description);
-          #endif
-          g_option_context_add_main_entries(ctx, modes[mode].options, NULL);
+#endif
+          if (modes[mode].options)
+            g_option_context_add_main_entries(ctx, modes[mode].options, NULL);
           g_option_context_add_main_entries(ctx, slng_options, NULL);
           break;
         }

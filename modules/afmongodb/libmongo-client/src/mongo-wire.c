@@ -1,5 +1,5 @@
 /* mongo-wire.c - libmongo-client's MongoDB wire protocoll implementation.
- * Copyright 2011 Gergely Nagy <algernon@balabit.hu>
+ * Copyright 2011, 2012 Gergely Nagy <algernon@balabit.hu>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -68,7 +68,7 @@ mongo_wire_packet_new (void)
 
 gboolean
 mongo_wire_packet_get_header (const mongo_packet *p,
-			      mongo_packet_header *header)
+                              mongo_packet_header *header)
 {
   if (!p || !header)
     {
@@ -86,7 +86,7 @@ mongo_wire_packet_get_header (const mongo_packet *p,
 
 gboolean
 mongo_wire_packet_get_header_raw (const mongo_packet *p,
-				  mongo_packet_header *header)
+                                  mongo_packet_header *header)
 {
   if (!p || !header)
     {
@@ -104,7 +104,7 @@ mongo_wire_packet_get_header_raw (const mongo_packet *p,
 
 gboolean
 mongo_wire_packet_set_header (mongo_packet *p,
-			      const mongo_packet_header *header)
+                              const mongo_packet_header *header)
 {
   if (!p || !header)
     {
@@ -129,7 +129,7 @@ mongo_wire_packet_set_header (mongo_packet *p,
 
 gboolean
 mongo_wire_packet_set_header_raw (mongo_packet *p,
-				  const mongo_packet_header *header)
+                                  const mongo_packet_header *header)
 {
   if (!p || !header)
     {
@@ -202,7 +202,7 @@ mongo_wire_packet_free (mongo_packet *p)
 
 mongo_packet *
 mongo_wire_cmd_update (gint32 id, const gchar *ns, gint32 flags,
-		       const bson *selector, const bson *update)
+                       const bson *selector, const bson *update)
 {
   mongo_packet *p;
   gint32 t_flags = GINT32_TO_LE (flags);
@@ -234,11 +234,11 @@ mongo_wire_cmd_update (gint32 id, const gchar *ns, gint32 flags,
   memcpy (p->data, (void *)&zero, sizeof (gint32));
   memcpy (p->data + sizeof (gint32), (void *)ns, nslen);
   memcpy (p->data + sizeof (gint32) + nslen, (void *)&t_flags,
-	  sizeof (gint32));
+          sizeof (gint32));
   memcpy (p->data + sizeof (gint32) * 2 + nslen,
-	  bson_data (selector), bson_size (selector));
+          bson_data (selector), bson_size (selector));
   memcpy (p->data + sizeof (gint32) * 2 + nslen + bson_size (selector),
-	  bson_data (update), bson_size (update));
+          bson_data (update), bson_size (update));
 
   p->header.length = GINT32_TO_LE (sizeof (p->header) + p->data_size);
 
@@ -247,7 +247,7 @@ mongo_wire_cmd_update (gint32 id, const gchar *ns, gint32 flags,
 
 mongo_packet *
 mongo_wire_cmd_insert_n (gint32 id, const gchar *ns, gint32 n,
-			 const bson **docs)
+                         const bson **docs)
 {
   mongo_packet *p;
   gint32 pos, dsize = 0;
@@ -268,10 +268,10 @@ mongo_wire_cmd_insert_n (gint32 id, const gchar *ns, gint32 n,
   for (i = 0; i < n; i++)
     {
       if (bson_size (docs[i]) <= 0)
-	{
-	  errno = EINVAL;
-	  return NULL;
-	}
+        {
+          errno = EINVAL;
+          return NULL;
+        }
       dsize += bson_size (docs[i]);
     }
 
@@ -317,11 +317,11 @@ mongo_wire_cmd_insert (gint32 id, const gchar *ns, ...)
   while ((d = (bson *)va_arg (ap, gpointer)))
     {
       if (bson_size (d) < 0)
-	{
-	  g_free (docs);
-	  errno = EINVAL;
-	  return NULL;
-	}
+        {
+          g_free (docs);
+          errno = EINVAL;
+          return NULL;
+        }
 
       docs = (bson **)g_renew (bson *, docs, n + 1);
       docs[n++] = d;
@@ -335,8 +335,8 @@ mongo_wire_cmd_insert (gint32 id, const gchar *ns, ...)
 
 mongo_packet *
 mongo_wire_cmd_query (gint32 id, const gchar *ns, gint32 flags,
-		      gint32 skip, gint32 ret, const bson *query,
-		      const bson *sel)
+                      gint32 skip, gint32 ret, const bson *query,
+                      const bson *sel)
 {
   mongo_packet *p;
   gint32 tmp, nslen;
@@ -372,13 +372,13 @@ mongo_wire_cmd_query (gint32 id, const gchar *ns, gint32 flags,
   memcpy (p->data + sizeof (gint32) + nslen, (void *)&tmp, sizeof (gint32));
   tmp = GINT32_TO_LE (ret);
   memcpy (p->data + sizeof (gint32) * 2 + nslen,
-	  (void *)&tmp, sizeof (gint32));
+          (void *)&tmp, sizeof (gint32));
   memcpy (p->data + sizeof (gint32) * 3 + nslen, bson_data (query),
-	  bson_size (query));
+          bson_size (query));
 
   if (sel)
     memcpy (p->data + sizeof (gint32) * 3 + nslen + bson_size (query),
-	    bson_data (sel), bson_size (sel));
+            bson_data (sel), bson_size (sel));
 
   p->header.length = GINT32_TO_LE (sizeof (p->header) + p->data_size);
 
@@ -387,7 +387,7 @@ mongo_wire_cmd_query (gint32 id, const gchar *ns, gint32 flags,
 
 mongo_packet *
 mongo_wire_cmd_get_more (gint32 id, const gchar *ns,
-			 gint32 ret, gint64 cursor_id)
+                         gint32 ret, gint64 cursor_id)
 {
   mongo_packet *p;
   gint32 t_ret;
@@ -415,7 +415,7 @@ mongo_wire_cmd_get_more (gint32 id, const gchar *ns,
   memcpy (p->data + sizeof (gint32), (void *)ns, nslen);
   memcpy (p->data + sizeof (gint32) + nslen, (void *)&t_ret, sizeof (gint32));
   memcpy (p->data + sizeof (gint32) * 2 + nslen,
-	  (void *)&t_cid, sizeof (gint64));
+          (void *)&t_cid, sizeof (gint64));
 
   p->header.length = GINT32_TO_LE (sizeof (p->header) + p->data_size);
 
@@ -424,7 +424,7 @@ mongo_wire_cmd_get_more (gint32 id, const gchar *ns,
 
 mongo_packet *
 mongo_wire_cmd_delete (gint32 id, const gchar *ns,
-		       gint32 flags, const bson *sel)
+                       gint32 flags, const bson *sel)
 {
   mongo_packet *p;
   gint32 t_flags, nslen;
@@ -454,9 +454,9 @@ mongo_wire_cmd_delete (gint32 id, const gchar *ns,
   memcpy (p->data, (void *)&zero, sizeof (gint32));
   memcpy (p->data + sizeof (gint32), (void *)ns, nslen);
   memcpy (p->data + sizeof (gint32) + nslen,
-	  (void *)&t_flags, sizeof (gint32));
+          (void *)&t_flags, sizeof (gint32));
   memcpy (p->data + sizeof (gint32) * 2 + nslen,
-	  bson_data (sel), bson_size (sel));
+          bson_data (sel), bson_size (sel));
 
   p->header.length = GINT32_TO_LE (sizeof (p->header) + p->data_size);
 
@@ -517,7 +517,7 @@ mongo_wire_cmd_kill_cursors (gint32 id, gint32 n, ...)
 
 mongo_packet *
 mongo_wire_cmd_custom (gint32 id, const gchar *db, gint32 flags,
-		       const bson *command)
+                       const bson *command)
 {
   mongo_packet *p;
   gchar *ns;
@@ -548,7 +548,7 @@ mongo_wire_cmd_custom (gint32 id, const gchar *db, gint32 flags,
 
 gboolean
 mongo_wire_reply_packet_get_header (const mongo_packet *p,
-				    mongo_reply_packet_header *hdr)
+                                    mongo_reply_packet_header *hdr)
 {
   mongo_reply_packet_header h;
   const guint8 *data;
@@ -580,7 +580,7 @@ mongo_wire_reply_packet_get_header (const mongo_packet *p,
 
 gboolean
 mongo_wire_reply_packet_get_data (const mongo_packet *p,
-				  const guint8 **data)
+                                  const guint8 **data)
 {
   const guint8 *d;
 
@@ -605,8 +605,8 @@ mongo_wire_reply_packet_get_data (const mongo_packet *p,
 
 gboolean
 mongo_wire_reply_packet_get_nth_document (const mongo_packet *p,
-					  gint32 n,
-					  bson **doc)
+                                          gint32 n,
+                                          bson **doc)
 {
   const guint8 *d;
   mongo_reply_packet_header h;

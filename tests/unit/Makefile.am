@@ -1,58 +1,85 @@
+tests_unit_TESTS			=  \
+	tests/unit/test_resolve_pwgr	   \
+	tests/unit/test_nvtable		   \
+	tests/unit/test_msgsdata	   \
+	tests/unit/test_logqueue	   \
+	tests/unit/test_matcher		   \
+	tests/unit/test_clone_logmsg 	   \
+	tests/unit/test_serialize 	   \
+	tests/unit/test_msgparse	   \
+	tests/unit/test_template	   \
+	tests/unit/test_template_speed	   \
+	tests/unit/test_dnscache	   \
+	tests/unit/test_findcrlf	   \
+	tests/unit/test_tags		   \
+	tests/unit/test_logwriter	   \
+	tests/unit/test_zone		   \
+	tests/unit/test_persist_state	   \
+	tests/unit/test_value_pairs
 
+check_PROGRAMS				+= \
+	${tests_unit_TESTS}
 
-AM_CFLAGS = -I$(top_srcdir)/lib -I$(top_srcdir)/modules -I../../lib -I../../modules
-AM_LDFLAGS = -dlpreopen $(top_builddir)/modules/syslogformat/libsyslogformat.la
-LIBS = @TOOL_DEPS_LIBS@
-LDADD = $(top_builddir)/lib/libsyslog-ng.la
+unit_test_extra_modules			= \
+	$(PREOPEN_SYSLOGFORMAT)
 
-check_PROGRAMS = test_thread_wakeup	\
-	test_resolve_pwgr		\
-	test_nvtable			\
-	test_msgsdata			\
-	test_logqueue			\
-	test_matcher			\
-	test_clone_logmsg 		\
-	test_csvparser 			\
-	test_serialize 			\
-	test_msgparse			\
-	test_template			\
-	test_template_speed		\
-	test_filters			\
-	test_dnscache			\
-	test_findeom			\
-	test_findcrlf			\
-	test_tags			\
-	test_logwriter			\
-	test_serialize			\
-	test_zone			\
-	test_persist_state		\
-	test_value_pairs
+tests_unit_test_resolve_pwgr_LDADD	= \
+	$(TEST_LDADD) $(unit_test_extra_modules)
 
-test_msgparse_SOURCES = test_msgparse.c libtest.c
-test_template_SOURCES = test_template.c libtest.c
-test_template_LDADD = $(LDADD) $(top_builddir)/modules/basicfuncs/libbasicfuncs.la $(top_builddir)/modules/convertfuncs/libconvertfuncs.la
-test_template_speed_SOURCES = test_template_speed.c libtest.c
-test_zone_SOURCES = test_zone.c  libtest.c
-test_dnscache_SOURCES = test_dnscache.c  libtest.c
-test_serialize_SOURCES = test_serialize.c  libtest.c
-test_findeom_SOURCES = test_findeom.c  libtest.c
-test_findcrlf_SOURCES = test_findcrlf.c  libtest.c
-test_csvparser_SOURCES = test_csvparser.c  libtest.c
-test_csvparser_LDADD = $(LDADD) $(top_builddir)/modules/csvparser/libcsvparser.la
-test_clone_logmsg_SOURCES = test_clone_logmsg.c libtest.c
-test_matcher_SOURCES = test_matcher.c libtest.c
-test_filters_SOURCES = test_filters.c libtest.c
-test_logqueue_SOURCES = test_logqueue.c
-test_msgsdata_SOURCES = test_msgsdata.c
-test_tags_SOURCES = test_tags.c
-test_nvtable_SOURCES = test_nvtable.c
-test_logwriter_SOURCES = test_logwriter.c
-test_resolve_pwgr_SOURCES = test_resolve_pwgr.c
-test_persist_state_SOURCES = test_persist_state.c
-test_value_pairs_SOURCES = test_value_pairs.c
+tests_unit_test_nvtable_LDADD		= \
+	$(TEST_LDADD) $(unit_test_extra_modules)
 
+tests_unit_test_msgsdata_CFLAGS		= $(TEST_CFLAGS)
+tests_unit_test_msgsdata_LDADD		= \
+	$(TEST_LDADD) $(unit_test_extra_modules)
 
-test_thread_wakeup_SOURCES = test_thread_wakeup.c
+tests_unit_test_logqueue_LDADD		= \
+	$(TEST_LDADD) $(unit_test_extra_modules)
 
-TESTS = $(check_PROGRAMS)
+tests_unit_test_matcher_LDADD		= \
+	$(TEST_LDADD) $(unit_test_extra_modules)
 
+tests_unit_test_clone_logmsg_CFLAGS	= $(TEST_CFLAGS)
+tests_unit_test_clone_logmsg_LDADD	= \
+	$(TEST_LDADD) $(unit_test_extra_modules)
+
+tests_unit_test_serialize_LDADD		= \
+	$(TEST_LDADD) $(unit_test_extra_modules)
+
+tests_unit_test_msgparse_CFLAGS		= $(TEST_CFLAGS)
+tests_unit_test_msgparse_LDADD		= \
+	$(TEST_LDADD) $(unit_test_extra_modules)
+
+tests_unit_test_template_CFLAGS		= $(TEST_CFLAGS)
+tests_unit_test_template_LDADD		= \
+	$(TEST_LDADD) 			  \
+	$(unit_test_extra_modules)	  \
+	$(PREOPEN_BASICFUNCS)
+
+tests_unit_test_template_speed_LDADD	= \
+	$(TEST_LDADD) $(unit_test_extra_modules)
+
+tests_unit_test_dnscache_LDADD		= \
+	$(TEST_LDADD) $(unit_test_extra_modules)
+
+tests_unit_test_findcrlf_LDADD		= \
+	$(TEST_LDADD) $(unit_test_extra_modules)
+
+tests_unit_test_tags_LDADD		= \
+	$(TEST_LDADD) $(unit_test_extra_modules)
+
+tests_unit_test_logwriter_LDADD		= \
+	$(TEST_LDADD) $(unit_test_extra_modules)
+
+tests_unit_test_zone_LDADD		= \
+	$(TEST_LDADD) $(unit_test_extra_modules)
+
+tests_unit_test_persist_state_LDADD	= \
+	$(TEST_LDADD) $(unit_test_extra_modules)
+
+tests_unit_test_value_pairs_LDADD	= \
+	$(TEST_LDADD) $(unit_test_extra_modules)
+
+CLEANFILES				+= \
+	test_values.persist		   \
+	test_values.persist-

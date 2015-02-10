@@ -1,5 +1,5 @@
 /* sync-gridfs.h - libmong-client GridFS API
- * Copyright 2011 Gergely Nagy <algernon@balabit.hu>
+ * Copyright 2011, 2012 Gergely Nagy <algernon@balabit.hu>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -59,7 +59,7 @@ typedef struct _mongo_sync_gridfs mongo_sync_gridfs;
  * @returns A newly allocated GridFS object, or NULL on error.
  */
 mongo_sync_gridfs *mongo_sync_gridfs_new (mongo_sync_connection *conn,
-					  const gchar *ns_prefix);
+                                          const gchar *ns_prefix);
 
 /** Close and free a GridFS object.
  *
@@ -85,7 +85,7 @@ gint32 mongo_sync_gridfs_get_chunk_size (mongo_sync_gridfs *gfs);
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean mongo_sync_gridfs_set_chunk_size (mongo_sync_gridfs *gfs,
-					   gint32 chunk_size);
+                                           gint32 chunk_size);
 
 /** List GridFS files matching a query.
  *
@@ -101,7 +101,7 @@ gboolean mongo_sync_gridfs_set_chunk_size (mongo_sync_gridfs *gfs,
  * it is no longer needed.
  */
 mongo_sync_cursor *mongo_sync_gridfs_list (mongo_sync_gridfs *gfs,
-					   const bson *query);
+                                           const bson *query);
 
 /** Delete files matching a query from GridFS.
  *
@@ -117,7 +117,7 @@ mongo_sync_cursor *mongo_sync_gridfs_list (mongo_sync_gridfs *gfs,
  * otherwise.
  */
 gboolean mongo_sync_gridfs_remove (mongo_sync_gridfs *gfs,
-				   const bson *query);
+                                   const bson *query);
 
 /* Metadata */
 

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -27,6 +27,8 @@
 #include "messages.h"
 #include "stats.h"
 #include "misc.h"
+#include "mainloop.h"
+
 #include <errno.h>
 #include <string.h>
 #include <stdio.h>
@@ -142,6 +144,13 @@ exit:
   g_strfreev(cmds);
 }
 
+static void
+control_connection_reload(ControlConnection *self, GString *command)
+{
+  main_loop_reload_config_initiate();
+  control_connection_send_reply(self, "OK Config reload initiated", FALSE);
+}
+
 static struct
 {
   const gchar *command;
@@ -151,6 +160,7 @@ static struct
 {
   { "STATS", NULL, control_connection_send_stats },
   { "LOG", NULL, control_connection_message_log },
+  { "RELOAD", NULL, control_connection_reload },
   { NULL, NULL, NULL },
 };
 
@@ -198,8 +208,8 @@ control_connection_io_input(void *s)
     }
   else if (rc == 0)
     {
-      msg_error("EOF on control channel, closing connection",
-                NULL);
+      msg_notice("EOF on control channel, closing connection",
+                 NULL);
       goto destroy_connection;
     }
   else
@@ -254,7 +264,7 @@ control_connection_start_watches(ControlConnection *self, gint sock)
   IV_FD_INIT(&self->control_io);
   self->control_io.cookie = self;
   self->control_io.fd = sock;
-  iv_fd_register(&self->control_io);
+  iv_fd_register_try(&self->control_io);
 
   control_connection_update_watches(self);
 }
@@ -308,7 +318,6 @@ control_socket_accept(gpointer user_data)
   gint conn_socket;
   GSockAddr *peer_addr;
   GIOStatus status;
-  ControlConnection *conn;
   
   if (control_socket == -1)
     return;
@@ -321,7 +330,7 @@ control_socket_accept(gpointer user_data)
       goto error;
     }
   /* NOTE: the connection will free itself if the peer terminates */
-  conn = control_connection_new(conn_socket);
+  control_connection_new(conn_socket);
   g_sockaddr_unref(peer_addr);
  error:
   ;

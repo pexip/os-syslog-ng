@@ -1,5 +1,5 @@
 /* sync-gridfs-chunk.c - libmongo-client GridFS chunk access implementation
- * Copyright 2011 Gergely Nagy <algernon@balabit.hu>
+ * Copyright 2011, 2012 Gergely Nagy <algernon@balabit.hu>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -123,7 +123,7 @@ mongo_sync_gridfs_chunked_find (mongo_sync_gridfs *gfs, const bson *query)
 
 mongo_sync_cursor *
 mongo_sync_gridfs_chunked_file_cursor_new (mongo_sync_gridfs_chunked_file *gfile,
-					   gint start, gint num)
+                                           gint start, gint num)
 {
   bson *q;
   mongo_sync_cursor *cursor;
@@ -140,14 +140,17 @@ mongo_sync_gridfs_chunked_file_cursor_new (mongo_sync_gridfs_chunked_file *gfile
       return NULL;
     }
 
-  q = bson_new_sized (32);
-  bson_append_oid (q, "files_id", gfile->meta.oid);
+  q = bson_build_full (BSON_TYPE_DOCUMENT, "$query", TRUE,
+                         bson_build (BSON_TYPE_OID, "files_id", gfile->meta.oid, BSON_TYPE_NONE),
+                       BSON_TYPE_DOCUMENT, "$orderby", TRUE,
+                         bson_build (BSON_TYPE_INT32, "n", 1, BSON_TYPE_NONE),
+                       BSON_TYPE_NONE);
   bson_finish (q);
 
   p = mongo_sync_cmd_query (gfile->gfs->conn, gfile->gfs->ns.chunks, 0,
-			    start, num, q, NULL);
+                            start, num, q, NULL);
   cursor = mongo_sync_cursor_new (gfile->gfs->conn,
-				  gfile->gfs->ns.chunks, p);
+                                  gfile->gfs->ns.chunks, p);
   bson_free (q);
 
   return cursor;
@@ -155,7 +158,7 @@ mongo_sync_gridfs_chunked_file_cursor_new (mongo_sync_gridfs_chunked_file *gfile
 
 guint8 *
 mongo_sync_gridfs_chunked_file_cursor_get_chunk (mongo_sync_cursor *cursor,
-						 gint32 *size)
+                                                 gint32 *size)
 {
   bson *b;
   bson_cursor *c;
@@ -174,7 +177,8 @@ mongo_sync_gridfs_chunked_file_cursor_get_chunk (mongo_sync_cursor *cursor,
   b = mongo_sync_cursor_get_data (cursor);
   c = bson_find (b, "data");
   r = bson_cursor_get_binary (c, &sub, &d, &s);
-  if (!r || sub != BSON_BINARY_SUBTYPE_GENERIC)
+  if (!r || (sub != BSON_BINARY_SUBTYPE_GENERIC &&
+             sub != BSON_BINARY_SUBTYPE_BINARY))
     {
       bson_cursor_free (c);
       errno = EPROTO;
@@ -182,8 +186,17 @@ mongo_sync_gridfs_chunked_file_cursor_get_chunk (mongo_sync_cursor *cursor,
     }
   bson_cursor_free (c);
 
-  data = g_malloc (s);
-  memcpy (data, d, s);
+  if (sub == BSON_BINARY_SUBTYPE_BINARY)
+    {
+      s -= 4;
+      data = g_malloc (s);
+      memcpy (data, d + 4, s);
+    }
+  else
+    {
+      data = g_malloc (s);
+      memcpy (data, d, s);
+    }
 
   if (size)
     *size = s;
@@ -194,9 +207,9 @@ mongo_sync_gridfs_chunked_file_cursor_get_chunk (mongo_sync_cursor *cursor,
 
 mongo_sync_gridfs_chunked_file *
 mongo_sync_gridfs_chunked_file_new_from_buffer (mongo_sync_gridfs *gfs,
-						const bson *metadata,
-						const guint8 *data,
-						gint64 size)
+                                                const bson *metadata,
+                                                const guint8 *data,
+                                                gint64 size)
 {
   mongo_sync_gridfs_chunked_file *gfile;
   bson *meta;
@@ -234,26 +247,26 @@ mongo_sync_gridfs_chunked_file_new_from_buffer (mongo_sync_gridfs *gfs,
       gint32 csize = gfs->chunk_size;
 
       if (size - pos < csize)
-	csize = size - pos;
+        csize = size - pos;
 
       chunk = bson_new_sized (gfs->chunk_size + 128);
       bson_append_oid (chunk, "files_id", oid);
       bson_append_int64 (chunk, "n", (gint64)chunk_n);
       bson_append_binary (chunk, "data", BSON_BINARY_SUBTYPE_GENERIC,
-			  data + pos, csize);
+                          data + pos, csize);
       bson_finish (chunk);
 
       g_checksum_update (chk, data + pos, csize);
 
       if (!mongo_sync_cmd_insert (gfs->conn, gfs->ns.chunks, chunk, NULL))
-	{
-	  int e = errno;
+        {
+          int e = errno;
 
-	  bson_free (chunk);
-	  g_free (oid);
-	  errno = e;
-	  return NULL;
-	}
+          bson_free (chunk);
+          g_free (oid);
+          errno = e;
+          return NULL;
+        }
       bson_free (chunk);
 
       pos += csize;
@@ -263,7 +276,7 @@ mongo_sync_gridfs_chunked_file_new_from_buffer (mongo_sync_gridfs *gfs,
   /* Insert metadata */
   if (metadata)
     meta = bson_new_from_data (bson_data (metadata),
-			       bson_size (metadata) - 1);
+                               bson_size (metadata) - 1);
   else
     meta = bson_new_sized (128);
 
@@ -309,6 +322,8 @@ mongo_sync_gridfs_chunked_file_new_from_buffer (mongo_sync_gridfs *gfs,
   bson_cursor_find (c, "md5");
   bson_cursor_get_string (c, &gfile->meta.md5);
   bson_cursor_free (c);
+
+  g_free (oid);
 
   return gfile;
 }

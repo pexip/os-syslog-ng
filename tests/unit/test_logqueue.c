@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <iv.h>
+#include <iv_list.h>
 #include <iv_thread.h>
 
 int acked_messages = 0;
@@ -34,8 +35,11 @@ feed_some_messages(LogQueue **q, int n, gboolean ack_needed)
   for (i = 0; i < n; i++)
     {
       char *msg_str = "<155>2006-02-11T10:34:56+01:00 bzorp syslog-ng[23323]: árvíztűrőtükörfúrógép";
+      GSockAddr *sa;
 
-      msg = log_msg_new(msg_str, strlen(msg_str), g_sockaddr_inet_new("10.10.10.10", 1010), &parse_options);
+      sa = g_sockaddr_inet_new("10.10.10.10", 1010);
+      msg = log_msg_new(msg_str, strlen(msg_str), sa, &parse_options);
+      g_sockaddr_unref(sa);
       log_msg_add_ack(msg, &path_options);
       msg->ack_func = test_ack;
       log_queue_push_tail((*q), msg, &path_options);
@@ -125,7 +129,7 @@ testcase_zero_diskbuf_alternating_send_acks()
 
 TLS_BLOCK_START
 {
-  struct list_head finish_callbacks;
+  struct iv_list_head finish_callbacks;
 }
 TLS_BLOCK_END;
 
@@ -134,20 +138,20 @@ TLS_BLOCK_END;
 void
 main_loop_io_worker_register_finish_callback(MainLoopIOWorkerFinishCallback *cb)
 {
-  list_add(&cb->list, &finish_callbacks);
+  iv_list_add(&cb->list, &finish_callbacks);
 }
 
 void
 main_loop_io_worker_invoke_finish_callbacks(void)
 {
-  struct list_head *lh, *lh2;
+  struct iv_list_head *lh, *lh2;
 
-  list_for_each_safe(lh, lh2, &finish_callbacks)
+  iv_list_for_each_safe(lh, lh2, &finish_callbacks)
     {
-      MainLoopIOWorkerFinishCallback *cb = list_entry(lh, MainLoopIOWorkerFinishCallback, list);
+      MainLoopIOWorkerFinishCallback *cb = iv_list_entry(lh, MainLoopIOWorkerFinishCallback, list);
                             
       cb->func(cb->user_data);
-      list_del_init(&cb->list);
+      iv_list_del_init(&cb->list);
     }
 }
 
@@ -172,10 +176,13 @@ threaded_feed(gpointer args)
   
   /* emulate main loop for LogQueue */
   main_loop_io_worker_set_thread_id(id);
-  INIT_LIST_HEAD(&finish_callbacks);
+  finish_callbacks.next = &finish_callbacks;
+  finish_callbacks.prev = &finish_callbacks;
 
   sa = g_sockaddr_inet_new("10.10.10.10", 1010);
-  tmpl = log_msg_new(msg_str, msg_len, g_sockaddr_ref(sa), &parse_options);
+  tmpl = log_msg_new(msg_str, msg_len, sa, &parse_options);
+  g_sockaddr_unref(sa);
+
   g_get_current_time(&start);
   for (i = 0; i < MESSAGES_PER_FEEDER; i++)
     {
@@ -195,6 +202,7 @@ threaded_feed(gpointer args)
   sum_time += diff;
   g_static_mutex_unlock(&tlock);
   log_msg_unref(tmpl);
+  iv_deinit();
   return NULL;
 }
 
@@ -205,12 +213,13 @@ threaded_consume(gpointer st)
   LogMessage *msg;
   LogPathOptions path_options = LOG_PATH_OPTIONS_INIT;
   gboolean success;
-  gint i;
+  gint loops = 0;
+  gint msg_count = 0;
 
   /* just to make sure time is properly cached */
   iv_init();
 
-  for (i = 0; i < MESSAGES_SUM; i++)
+  while (msg_count < MESSAGES_SUM)
     {
       gint slept = 0;
       msg = NULL;
@@ -230,7 +239,7 @@ threaded_consume(gpointer st)
               if (slept > 10000)
                 {
                   /* slept for more than 10 seconds */
-                  fprintf(stderr, "The wait for messages took too much time, i=%d\n", i);
+                  fprintf(stderr, "The wait for messages took too much time, loops=%d, msg_count=%d\n", loops, msg_count);
                   return GUINT_TO_POINTER(1);
                 }
             }
@@ -240,14 +249,24 @@ threaded_consume(gpointer st)
       g_assert(!success || (success && msg != NULL));
       if (!success)
         {
-          fprintf(stderr, "Queue didn't return enough messages: i=%d\n", i);
+          fprintf(stderr, "Queue didn't return enough messages: loops=%d, msg_count=%d\n", loops, msg_count);
           return GUINT_TO_POINTER(1);
         }
-
-      log_msg_ack(msg, &path_options);
-      log_msg_unref(msg);
+      if ((loops % 10) == 0)
+        {
+          /* push the message back to the queue */
+          log_queue_push_head(q, msg, &path_options);
+        }
+      else
+        {
+          log_msg_ack(msg, &path_options);
+          log_msg_unref(msg);
+          msg_count++;
+        }
+      loops++;
     }
 
+  iv_deinit();
   return NULL;
 }
 

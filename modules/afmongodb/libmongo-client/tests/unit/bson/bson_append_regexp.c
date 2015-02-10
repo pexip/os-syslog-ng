@@ -16,9 +16,9 @@ test_bson_regex (void)
 
   cmp_ok (bson_size (b), "==", 23, "BSON regex element size check");
   ok (memcmp (bson_data (b),
-	      "\027\000\000\000\013\162\145\147\145\170\000\146\157\157\056"
-	      "\052\142\141\162\000\151\000\000",
-	      bson_size (b)) == 0,
+              "\027\000\000\000\013\162\145\147\145\170\000\146\157\157\056"
+              "\052\142\141\162\000\151\000\000",
+              bson_size (b)) == 0,
       "BSON regex element contents check");
 
   bson_free (b);
@@ -34,7 +34,7 @@ test_bson_regex (void)
       "bson_append_regex() should fail without a BSON object");
   bson_finish (b);
   cmp_ok (bson_size (b), "==", 5,
-	  "BSON object should be empty");
+          "BSON object should be empty");
 
   ok (bson_append_regex (b, "regex", "foo.*bar", "i") == FALSE,
       "Appending to a finished element should fail");

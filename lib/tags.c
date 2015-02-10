@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -159,8 +159,6 @@ log_tags_init(void)
   log_tags_num = 0;
 
   log_tags_list = g_new0(LogTag, log_tags_list_size);
-  log_tags_list[0].name = g_strdup("an empty tag");
-  g_hash_table_insert(log_tags_hash, log_tags_list[0].name, GUINT_TO_POINTER(log_tags_list[0].id + 1));
 
   g_static_mutex_unlock(&log_tags_lock);
 }

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -26,9 +26,9 @@
 #define LOG_WRITER_H_INCLUDED
 
 #include "logpipe.h"
-#include "templates.h"
+#include "template/templates.h"
 #include "logqueue.h"
-#include "logproto.h"
+#include "logproto/logproto-client.h"
 #include "timeutils.h"
 
 /* writer constructor flags */
@@ -50,6 +50,7 @@
 
 typedef struct _LogWriterOptions
 {
+  gboolean initialized;
   /* bitmask of LWO_* */
   guint32 options;
   
@@ -62,29 +63,40 @@ typedef struct _LogWriterOptions
   LogTemplate *file_template;
   LogTemplate *proto_template;
   
-  gboolean fsync;
   LogTemplateOptions template_options;
+  LogProtoClientOptionsStorage proto_options;
 
   gint time_reopen;
   gint suppress;
   gint padding;
+  gint mark_mode;
+  gint mark_freq;
+
+  /* options for resolve_sockaddr() */
+  gboolean use_dns;
+  gboolean use_fqdn;
+  gboolean use_dns_cache;
+  gboolean normalize_hostnames;
 } LogWriterOptions;
 
 typedef struct _LogWriter LogWriter;
 
+void log_writer_set_flags(LogWriter *self, guint32 flags);
+guint32 log_writer_get_flags(LogWriter *self);
 void log_writer_set_options(LogWriter *self, LogPipe *control, LogWriterOptions *options, gint stats_level, gint stats_source, const gchar *stats_id, const gchar *stats_instance);
 void log_writer_format_log(LogWriter *self, LogMessage *lm, GString *result);
 gboolean log_writer_has_pending_writes(LogWriter *self);
 gboolean log_writer_opened(LogWriter *self);
-void log_writer_reopen(LogPipe *s, LogProto *proto);
-LogPipe *log_writer_new(guint32 flags);
-void log_writer_set_queue(LogPipe *s, LogQueue *queue);
-LogQueue *log_writer_get_queue(LogPipe *s);
+void log_writer_reopen(LogWriter *self, LogProtoClient *proto);
+void log_writer_set_queue(LogWriter *self, LogQueue *queue);
+LogQueue *log_writer_get_queue(LogWriter *s);
+LogWriter *log_writer_new(guint32 flags);
 
 void log_writer_options_set_template_escape(LogWriterOptions *options, gboolean enable);
 void log_writer_options_defaults(LogWriterOptions *options);
 void log_writer_options_init(LogWriterOptions *options, GlobalConfig *cfg, guint32 option_flags);
 void log_writer_options_destroy(LogWriterOptions *options);
+void log_writer_options_set_mark_mode(LogWriterOptions *options, gchar *mark_mode);
 gint log_writer_options_lookup_flag(const gchar *flag);
 
 #endif

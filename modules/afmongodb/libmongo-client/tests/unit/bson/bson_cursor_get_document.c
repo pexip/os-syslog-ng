@@ -28,7 +28,7 @@ test_bson_cursor_get_document (void)
   ok (bson_cursor_get_document (c, &d),
       "bson_cursor_get_document() works");
   cmp_ok (bson_size (d), ">", 0,
-	  "the returned document is finished");
+          "the returned document is finished");
   bson_free (d);
 
   bson_cursor_next (c);

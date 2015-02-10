@@ -1,5 +1,5 @@
 /* mongo-utils.c - libmongo-client utility functions
- * Copyright 2011 Gergely Nagy <algernon@balabit.hu>
+ * Copyright 2011, 2012 Gergely Nagy <algernon@balabit.hu>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -59,7 +59,7 @@ guint8 *
 mongo_util_oid_new_with_time (gint32 ts, gint32 seq)
 {
   guint8 *oid;
-  time_t t = GINT32_TO_BE (ts);
+  gint32 t = GINT32_TO_BE (ts);
   gint32 tmp = GINT32_TO_BE (seq);
 
   if (machine_id == 0 || pid == 0)
@@ -113,9 +113,9 @@ mongo_util_parse_addr (const gchar *addr, gchar **host, gint *port)
   if (!addr || !host || !port)
     {
       if (host)
-	*host = NULL;
+        *host = NULL;
       if (port)
-	*port = -1;
+        *port = -1;
       errno = EINVAL;
       return FALSE;
     }
@@ -126,17 +126,17 @@ mongo_util_parse_addr (const gchar *addr, gchar **host, gint *port)
       /* Host is everything between [] */
       port_s = strchr (addr + 1, ']');
       if (!port_s || port_s - addr == 1)
-	{
-	  *host = NULL;
-	  *port = -1;
-	  errno = EINVAL;
-	  return FALSE;
-	}
+        {
+          *host = NULL;
+          *port = -1;
+          errno = EINVAL;
+          return FALSE;
+        }
       *host = g_strndup (addr + 1, port_s - addr - 1);
 
       port_s += 2;
       if (port_s - addr >= (glong)strlen (addr))
-	return TRUE;
+        return TRUE;
     }
   else
     {
@@ -145,17 +145,17 @@ mongo_util_parse_addr (const gchar *addr, gchar **host, gint *port)
       /* Split up to host:port */
       port_s = g_strrstr (addr, ":");
       if (!port_s)
-	{
-	  *host = g_strdup (addr);
-	  return TRUE;
-	}
+        {
+          *host = g_strdup (addr);
+          return TRUE;
+        }
       if (port_s == addr)
-	{
-	  *host = NULL;
-	  *port = -1;
-	  errno = EINVAL;
-	  return FALSE;
-	}
+        {
+          *host = NULL;
+          *port = -1;
+          errno = EINVAL;
+          return FALSE;
+        }
       port_s++;
       *host = g_strndup (addr, port_s - addr - 1);
     }

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -34,7 +34,6 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <string.h>
-#include <unistd.h>
 #include <fcntl.h>
 #include <pwd.h>
 #include <grp.h>
@@ -43,8 +42,11 @@
 #include <stdio.h>
 #include <signal.h>
 
+static gsize local_hostname_fqdn_len;
 static gchar local_hostname_fqdn[256];
+static gsize local_hostname_short_len;
 static gchar local_hostname_short[256];
+G_LOCK_DEFINE_STATIC(resolv_lock);
 
 GString *
 g_string_assign_len(GString *s, const gchar *val, gint len)
@@ -70,30 +72,36 @@ reset_cached_hostname(void)
   
   gethostname(local_hostname_fqdn, sizeof(local_hostname_fqdn) - 1);
   local_hostname_fqdn[sizeof(local_hostname_fqdn) - 1] = '\0';
+  local_hostname_fqdn_len = strlen(local_hostname_fqdn);
   if (strchr(local_hostname_fqdn, '.') == NULL)
     {
       /* not fully qualified, resolve it using DNS or /etc/hosts */
+      G_LOCK(resolv_lock);
       struct hostent *result = gethostbyname(local_hostname_fqdn);
       if (result)
         {
           strncpy(local_hostname_fqdn, result->h_name, sizeof(local_hostname_fqdn) - 1);
           local_hostname_fqdn[sizeof(local_hostname_fqdn) - 1] = '\0';
         }
+      G_UNLOCK(resolv_lock);
     }
   /* NOTE: they are the same size, they'll fit */
   strcpy(local_hostname_short, local_hostname_fqdn);
   s = strchr(local_hostname_short, '.');
   if (s != NULL)
     *s = '\0';
+  local_hostname_short_len = strlen(local_hostname_short);
 }
 
-void
-getlonghostname(gchar *buf, gsize buflen)
+const gchar *
+get_local_hostname(gsize *len)
 {
   if (!local_hostname_fqdn[0])
     reset_cached_hostname();
-  strncpy(buf, local_hostname_fqdn, buflen);
-  buf[buflen - 1] = 0;
+
+  if (len)
+    *len = local_hostname_fqdn_len;
+  return local_hostname_fqdn;
 }
 
 gboolean
@@ -125,11 +133,11 @@ resolve_hostname(GSockAddr **addr, gchar *name)
 
                 /* we need to copy the whole sockaddr_in6 structure as it
                  * might contain scope and other required data */
-                port = g_sockaddr_inet6_get_port(*addr);
+                port = g_sockaddr_get_port(*addr);
                 *g_sockaddr_inet6_get_sa(*addr) = *((struct sockaddr_in6 *) res->ai_addr);
 
                 /* we need to restore the port number as it is zeroed out by the previous assignment */
-                g_sockaddr_inet6_set_port(*addr, port);
+                g_sockaddr_set_port(*addr, port);
                 break;
               }
 #endif
@@ -147,6 +155,7 @@ resolve_hostname(GSockAddr **addr, gchar *name)
 #else
       struct hostent *he;
       
+      G_LOCK(resolv_lock);
       he = gethostbyname(name);
       if (he)
         {
@@ -159,10 +168,11 @@ resolve_hostname(GSockAddr **addr, gchar *name)
               g_assert_not_reached();
               break;
             }
-          
+          G_UNLOCK(resolv_lock);
         }
       else
         {
+          G_UNLOCK(resolv_lock);
           msg_error("Error resolving hostname", evt_tag_str("host", name), NULL);
           return FALSE;
         }
@@ -187,7 +197,7 @@ resolve_sockaddr(gchar *result, gsize *result_len, GSockAddr *saddr, gboolean us
          )
         {
           void *addr;
-          socklen_t addr_len;
+          socklen_t addr_len G_GNUC_UNUSED;
           
           if (saddr->sa.sa_family == AF_INET)
             {
@@ -207,10 +217,23 @@ resolve_sockaddr(gchar *result, gsize *result_len, GSockAddr *saddr, gboolean us
             {
               if ((!use_dns_cache || !dns_cache_lookup(saddr->sa.sa_family, addr, (const gchar **) &hname, &positive)) && usedns != 2)
                 {
+#ifdef HAVE_GETNAMEINFO
+                  if (getnameinfo(&saddr->sa, saddr->salen, buf, sizeof(buf), NULL, 0, NI_NAMEREQD) == 0)
+                    hname = buf;
+#else
                   struct hostent *hp;
-                      
+
+                  G_LOCK(resolv_lock);
                   hp = gethostbyaddr(addr, addr_len, saddr->sa.sa_family);
-                  hname = (hp && hp->h_name) ? hp->h_name : NULL;
+                  if (hp && hp->h_name)
+                    {
+                      strncpy(buf, hp->h_name, sizeof(buf));
+                      buf[sizeof(buf) - 1] = 0;
+                      hname = buf;
+                    }
+
+                  G_UNLOCK(resolv_lock);
+#endif
 
                   if (hname)
                     positive = TRUE;
@@ -388,66 +411,6 @@ resolve_user_group(char *arg, gint *uid, gint *gid)
     return FALSE;
   if (group && !resolve_group(group, gid))
     return FALSE;
-  return TRUE;
-}
-
-/**
- *
- * This function receives a complete path (directory + filename) and creates
- * the directory portion if it does not exist. The point is that the caller
- * wants to ensure that the given filename can be opened after this function
- * returns. (at least it won't fail because of missing directories).
- **/
-gboolean
-create_containing_directory(gchar *name, gint dir_uid, gint dir_gid, gint dir_mode)
-{
-  gchar *dirname;
-  struct stat st;
-  gint rc;
-  gchar *p;
-  cap_t saved_caps;
-  
-  /* check that the directory exists */
-  dirname = g_path_get_dirname(name);
-  rc = stat(dirname, &st);
-  g_free(dirname);
-  
-  if (rc == 0)
-    {
-      /* directory already exists */
-      return TRUE;
-    }
-  else if (rc < 0 && errno != ENOENT)
-    {
-      /* some real error occurred */
-      return FALSE;
-    }
-    
-  /* directory does not exist */
-  p = name + 1;
-  
-  p = strchr(p, '/');
-  while (p) 
-    {
-      *p = 0;
-      if (stat(name, &st) == 0) 
-        {
-          if (!S_ISDIR(st.st_mode))
-            return FALSE;
-        }
-      else if (errno == ENOENT) 
-        {
-          if (mkdir(name, dir_mode < 0 ? 0700 : (mode_t) dir_mode) == -1)
-            return FALSE;
-          saved_caps = g_process_cap_save();
-          g_process_cap_modify(CAP_CHOWN, TRUE);
-          g_process_cap_modify(CAP_FOWNER, TRUE);
-          set_permissions(name, dir_uid, dir_gid, dir_mode);
-          g_process_cap_restore(saved_caps);
-        }
-      *p = '/';
-      p = strchr(p + 1, '/');
-    }
   return TRUE;
 }
 
@@ -671,33 +634,4 @@ utf8_escape_string(const gchar *str, gssize len)
   *(res_pos++) = '\0';
 
   return res;
-}
-
-
-gint
-set_permissions(gchar *name, gint uid, gint gid, gint mode)
-{
-#ifndef _MSC_VER
-  if (uid >= 0)
-    if (chown(name, (uid_t) uid, -1)) return -1;
-  if (gid >= 0)
-    if (chown(name, -1, (gid_t) gid)) return -1;
-  if (mode >= 0)
-    if (chmod(name, (mode_t) mode)) return -1;
-  return 0;
-#endif
-}
-
-gint
-set_permissions_fd(gint fd, gint uid, gint gid, gint mode)
-{
-#ifndef _MSC_VER
-  if (uid >= 0)
-    if (fchown(fd, (uid_t) uid, -1)) return -1;
-  if (gid >= 0)
-    if (fchown(fd, -1, (gid_t) gid)) return -1;
-  if (mode >= 0)
-    if (fchmod(fd, (mode_t) mode)) return -1;
-  return 0;
-#endif
 }

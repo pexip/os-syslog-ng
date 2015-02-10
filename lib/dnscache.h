@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -34,5 +34,6 @@ void dns_cache_store(gboolean persistent, gint family, void *addr, const gchar *
 void dns_cache_set_params(gint cache_size, gint expire, gint expire_failed, const gchar *hosts);
 void dns_cache_init(void);
 void dns_cache_destroy(void);
+void dns_cache_deinit(void);
 
 #endif

@@ -1,5 +1,5 @@
 /* mongo-sync-cursor.h - libmongo-client cursor API on top of Sync
- * Copyright 2011 Gergely Nagy <algernon@balabit.hu>
+ * Copyright 2011, 2012 Gergely Nagy <algernon@balabit.hu>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -55,8 +55,8 @@ typedef struct _mongo_sync_cursor mongo_sync_cursor;
  * @returns A newly allocated cursor, or NULL on error.
  */
 mongo_sync_cursor *mongo_sync_cursor_new (mongo_sync_connection *conn,
-					  const gchar *ns,
-					  mongo_packet *packet);
+                                          const gchar *ns,
+                                          mongo_packet *packet);
 
 /** Iterate a MongoDB cursor.
  *

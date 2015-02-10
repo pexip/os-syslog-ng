@@ -1,18 +1,18 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published
  * by the Free Software Foundation, or (at your option) any later version.
  *
- * This library is distributed in the hope that it will be useful,
+ * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  * As an additional exemption you are allowed to compile & link against the
@@ -22,6 +22,7 @@
  */
 
 #include "afsocket.h"
+#include "driver.h"
 #include "cfg-parser.h"
 #include "afsocket-grammar.h"
 
@@ -35,11 +36,12 @@ static CfgLexerKeyword afsocket_keywords[] = {
   { "udp",                KW_UDP },
   { "tcp",                KW_TCP },
   { "syslog",             KW_SYSLOG },
+  { "network",            KW_NETWORK, 0x0304 },
 #if ENABLE_IPV6
   { "udp6",               KW_UDP6 },
   { "tcp6",               KW_TCP6 },
 #endif
-#if ENABLE_SSL
+#if BUILD_WITH_SSL
   /* ssl */
   { "tls",                KW_TLS },
   { "peer_verify",        KW_PEER_VERIFY },
@@ -63,9 +65,14 @@ static CfgLexerKeyword afsocket_keywords[] = {
   { "so_rcvbuf",          KW_SO_RCVBUF },
   { "so_sndbuf",          KW_SO_SNDBUF },
   { "so_keepalive",       KW_SO_KEEPALIVE },
-  { "tcp_keep_alive",     KW_SO_KEEPALIVE, 0, KWS_OBSOLETE, "so_keepalive" },
+  { "tcp_keep_alive",     KW_SO_KEEPALIVE }, /* old, once deprecated form, but revived in 3.4 */
+  { "tcp_keepalive",      KW_SO_KEEPALIVE, 0x0304 }, /* alias for so-keepalive, as tcp is the only option actually using it */
+  { "tcp_keepalive_time", KW_TCP_KEEPALIVE_TIME, 0x0304 },
+  { "tcp_keepalive_probes", KW_TCP_KEEPALIVE_PROBES, 0x0304 },
+  { "tcp_keepalive_intvl", KW_TCP_KEEPALIVE_INTVL, 0x0304 },
   { "spoof_source",       KW_SPOOF_SOURCE },
   { "transport",          KW_TRANSPORT },
+  { "ip_protocol",        KW_IP_PROTOCOL },
   { "max_connections",    KW_MAX_CONNECTIONS },
   { "keep_alive",         KW_KEEP_ALIVE },
   { NULL }

@@ -64,10 +64,10 @@ tut_sync_insert (void)
     }
 
   doc1 = bson_build (BSON_TYPE_STRING, "hello", "world", -1,
-		     BSON_TYPE_INT32, "the_final_answer", 42,
-		     BSON_TYPE_BOOLEAN, "yes?", FALSE,
-		     BSON_TYPE_INT32, "n", 1,
-		     BSON_TYPE_NONE);
+                     BSON_TYPE_INT32, "the_final_answer", 42,
+                     BSON_TYPE_BOOLEAN, "yes?", FALSE,
+                     BSON_TYPE_INT32, "n", 1,
+                     BSON_TYPE_NONE);
   bson_finish (doc1);
 
   if (!mongo_sync_cmd_insert (conn, "tutorial.docs", doc1, NULL))
@@ -77,15 +77,15 @@ tut_sync_insert (void)
     }
 
   doc2 = bson_build (BSON_TYPE_INT32, "n", 2,
-		     BSON_TYPE_BOOLEAN, "yes?", FALSE,
-		     BSON_TYPE_STRING, "hello", "dolly", -1,
-		     BSON_TYPE_NONE);
+                     BSON_TYPE_BOOLEAN, "yes?", FALSE,
+                     BSON_TYPE_STRING, "hello", "dolly", -1,
+                     BSON_TYPE_NONE);
   bson_finish (doc2);
 
   doc3 = bson_build (BSON_TYPE_INT32, "n", 3,
-		     BSON_TYPE_STRING, "hello", "nurse", -1,
-		     BSON_TYPE_BOOLEAN, "yes?", TRUE,
-		     BSON_TYPE_NONE);
+                     BSON_TYPE_STRING, "hello", "nurse", -1,
+                     BSON_TYPE_BOOLEAN, "yes?", TRUE,
+                     BSON_TYPE_NONE);
   bson_finish (doc3);
 
   if (!mongo_sync_cmd_insert (conn, "tutorial.docs", doc2, doc3, NULL))
@@ -121,7 +121,7 @@ tut_sync_query_simple (void)
   bson_finish (query);
 
   p = mongo_sync_cmd_query (conn, "tutorial.docs", 0,
-			    0, 10, query, NULL);
+                            0, 10, query, NULL);
   if (!p)
     {
       perror ("mongo_sync_cmd_query()");
@@ -142,15 +142,15 @@ tut_sync_query_simple (void)
       bson_cursor *c;
 
       if (!result)
-	{
-	  perror ("mongo_sync_cursor_get_data()");
-	  exit (1);
-	}
+        {
+          perror ("mongo_sync_cursor_get_data()");
+          exit (1);
+        }
 
       printf ("Keys in document #%d:\n", i);
       c = bson_cursor_new (result);
       while (bson_cursor_next (c))
-	printf ("\t%s\n", bson_cursor_key (c));
+        printf ("\t%s\n", bson_cursor_key (c));
 
       i++;
       bson_cursor_free (c);
@@ -178,22 +178,22 @@ tut_sync_query_complex (void)
     }
 
   query = bson_build_full (BSON_TYPE_DOCUMENT, "$query", TRUE,
-			   bson_build (BSON_TYPE_BOOLEAN, "yes?", FALSE,
-				       BSON_TYPE_NONE),
-			   BSON_TYPE_DOCUMENT, "$orderby", TRUE,
-			   bson_build (BSON_TYPE_INT32, "n", 1,
-				       BSON_TYPE_NONE),
-			   BSON_TYPE_NONE);
+                           bson_build (BSON_TYPE_BOOLEAN, "yes?", FALSE,
+                                       BSON_TYPE_NONE),
+                           BSON_TYPE_DOCUMENT, "$orderby", TRUE,
+                           bson_build (BSON_TYPE_INT32, "n", 1,
+                                       BSON_TYPE_NONE),
+                           BSON_TYPE_NONE);
   bson_finish (query);
 
   select = bson_build (BSON_TYPE_INT32, "hello", 1,
-		       BSON_TYPE_INT32, "n", 1,
-		       BSON_TYPE_INT32, "yes?", 1,
-		       BSON_TYPE_NONE);
+                       BSON_TYPE_INT32, "n", 1,
+                       BSON_TYPE_INT32, "yes?", 1,
+                       BSON_TYPE_NONE);
   bson_finish (select);
 
   p = mongo_sync_cmd_query (conn, "tutorial.docs", 0,
-			    0, 10, query, select);
+                            0, 10, query, select);
   if (!p)
     {
       perror ("mongo_sync_cmd_query()");
@@ -220,37 +220,37 @@ tut_sync_query_complex (void)
 
       result = mongo_sync_cursor_get_data (cursor);
       if (!result)
-	{
-	  perror ("mongo_sync_cursor_get_data()");
-	  exit (1);
-	}
+        {
+          perror ("mongo_sync_cursor_get_data()");
+          exit (1);
+        }
 
       c = bson_find (result, "hello");
       if (!bson_cursor_get_string (c, &hello))
-	{
-	  perror ("bson_cursor_get_string()");
-	  exit (1);
-	}
+        {
+          perror ("bson_cursor_get_string()");
+          exit (1);
+        }
       bson_cursor_free (c);
 
       c = bson_find (result, "n");
       if (!bson_cursor_get_int32 (c, &n))
-	{
-	  perror ("bson_cursor_get_int32()");
-	  exit (1);
-	}
+        {
+          perror ("bson_cursor_get_int32()");
+          exit (1);
+        }
       bson_cursor_free (c);
 
       c = bson_find (result, "yes?");
       if (!bson_cursor_get_boolean (c, &yes))
-	{
-	  perror ("bson_cursor_get_boolean()");
-	  exit (1);
-	}
+        {
+          perror ("bson_cursor_get_boolean()");
+          exit (1);
+        }
       bson_cursor_free (c);
 
       printf ("Document #%d: hello=%s; n=%d; yes?=%s\n",
-	      i, hello, n, (yes) ? "TRUE" : "FALSE");
+              i, hello, n, (yes) ? "TRUE" : "FALSE");
 
       bson_free (result);
       i++;

@@ -29,8 +29,11 @@ test_bson_cursor_find (void)
   ok (bson_cursor_find (c, "int64") == TRUE,
       "bson_cursor_find() works, even after a previous failure");
 
+  ok (bson_cursor_find (c, "int6") == FALSE,
+      "bson_cursor_find() does not match prefixes");
+
   bson_cursor_free (c);
   bson_free (b);
 }
 
-RUN_TEST (6, bson_cursor_find);
+RUN_TEST (7, bson_cursor_find);

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -33,7 +33,9 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
+#if HAVE_UTMP_H
 #include <utmp.h>
+#endif
 
 #include "utils.h"
 
@@ -47,7 +49,7 @@ int inet_aton(const char *cp, struct in_addr *addr)
 }
 #endif
 
-#ifndef HAVE_GETUTENT
+#if !defined(HAVE_GETUTENT) && !defined(HAVE_GETUTXENT) && defined(HAVE_UTMP_H)
 
 static int utent_fd = -1;
 
