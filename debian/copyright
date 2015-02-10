@@ -1,100 +1,156 @@
-Format: http://anonscm.debian.org/viewvc/dep/web/deps/dep5.mdwn?revision=174&view=co&pathrev=174
+Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: syslog-ng
 Upstream-Contact: Syslog-ng users' and developers' mailing list <syslog-ng@lists.balabit.hu>
-Source: git://git.balabit.hu/bazsi/syslog-ng-3.3.git repacked to remove non-DFSG-free elements
-Copyright: Copyright (C) 1996-2011 Balázs Scheidler <bazsi@balabit.hu>,
- Copyright (C) 2002-2011 BalaBit IT Security Ltd.
+Source: git://github.com/balabit/syslog-ng-3.5.git
+Copyright: Copyright (C) Balázs Scheidler <bazsi@balabit.hu>
+ Copyright (C) BalaBit IT Security Ltd.
 
 Files: *
-Copyright: Copyright (C) 1996-2011 Balázs Scheidler <bazsi@balabit.hu>,
- Copyright (C) 2002-2011 BalaBit IT Security Ltd.
+Copyright: Copyright (C) Balázs Scheidler <bazsi@balabit.hu>
+ Copyright (C) BalaBit IT Security Ltd.
 License: GPL-2+ with OpenSSL exception
 
 Files: lib/*
-Copyright: Copyright (C) 1996-2011 Balázs Scheidler <bazsi@balabit.hu>,
- Copyright (C) 2002-2011 BalaBit IT Security Ltd.
+Copyright: Copyright (C) Balázs Scheidler <bazsi@balabit.hu>
+ Copyright (C) BalaBit IT Security Ltd.
 License: LGPL-2.1+ with OpenSSL exception
 
 Files: lib/scratch-buffers.*
-Copyright: Copyright (C) 2011 BalaBit IT Security Ltd.
- Copyright (C) 2011 Gergely Nagy <algernon@balabit.hu>
+ lib/value-pairs.*
+ lib/vptransform.*
+ lib/logproto-indented-multiline-server.*
+Copyright: Copyright (C) BalaBit IT Security Ltd.
+ Copyright (C) Gergely Nagy <algernon@balabit.hu>
 License: LGPL-2.1+ with OpenSSL exception
 
-Files: lib/value-pairs.*
-Copyright: Copyright (C) 2002-2011 BalaBit IT Security Ltd.
- Copyright (C) 2011 Gergely Nagy <algernon@balabit.hu>
+Files: lib/uuid.*
+Copyright: Copyright (C) BalaBit IT Security Ltd.
+ Copyright (C) Balázs Scheidler <bazsi@balabit.hu>
+ Copyright (C) Gergely Nagy <algernon@balabit.hu>
+License: LGPL-2.1+ with OpenSSL exception
+
+Files: lib/versioning.h
+Copyright: Copyright (C) BalaBit IT Security Ltd.
 License: LGPL-2.1+ with OpenSSL exception
 
 Files: lib/ivykis/*
-Copyright: Copyright (C) 2002-2011 Lennert Buytenhek <buytenh@wantstofly.org>
+Copyright: Copyright (C) Lennert Buytenhek <buytenh@wantstofly.org>
 License: LGPL-2.1+
 
 Files: lib/ivykis/lib/man3/* lib/ivykis/modules/man3/*
-Copyright: Copyright (C) 2002-2011 Lennert Buytenhek <buytenh@wantstofly.org>
-License:
+Copyright: Copyright (C) Lennert Buytenhek <buytenh@wantstofly.org>
+License: ivykis-man
  Permission is granted to distribute possibly modified copies
  of this page provided the header is included verbatim,
  and in case of nontrivial modification author and date
  of the modification is added to the header.
 
 Files: modules/*
-Copyright: Copyright (C) 1996-2011 Balázs Scheidler <bazsi@balabit.hu>,
- Copyright (C) 2002-2011 BalaBit IT Security Ltd.
+Copyright: Copyright (C) Balázs Scheidler <bazsi@balabit.hu>
+ Copyright (C) BalaBit IT Security Ltd.
 License: GPL-2+ with OpenSSL exception
 
-Files: modules/afsocket/sd-daemon.*
-Copyright: Copyright 2010 Lennart Poettering
+Files: modules/afamqp/*
+Copyright: Copyright (C) BalaBit IT Security Ltd.
+ Copyright (C) Nagy, Attila <bra@fsn.hu>
+ Copyright (C) Gergely Nagy <algernon@balabit.hu>
+License: GPL-2+ with OpenSSL exception
+
+Files: modules/afamqp/rabbitmq-c/*
+Copyright: Copyright (C) VMWare, Inc. and Tony Garnock-Jones
 License: Expat
- Copyright 2010 Lennart Poettering
- .
- Permission is hereby granted, free of charge, to any person
- obtaining a copy of this software and associated documentation files
- (the "Software"), to deal in the Software without restriction,
- including without limitation the rights to use, copy, modify, merge,
- publish, distribute, sublicense, and/or sell copies of the Software,
- and to permit persons to whom the Software is furnished to do so,
- subject to the following conditions:
- .
- The above copyright notice and this permission notice shall be
- included in all copies or substantial portions of the Software.
- .
- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- SOFTWARE.
+
+Files: modules/afamqp/rabbitmq-c/codegen/*
+Copyright: Copyright (C) VMWare, Inc.
+License: MPL
+
+Files: modules/afamqp/rabbitmq-c/librabbitmq/win32/msinttypes/stdint.h
+ modules/afamqp/rabbitmq-c/tests/win32/msinttypes/inttypes.h
+Copyright: Copyright (C) Alexander Chemeris
+License: BSD-3-clause
 
 Files: modules/afmongodb/*
-Copyright: Copyright (c) 2002-2011 BalaBit IT Ltd.
- Copyright (C) 2010-2011 Gergely Nagy <algernon@balabit.hu>
+ modules/afsmtp/*
+ modules/json/*
+ modules/linux-kmsg-format/
+ modules/system-source/
+Copyright: Copyright (c) BalaBit IT Ltd.
+ Copyright (C) Gergely Nagy <algernon@balabit.hu>
 License: GPL-2+ with OpenSSL exception
 
 Files: modules/afmongodb/libmongo-client/*
-Copyright: Copyright (C) 2011 Gergely Nagy <algernon@balabit.hu>
+Copyright: Copyright (C) Gergely Nagy <algernon@balabit.hu>
 License: Apache-2.0
 
-Files: modules/dbparser/patternize.*
-Copyright: Copyright (C) 2009-2010 Péter Gyöngyösi
- Copyright (C) 2010 BalaBit IT Security Ltd.
+Files: modules/afstomp/*
+Copyright: Copyright (C) Nagy, Attila <bra@fsn.hu>
+ Copyright (C) BalaBit IT Ltd.
+ Copyright (C) Viktor Tusa <tusa@balabit.hu>
 License: GPL-2+ with OpenSSL exception
 
-Files: modules/tfjson/*
-Copyright: Copyright (c) 2002-2011 BalaBit IT Ltd.
- Copyright (C) 2011 Bálint Kovács <blint@balabit.hu>
- Copyright (C) 2011 Gergely Nagy <algernon@balabit.hu>
+Files: modules/afstomp/stomp.*
+Copyright: Copyright (C) Viktor Tusa <tusa@balabit.hu>
+License: GPL-2+ with OpenSSL exception
+
+Files: modules/redis/*
+Copyright: Copyright (C) Tihamer Petrovics <tihameri@gmail.com>
+ Copyright (C) BalaBit IT Ltd.
+License: GPL-2+ with OpenSSL exception
+
+Files: modules/cryptofuncs/*
+Copyright: Copyright (c) BalaBit IT Ltd.
+ Copyright (C) Gergely Nagy <algernon@balabit.hu>
+ Copyright (C) Peter Gyongyosi <gyp@balabit.hu>
+License: GPL-2+ with OpenSSL exception
+
+Files: modules/dbparser/patternize.*
+Copyright: Copyright (C) Péter Gyöngyösi
+ Copyright (C) BalaBit IT Security Ltd.
+License: GPL-2+ with OpenSSL exception
+
+Files: modules/json/format-json.c
+Copyright: Copyright (c) BalaBit IT Ltd.
+ Copyright (C) Balint Kovacs <blint@balabit.hu>
+ Copyright (C) Gergely Nagy <algernon@balabit.hu>
+License: GPL-2+ with OpenSSL exception
+
+Files: modules/tfgeoip/*
+Copyright: Copyright (C) BalaBit IT Security Ltd.
 License: GPL-2+ with OpenSSL exception
 
 Files: scl/*
-Copyright: Copyright (C) 2010 BalaBit IT Security Ltd.
+Copyright: Copyright (C) BalaBit IT Security Ltd.
+License: GPL-2+ with OpenSSL exception
+
+Files: scl/syslogconf/convert-syslogconf.awk
+Copyright: Jonathan W. Marks <j-marks@uiuc.edu>
+License: GPL-2+ with OpenSSL exception
+
+Files: scl/rewrite/cc-mask.conf
+Copyright: Copyright (C) Márton Illés <marci@balabit.com>
 License: GPL-2+ with OpenSSL exception
 
 Files: debian/*
-Copyright: Copyright (C) 2011 Gergely Nagy <algernon@madhouse-project.org>,
- Copyright (C) 2010-2011 Laszlo Boszormenyi (GCS) <gcs@debian.hu>
-License: GPL-3+
+Copyright: Copyright (C) 2011-2013 Gergely Nagy <algernon@madhouse-project.org>,
+ Copyright (C) 2010-2012 Laszlo Boszormenyi (GCS) <gcs@debian.hu>
+License: GPL-2+
+
+License: GPL-2+
+ This program is free software; you can redistribute it and/or modify it
+ under the terms of the GNU General Public License version 2 as published
+ by the Free Software Foundation, or (at your option) any later version.
+ .
+ This library is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ Lesser General Public License for more details.
+ .
+ You should have received a copy of the GNU Lesser General Public
+ License along with this library; if not, write to the Free Software
+ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ .
+ On Debian systems, the complete text of the GNU General Public
+ License can be found in the file `/usr/share/common-licenses/GPL-2'.
 
 License: GPL-2+ with OpenSSL exception
  This program is free software; you can redistribute it and/or modify it
@@ -116,23 +172,6 @@ License: GPL-2+ with OpenSSL exception
  .
  On Debian systems, the complete text of the GNU General Public
  License can be found in the file `/usr/share/common-licenses/GPL-2'.
-
-License: GPL-3+
- This program is free software: you can redistribute it and/or modify
- it under the terms of the GNU General Public License as published by
- the Free Software Foundation, either version 3 of the License, or
- (at your option) any later version.
- .
- This program is distributed in the hope that it will be useful,
- but WITHOUT ANY WARRANTY; without even the implied warranty of
- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- GNU General Public License for more details.
- .
- You should have received a copy of the GNU General Public License
- along with this program.  If not, see <http://www.gnu.org/licenses/>.
- .
- On Debian systems, the complete text of the GNU General Public
- License can be found in the file `/usr/share/common-licenses/GPL-3'.
 
 License: LGPL-2.1+
  This library is free software; you can redistribute it and/or
@@ -189,3 +228,53 @@ License: Apache-2.0
  .
  On Debian systems, the complete text of the Apache License can be found in
  the file `/usr/share/common-licenses/Apache-2.0'.
+
+License: Expat
+ Permission is hereby granted, free of charge, to any person
+ obtaining a copy of this software and associated documentation
+ files (the "Software"), to deal in the Software without
+ restriction, including without limitation the rights to use, copy,
+ modify, merge, publish, distribute, sublicense, and/or sell copies
+ of the Software, and to permit persons to whom the Software is
+ furnished to do so, subject to the following conditions:
+ .
+ The above copyright notice and this permission notice shall be
+ included in all copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+ BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ SOFTWARE.
+
+License: MPL
+ The complete text of the Mozilla Public License can be found in
+ the `MPL' file in the same directory as this file.
+
+License: BSD-3-clause
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions are met:
+ .
+   1. Redistributions of source code must retain the above copyright notice,
+      this list of conditions and the following disclaimer.
+ .
+   2. Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+ .
+   3. The name of the author may be used to endorse or promote products
+      derived from this software without specific prior written permission.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR IMPLIED
+ WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
+ EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+ OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+ ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

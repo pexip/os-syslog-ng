@@ -13,7 +13,7 @@ test_mongo_sync_disconnect (void)
 
   conn = test_make_fake_sync_conn (-1, FALSE);
   conn->rs.hosts = g_list_append (conn->rs.hosts,
-				  g_strdup ("invalid.example.com:-42"));
+                                  g_strdup ("invalid.example.com:-42"));
 
   mongo_sync_disconnect (conn);
   pass ("mongo_sync_disconnect() works");

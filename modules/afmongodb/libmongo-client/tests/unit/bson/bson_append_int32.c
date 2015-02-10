@@ -16,8 +16,8 @@ test_bson_int32 (void)
 
   cmp_ok (bson_size (b), "==", 14, "BSON int32 element size check");
   ok (memcmp (bson_data (b),
-	      "\016\000\000\000\020\151\063\062\000\300\007\000\000\000",
-	      bson_size (b)) == 0,
+              "\016\000\000\000\020\151\063\062\000\300\007\000\000\000",
+              bson_size (b)) == 0,
       "BSON int32 element contents check");
 
   bson_free (b);
@@ -29,7 +29,7 @@ test_bson_int32 (void)
       "bson_append_int32() without a BSON object should fail");
   bson_finish (b);
   cmp_ok (bson_size (b), "==", 5,
-	  "BSON object should be empty");
+          "BSON object should be empty");
 
   ok (bson_append_int32 (b, "i32", i) == FALSE,
       "Appending to a finished element should fail");

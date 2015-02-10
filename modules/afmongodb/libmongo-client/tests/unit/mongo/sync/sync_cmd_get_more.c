@@ -16,17 +16,17 @@ test_mongo_sync_cmd_get_more_net_secondary (void)
   gint64 cid;
 
   skip (!config.secondary_host, 2,
-	"Secondary server not configured");
+        "Secondary server not configured");
 
   conn = mongo_sync_connect (config.secondary_host, config.secondary_port,
-			     TRUE);
+                             TRUE);
   b = bson_new ();
   bson_append_string (b, "test-name", __FILE__, -1);
   bson_finish (b);
 
   p = mongo_sync_cmd_query (conn, config.ns,
-			    MONGO_WIRE_FLAG_QUERY_NO_CURSOR_TIMEOUT,
-			    0, 2, b, NULL);
+                            MONGO_WIRE_FLAG_QUERY_NO_CURSOR_TIMEOUT,
+                            0, 2, b, NULL);
   bson_free (b);
   mongo_wire_reply_packet_get_header (p, &rh);
   cid = rh.cursor_id;
@@ -81,14 +81,14 @@ test_mongo_sync_cmd_get_more_net (void)
   bson_finish (b);
 
   p = mongo_sync_cmd_query (conn, config.ns,
-			    MONGO_WIRE_FLAG_QUERY_NO_CURSOR_TIMEOUT,
-			    0, 2, b, NULL);
+                            MONGO_WIRE_FLAG_QUERY_NO_CURSOR_TIMEOUT,
+                            0, 2, b, NULL);
   bson_free (b);
   mongo_wire_reply_packet_get_header (p, &rh);
   cid = rh.cursor_id;
   mongo_wire_packet_free (p);
 
-  p = mongo_sync_cmd_get_more (conn, config.db, 3, cid);
+  p = mongo_sync_cmd_get_more (conn, config.ns, 3, cid);
   ok (p != NULL,
       "mongo_sync_cmd_get_more() works");
   mongo_wire_packet_free (p);
@@ -97,7 +97,7 @@ test_mongo_sync_cmd_get_more_net (void)
   shutdown (conn->super.fd, SHUT_RDWR);
   sleep (3);
 
-  p = mongo_sync_cmd_get_more (conn, config.db, 10, cid);
+  p = mongo_sync_cmd_get_more (conn, config.ns, 10, cid);
   ok (p != NULL,
       "mongo_sync_cmd_get_more() automatically reconnects");
   mongo_wire_packet_free (p);

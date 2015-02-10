@@ -38,9 +38,9 @@ test_bson_cursor_get_javascript_w_scope (void)
   bson_finish (valid);
 
   cmp_ok (bson_size (scope), "==", bson_size (valid),
-	  "The returned scope's length is correct");
+          "The returned scope's length is correct");
   ok (memcmp (bson_data (scope), bson_data (valid),
-	      bson_size (scope)) == 0,
+              bson_size (scope)) == 0,
       "The returned scope is correct");
   bson_free (valid);
 

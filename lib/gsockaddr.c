@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2011 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2011 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -40,8 +40,6 @@
 
 
 /* general GSockAddr functions */
-
-gsize g_sockaddr_len(GSockAddr *a);
 
 /**
  * g_sockaddr_new:
@@ -101,7 +99,21 @@ g_sockaddr_new(struct sockaddr *sa, int salen)
 char *
 g_sockaddr_format(GSockAddr *a, gchar *text, gulong n, gint format)
 {
-  return a->sa_funcs->sa_format(a, text, n, format);
+  return a->sa_funcs->format(a, text, n, format);
+}
+
+guint16
+g_sockaddr_get_port(GSockAddr *a)
+{
+  g_assert(a->sa_funcs->get_port != NULL);
+  return a->sa_funcs->get_port(a);
+}
+
+void
+g_sockaddr_set_port(GSockAddr *a, guint16 port)
+{
+  g_assert(a->sa_funcs->set_port != NULL);
+  return a->sa_funcs->set_port(a, port);
 }
 
 /*+
@@ -123,7 +135,8 @@ g_sockaddr_ref(GSockAddr *a)
   return a;
 }
 
-gsize g_sockaddr_len(GSockAddr *);
+static gsize g_sockaddr_len(GSockAddr *);
+
 /*+
 
   Decrement the reference count of a GSockAddr instance, and free if
@@ -144,10 +157,7 @@ g_sockaddr_unref(GSockAddr *a)
     {
       if (g_atomic_counter_dec_and_test(&a->refcnt))
         {
-          if (!a->sa_funcs->freefn)
-            g_slice_free1(g_sockaddr_len(a), a);
-          else
-            a->sa_funcs->freefn(a);
+          g_slice_free1(g_sockaddr_len(a), a);
         }
     }
 }
@@ -197,18 +207,42 @@ g_sockaddr_inet_format(GSockAddr *addr, gchar *text, gulong n, gint format)
   return text;
 }
 
-void
-g_sockaddr_inet_free(GSockAddr *addr)
+/**
+ * g_sockaddr_inet_get_port:
+ * @s: GSockAddrInet instance
+ *
+ * This GSockAddrInet specific function returns the port part of the
+ * address.
+ *
+ * Returns: the port in host byte order
+ *
+ **/
+static guint16
+g_sockaddr_inet_get_port(GSockAddr *s)
 {
-  g_slice_free1(g_sockaddr_len(addr), addr);
+  return ntohs(g_sockaddr_inet_get_sa(s)->sin_port);
+}
+
+/**
+ * g_sockaddr_inet_set_port:
+ * @s: GSockAddrInet instance
+ * @port: new port in host byte order
+ *
+ *
+ **/
+static void
+g_sockaddr_inet_set_port(GSockAddr *s, guint16 port)
+{
+  g_sockaddr_inet_get_sa(s)->sin_port = htons(port);
 }
 
 static GSockAddrFuncs inet_sockaddr_funcs = 
 {
-  g_sockaddr_inet_bind_prepare,
+  .bind_prepare = g_sockaddr_inet_bind_prepare,
   NULL,
-  g_sockaddr_inet_format,
-  g_sockaddr_inet_free
+  .format = g_sockaddr_inet_format,
+  .get_port = g_sockaddr_inet_get_port,
+  .set_port = g_sockaddr_inet_set_port,
 };
 
 gboolean
@@ -276,94 +310,6 @@ g_sockaddr_inet_new2(struct sockaddr_in *sin)
   return (GSockAddr *) addr;
 }
 
-/*+ Similar to GSockAddrInet, but binds to a port in the given range +*/
-
-/* 
- * NOTE: it is assumed that it is safe to cast from GSockAddrInetRange to
- * GSockAddrInet
- */
-typedef struct _GSockAddrInetRange
-{
-  GAtomicCounter refcnt;
-  guint32 flags;
-  GSockAddrFuncs *sa_funcs;
-  int salen;
-  struct sockaddr_in sin;
-  gpointer options;
-  guint options_length;
-  guint16 min_port, max_port, last_port;
-} GSockAddrInetRange;
-
-static GIOStatus
-g_sockaddr_inet_range_bind(int sock, GSockAddr *a)
-{
-  GSockAddrInetRange *addr = (GSockAddrInetRange *) a;
-  int port;
-  
-  if (addr->min_port > addr->max_port)
-    {
-      /*LOG
-        This message indicates that SockAddrInetRange was given incorrect
-        parameters, the allowed min_port is greater than max_port.
-       */
-      g_error("SockAddrInetRange, invalid range given; min_port='%d', max_port='%d'", addr->min_port, addr->max_port);
-      return G_IO_STATUS_ERROR;
-    }
-  for (port = addr->last_port; port <= addr->max_port; port++)
-    {
-      /* attempt to bind */
-      addr->sin.sin_port = htons(port);
-      if (bind(sock, (struct sockaddr *) &addr->sin, addr->salen) == 0)
-        {
-          addr->last_port = port + 1;
-          return G_IO_STATUS_NORMAL;
-        }
-    }
-  for (port = addr->min_port; port <= addr->max_port; port++)
-    {
-      /* attempt to bind */
-      addr->sin.sin_port = htons(port);
-      if (bind(sock, (struct sockaddr *) &addr->sin, addr->salen) == 0)
-        {
-          addr->last_port = port + 1;
-          return G_IO_STATUS_NORMAL;
-        }
-    }
-  addr->last_port = addr->min_port;
-  return G_IO_STATUS_ERROR;
-}
-
-static GSockAddrFuncs inet_range_sockaddr_funcs = 
-{
-  NULL,
-  g_sockaddr_inet_range_bind,
-  g_sockaddr_inet_format,
-  g_sockaddr_inet_free,
-};
-
-GSockAddr *
-g_sockaddr_inet_range_new(gchar *ip, guint16 min_port, guint16 max_port)
-{
-  GSockAddrInetRange *addr = g_slice_new0(GSockAddrInetRange);
-  
-  g_atomic_counter_set(&addr->refcnt, 1);
-  addr->flags = 0;
-  addr->salen = sizeof(struct sockaddr_in);
-  addr->sin.sin_family = AF_INET;
-  inet_aton(ip, &addr->sin.sin_addr);
-  addr->sin.sin_port = 0;
-  addr->sa_funcs = &inet_range_sockaddr_funcs;
-  if (max_port > min_port)
-    {
-      addr->last_port = (rand() % (max_port - min_port)) + min_port;
-    }
-  addr->min_port = min_port;
-  addr->max_port = max_port;
-  
-  return (GSockAddr *) addr;
-}
-
-
 #if ENABLE_IPV6
 /* AF_INET6 socket address */
 /*+
@@ -404,18 +350,41 @@ g_sockaddr_inet6_format(GSockAddr *addr, gchar *text, gulong n, gint format)
   return text;
 }
 
-static void
-g_sockaddr_inet6_free(GSockAddr *addr)
+/**
+ * g_sockaddr_inet6_get_port:
+ * @s: GSockAddrInet instance
+ *
+ * This GSockAddrInet specific function returns the port part of the
+ * address.
+ *
+ * Returns: the port in host byte order
+ *
+ **/
+static guint16
+g_sockaddr_inet6_get_port(GSockAddr *s)
 {
-  g_slice_free1(g_sockaddr_len(addr), addr);
+  return ntohs(g_sockaddr_inet6_get_sa(s)->sin6_port);
+}
+
+/**
+ * g_sockaddr_inet6_set_port:
+ * @s: GSockAddrInet instance
+ * @port: new port in host byte order
+ *
+ *
+ **/
+static void
+g_sockaddr_inet6_set_port(GSockAddr *s, guint16 port)
+{
+  g_sockaddr_inet6_get_sa(s)->sin6_port = htons(port);
 }
 
 static GSockAddrFuncs inet6_sockaddr_funcs = 
 {
-  g_sockaddr_inet_bind_prepare,
-  NULL,
-  g_sockaddr_inet6_format,
-  g_sockaddr_inet6_free
+  .bind_prepare = g_sockaddr_inet_bind_prepare,
+  .format = g_sockaddr_inet6_format,
+  .get_port = g_sockaddr_inet6_get_port,
+  .set_port = g_sockaddr_inet6_set_port,
 };
 
 gboolean
@@ -505,9 +474,9 @@ static gchar *g_sockaddr_unix_format(GSockAddr *addr, gchar *text, gulong n, gin
 
 static GSockAddrFuncs unix_sockaddr_funcs = 
 {
-  g_sockaddr_unix_bind_prepare,
-  g_sockaddr_unix_bind,
-  g_sockaddr_unix_format
+  .bind_prepare = g_sockaddr_unix_bind_prepare,
+  .bind = g_sockaddr_unix_bind,
+  .format = g_sockaddr_unix_format
 };
 
 /* anonymous if name == NULL */
@@ -630,7 +599,7 @@ g_sockaddr_unix_format(GSockAddr *addr, gchar *text, gulong n, gint format)
   return text;
 }
 
-gsize
+static gsize
 g_sockaddr_len(GSockAddr *a)
 {
   gsize len;
@@ -641,8 +610,6 @@ g_sockaddr_len(GSockAddr *a)
   else if (a->sa_funcs == &inet6_sockaddr_funcs)
     len = sizeof(GSockAddrInet6);
 #endif
-  else if (a->sa_funcs == &inet_range_sockaddr_funcs)
-    len = sizeof(GSockAddrInetRange);
   else if (a->sa_funcs == &unix_sockaddr_funcs)
     len = sizeof(GSockAddrUnix);
   else
@@ -650,4 +617,3 @@ g_sockaddr_len(GSockAddr *a)
 
   return len;
 }
-

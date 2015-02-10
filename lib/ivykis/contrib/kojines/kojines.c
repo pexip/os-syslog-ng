@@ -1,377 +1,234 @@
 /*
  * kojines - Transparent SOCKS connection forwarder.
+ * Copyright (C) 2006, 2007, 2009, 2011 Lennert Buytenhek
  *
- * Copyright (C) 2006, 2007, 2009 Lennert Buytenhek <buytenh@wantstofly.org>
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License version
+ * 2.1 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Lesser General Public License version 2.1 for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License version 2.1 along with this program; if not, write to the
+ * Free Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
+ * Boston, MA 02110-1301, USA.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <arpa/inet.h>
 #include <iv.h>
-#include <limits.h>
+#include <iv_fd_pump.h>
 #include <linux/netfilter_ipv4.h>
-#include <netinet/in.h>
 #include <string.h>
 #include <sys/socket.h>
 #include "kojines.h"
 
 struct kojine
 {
-	struct list_head		list;
-
-	int				state;
+	struct iv_list_head		list;
 
 	struct iv_fd			client_fd;
 	struct iv_fd			server_fd;
 	struct sockaddr_in		orig_dst;
 
-	struct iv_timer			connect_timeout;
-
-	int				us_buf_length;
-	int				us_saw_fin;
-	int				su_buf_length;
-	int				su_saw_fin;
-	unsigned char			us_buf[4096];
-	unsigned char			su_buf[4096];
+	int				connected;
+	union {
+		struct {
+			struct iv_timer		connect_timeout;
+			int			buf_length;
+			uint8_t			buf[10];
+		};
+		struct {
+			struct iv_fd_pump	cs;
+			struct iv_fd_pump	sc;
+		};
+	};
 };
 
-#define KOJINE_STATE_CONNECTING		0
-#define KOJINE_STATE_SENT_AUTH		1
-#define KOJINE_STATE_SENT_CONNECT	2
-#define KOJINE_STATE_ESTABLISHED	3
-
-static void got_client_data(void *_k);
-static void got_client_write_space(void *_k);
-static void got_server_data(void *_k);
-static void got_server_write_space(void *_k);
-
-
-static void kojine_kill(struct kojine *k, int timeout)
+static void __kojine_kill(struct kojine *k)
 {
-	list_del(&k->list);
+	iv_list_del(&k->list);
 
 	iv_fd_unregister(&k->client_fd);
 	close(k->client_fd.fd);
+
 	iv_fd_unregister(&k->server_fd);
 	close(k->server_fd.fd);
-
-	if (k->state < KOJINE_STATE_ESTABLISHED && !timeout)
-		iv_timer_unregister(&k->connect_timeout);
 
 	free(k);
 }
 
-
-static void got_client_data(void *_k)
+static void kojine_kill(struct kojine *k)
 {
-	struct kojine *k = (struct kojine *)_k;
-	unsigned char *ptr;
-	int space;
-	int ret;
-
-	ptr = k->us_buf + k->us_buf_length;
-	space = sizeof(k->us_buf) - k->us_buf_length;
-	if (!space) {
-		fprintf(stderr, "got_client_data: no space\n");
-		abort();
+	if (!k->connected) {
+		iv_timer_unregister(&k->connect_timeout);
+	} else {
+		iv_fd_pump_destroy(&k->cs);
+		iv_fd_pump_destroy(&k->sc);
 	}
 
-	ret = read(k->client_fd.fd, ptr, space);
+	__kojine_kill(k);
+}
+
+static void cs_pump(void *_k)
+{
+	struct kojine *k = (struct kojine *)_k;
+	int ret;
+
+	ret = iv_fd_pump_pump(&k->cs);
+
 	if (ret < 0) {
-		if (errno != EAGAIN)
-			kojine_kill(k, 0);
+		kojine_kill(k);
 		return;
-	}
-
-	if (!k->us_buf_length)
-		iv_fd_set_handler_out(&k->server_fd, got_server_write_space);
-
-	if (ret == 0) {
-		k->us_saw_fin = 1;
-		iv_fd_set_handler_in(&k->client_fd, NULL);
-		return;
-	}
-
-	k->us_buf_length += ret;
-	if (k->us_buf_length == sizeof(k->us_buf))
-		iv_fd_set_handler_in(&k->client_fd, NULL);
-}
-
-static void got_client_write_space(void *_k)
-{
-	struct kojine *k = (struct kojine *)_k;
-
-	if (!k->su_buf_length && k->su_saw_fin != 1) {
-		fprintf(stderr, "got_client_write_space: nothing to do\n");
-		abort();
-	}
-
-	if (k->su_buf_length) {
-		int ret;
-
-		ret = write(k->client_fd.fd, k->su_buf, k->su_buf_length);
-		if (ret <= 0) {
-			if (ret == 0 || errno != EAGAIN)
-				kojine_kill(k, 0);
-			return;
-		}
-
-		if (k->su_buf_length == sizeof(k->su_buf) && !k->su_saw_fin)
-			iv_fd_set_handler_in(&k->server_fd, got_server_data);
-		k->su_buf_length -= ret;
-		memmove(k->su_buf, k->su_buf + ret, k->su_buf_length);
-	}
-
-	if (!k->su_buf_length) {
-		iv_fd_set_handler_out(&k->client_fd, NULL);
-		switch (k->su_saw_fin) {
-		case 0:
-			break;
-		case 1:
-			k->su_saw_fin = 2;
-			shutdown(k->client_fd.fd, SHUT_WR);
-			if (k->us_saw_fin == 2)
-				kojine_kill(k, 0);
-			break;
-		case 2:
-			fprintf(stderr, "got_client_write_space: already "
-					"relayed fin\n");
-			abort();
-		}
-	}
-}
-
-static void got_client_error(void *_k)
-{
-	struct kojine *k = (struct kojine *)_k;
-	socklen_t len;
-	int ret;
-
-	len = sizeof(ret);
-	if (getsockopt(k->client_fd.fd, SOL_SOCKET, SO_ERROR, &ret, &len) < 0) {
-		fprintf(stderr, "got_client_error: error %d while "
-				"getsockopt(SO_ERROR)\n", errno);
-		abort();
 	}
 
 	if (ret == 0) {
-		fprintf(stderr, "got_client_error: no error?!\n");
-		abort();
-	}
-
-	kojine_kill(k, 0);
-}
-
-
-static void got_server_data(void *_k)
-{
-	struct kojine *k = (struct kojine *)_k;
-	unsigned char *ptr;
-	int space;
-	int ret;
-
-	ptr = k->su_buf + k->su_buf_length;
-	space = sizeof(k->su_buf) - k->su_buf_length;
-	if (!space) {
-		fprintf(stderr, "got_server_data: no space\n");
-		abort();
-	}
-
-	ret = read(k->server_fd.fd, ptr, space);
-	if (ret < 0) {
-		if (errno != EAGAIN)
-			kojine_kill(k, 0);
-		return;
-	}
-
-	if (!k->su_buf_length)
-		iv_fd_set_handler_out(&k->client_fd, got_client_write_space);
-
-	if (ret == 0) {
-		k->su_saw_fin = 1;
-		iv_fd_set_handler_in(&k->server_fd, NULL);
-		return;
-	}
-
-	k->su_buf_length += ret;
-	if (k->su_buf_length == sizeof(k->su_buf))
-		iv_fd_set_handler_in(&k->server_fd, NULL);
-}
-
-static void got_server_write_space(void *_k)
-{
-	struct kojine *k = (struct kojine *)_k;
-
-	if (!k->us_buf_length && k->us_saw_fin != 1) {
-		fprintf(stderr, "got_server_write_space: nothing to do\n");
-		abort();
-	}
-
-	if (k->us_buf_length) {
-		int ret;
-
-		ret = write(k->server_fd.fd, k->us_buf, k->us_buf_length);
-		if (ret <= 0) {
-			if (ret == 0 || errno != EAGAIN)
-				kojine_kill(k, 0);
-			return;
-		}
-
-		if (k->us_buf_length == sizeof(k->us_buf) && !k->us_saw_fin)
-			iv_fd_set_handler_in(&k->client_fd, got_client_data);
-		k->us_buf_length -= ret;
-		memmove(k->us_buf, k->us_buf + ret, k->us_buf_length);
-	}
-
-	if (!k->us_buf_length) {
-		iv_fd_set_handler_out(&k->server_fd, NULL);
-		switch (k->us_saw_fin) {
-		case 0:
-			break;
-		case 1:
-			k->us_saw_fin = 2;
+		if (!iv_fd_pump_is_done(&k->sc))
 			shutdown(k->server_fd.fd, SHUT_WR);
-			if (k->su_saw_fin == 2)
-				kojine_kill(k, 0);
-			break;
-		case 2:
-			fprintf(stderr, "got_server_write_space: already "
-					"relayed fin\n");
-			abort();
-		}
+		else
+			kojine_kill(k);
 	}
 }
 
-static void got_server_error(void *_k)
+static void cs_set_bands(void *_k, int pollin, int pollout)
 {
 	struct kojine *k = (struct kojine *)_k;
-	socklen_t len;
+
+	iv_fd_set_handler_in(&k->client_fd, pollin ? cs_pump : NULL);
+	iv_fd_set_handler_out(&k->server_fd, pollout ? cs_pump : NULL);
+}
+
+static void sc_pump(void *_k)
+{
+	struct kojine *k = (struct kojine *)_k;
 	int ret;
 
-	len = sizeof(ret);
-	if (getsockopt(k->server_fd.fd, SOL_SOCKET, SO_ERROR, &ret, &len) < 0) {
-		fprintf(stderr, "got_server_error: error %d while "
-				"getsockopt(SO_ERROR)\n", errno);
-		abort();
+	ret = iv_fd_pump_pump(&k->sc);
+
+	if (ret < 0) {
+		kojine_kill(k);
+		return;
 	}
 
 	if (ret == 0) {
-		fprintf(stderr, "got_server_error: no error?!\n");
-		abort();
+		if (!iv_fd_pump_is_done(&k->cs))
+			shutdown(k->client_fd.fd, SHUT_WR);
+		else
+			kojine_kill(k);
 	}
-
-	kojine_kill(k, 0);
 }
 
+static void sc_set_bands(void *_k, int pollin, int pollout)
+{
+	struct kojine *k = (struct kojine *)_k;
 
-/*
- * KOJINE_STATE_SENT_CONNECT.
- */
+	iv_fd_set_handler_in(&k->server_fd, pollin ? sc_pump : NULL);
+	iv_fd_set_handler_out(&k->client_fd, pollout ? sc_pump : NULL);
+}
+
 static void got_server_connect_reply(void *_k)
 {
 	struct kojine *k = (struct kojine *)_k;
-	unsigned char *ptr;
 	int space;
 	int ret;
 
-	ptr = k->su_buf + k->su_buf_length;
-	space = sizeof(k->su_buf) - k->su_buf_length;
+	space = 10 - k->buf_length;
 	if (!space) {
-		kojine_kill(k, 0);
+		kojine_kill(k);
 		return;
 	}
 
-	ret = read(k->server_fd.fd, ptr, space);
+	ret = read(k->server_fd.fd, k->buf + k->buf_length, space);
 	if (ret <= 0) {
 		if (ret == 0 || errno != EAGAIN)
-			kojine_kill(k, 0);
+			kojine_kill(k);
 		return;
 	}
 
-	k->su_buf_length += ret;
-	if (k->su_buf_length != 10) {
-		if (k->su_buf_length > 10)
-			kojine_kill(k, 0);
+	k->buf_length += ret;
+	if (k->buf_length < 10)
+		return;
+
+	iv_fd_set_handler_in(&k->server_fd, NULL);
+
+	if (memcmp(k->buf, "\x05\x00", 2)) {
+		kojine_kill(k);
 		return;
 	}
 
-	if (memcmp(k->su_buf, "\x05\x00", 2)) {
-		kojine_kill(k, 0);
-		return;
-	}
-
-	k->state = KOJINE_STATE_ESTABLISHED;
-	iv_fd_set_handler_in(&k->client_fd, got_client_data);
-	iv_fd_set_handler_err(&k->client_fd, got_client_error);
-	iv_fd_set_handler_in(&k->server_fd, got_server_data);
-	iv_fd_set_handler_err(&k->server_fd, got_server_error);
 	iv_timer_unregister(&k->connect_timeout);
-	k->us_buf_length = 0;
-	k->us_saw_fin = 0;
-	k->su_buf_length = 0;
+
+	k->connected = 1;
+
+	IV_FD_PUMP_INIT(&k->cs);
+	k->cs.from_fd = k->client_fd.fd;
+	k->cs.to_fd = k->server_fd.fd;
+	k->cs.cookie = k;
+	k->cs.set_bands = cs_set_bands;
+	k->cs.flags = 0;
+	iv_fd_pump_init(&k->cs);
+
+	IV_FD_PUMP_INIT(&k->sc);
+	k->sc.from_fd = k->server_fd.fd;
+	k->sc.to_fd = k->client_fd.fd;
+	k->sc.cookie = k;
+	k->sc.set_bands = sc_set_bands;
+	k->sc.flags = 0;
+	iv_fd_pump_init(&k->sc);
 }
 
-
-/*
- * KOJINE_STATE_SENT_AUTH.
- */
 static void got_server_auth_reply(void *_k)
 {
 	struct kojine *k = (struct kojine *)_k;
-	unsigned char *ptr;
 	int space;
 	int ret;
+	uint8_t buf[10];
 
-	ptr = k->su_buf + k->su_buf_length;
-	space = sizeof(k->su_buf) - k->su_buf_length;
+	space = 2 - k->buf_length;
 	if (!space) {
-		kojine_kill(k, 0);
+		kojine_kill(k);
 		return;
 	}
 
-	ret = read(k->server_fd.fd, ptr, space);
+	ret = read(k->server_fd.fd, k->buf + k->buf_length, space);
 	if (ret <= 0) {
 		if (ret == 0 || errno != EAGAIN)
-			kojine_kill(k, 0);
+			kojine_kill(k);
 		return;
 	}
 
-	k->su_buf_length += ret;
-	if (k->su_buf_length != 2) {
-		if (k->su_buf_length > 2)
-			kojine_kill(k, 0);
+	k->buf_length += ret;
+	if (k->buf_length < 2)
+		return;
+
+	if (memcmp(k->buf, "\x05\x00", 2)) {
+		kojine_kill(k);
 		return;
 	}
 
-	if (memcmp(k->su_buf, "\x05\x00", 2)) {
-		kojine_kill(k, 0);
+	buf[0] = 0x05;			// SOCKSv5
+	buf[1] = 0x01;			// CONNECT
+	buf[2] = 0x00;			// reserved
+	buf[3] = 0x01;			// IPv4
+	buf[4] = (ntohl(k->orig_dst.sin_addr.s_addr) >> 24) & 0xff;
+	buf[5] = (ntohl(k->orig_dst.sin_addr.s_addr) >> 16) & 0xff;
+	buf[6] = (ntohl(k->orig_dst.sin_addr.s_addr) >> 8) & 0xff;
+	buf[7] = ntohl(k->orig_dst.sin_addr.s_addr) & 0xff;
+	buf[8] = (ntohs(k->orig_dst.sin_port) >> 8) & 0xff;
+	buf[9] = ntohs(k->orig_dst.sin_port) & 0xff;
+	if (write(k->server_fd.fd, buf, 10) != 10) {
+		kojine_kill(k);
 		return;
 	}
 
-	k->us_buf[0] = 0x05;		// SOCKSv5
-	k->us_buf[1] = 0x01;		// CONNECT
-	k->us_buf[2] = 0x00;		// reserved
-	k->us_buf[3] = 0x01;		// IPv4
-	k->us_buf[4] = (ntohl(k->orig_dst.sin_addr.s_addr) >> 24) & 0xff;
-	k->us_buf[5] = (ntohl(k->orig_dst.sin_addr.s_addr) >> 16) & 0xff;
-	k->us_buf[6] = (ntohl(k->orig_dst.sin_addr.s_addr) >> 8) & 0xff;
-	k->us_buf[7] = ntohl(k->orig_dst.sin_addr.s_addr) & 0xff;
-	k->us_buf[8] = (ntohs(k->orig_dst.sin_port) >> 8) & 0xff;
-	k->us_buf[9] = ntohs(k->orig_dst.sin_port) & 0xff;
-	if (write(k->server_fd.fd, k->us_buf, 10) != 10) {
-		kojine_kill(k, 0);
-		return;
-	}
-
-	k->state = KOJINE_STATE_SENT_CONNECT;
 	iv_fd_set_handler_in(&k->server_fd, got_server_connect_reply);
-	k->su_buf_length = 0;
+	k->buf_length = 0;
 }
 
-
-/*
- * KOJINE_STATE_CONNECTING.
- */
 static void got_server_connect(void *_k)
 {
 	struct kojine *k = (struct kojine *)_k;
@@ -387,7 +244,7 @@ static void got_server_connect(void *_k)
 
 	if (ret) {
 		if (ret != EINPROGRESS)
-			kojine_kill(k, 0);
+			kojine_kill(k);
 		return;
 	}
 
@@ -397,22 +254,32 @@ static void got_server_connect(void *_k)
 	 *   no authentication (0x00).
 	 */
 	if (write(k->server_fd.fd, "\x05\x01\x00", 3) != 3) {
-		kojine_kill(k, 0);
+		kojine_kill(k);
 		return;
 	}
 
-	k->state = KOJINE_STATE_SENT_AUTH;
 	iv_fd_set_handler_in(&k->server_fd, got_server_auth_reply);
 	iv_fd_set_handler_out(&k->server_fd, NULL);
-	k->su_buf_length = 0;
-	k->su_saw_fin = 0;
+	k->buf_length = 0;
 }
-
 
 static void server_connect_timeout(void *_k)
 {
 	struct kojine *k = (struct kojine *)_k;
-	kojine_kill(k, 1);
+
+	__kojine_kill(k);
+}
+
+static void set_keepalive(int fd)
+{
+	int yes;
+
+	yes = 1;
+	if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &yes, sizeof(yes)) < 0) {
+		fprintf(stderr, "set_keepalive: error %d while "
+				"setsockopt(SO_KEEPALIVE)\n", errno);
+		abort();
+	}
 }
 
 static void got_kojine(void *_ki)
@@ -448,6 +315,8 @@ static void got_kojine(void *_ki)
 		return;
 	}
 
+	set_keepalive(client);
+
 	server = socket(AF_INET, SOCK_STREAM, 0);
 	if (server < 0) {
 		close(client);
@@ -456,28 +325,35 @@ static void got_kojine(void *_ki)
 
 	k = malloc(sizeof(*k));
 	if (k == NULL) {
+		close(server);
 		close(client);
 		return;
 	}
 
-	list_add_tail(&k->list, &ki->kojines);
-	k->state = KOJINE_STATE_CONNECTING;
+	set_keepalive(server);
+
+	iv_list_add_tail(&k->list, &ki->kojines);
+
 	IV_FD_INIT(&k->client_fd);
 	k->client_fd.fd = client;
 	k->client_fd.cookie = (void *)k;
 	iv_fd_register(&k->client_fd);
+
 	IV_FD_INIT(&k->server_fd);
 	k->server_fd.fd = server;
 	k->server_fd.cookie = (void *)k;
-	k->server_fd.handler_in = got_server_connect;
 	k->server_fd.handler_out = got_server_connect;
 	iv_fd_register(&k->server_fd);
+
 	k->orig_dst = orig_dst;
+
+	k->connected = 0;
+
 	IV_TIMER_INIT(&k->connect_timeout);
 	k->connect_timeout.cookie = (void *)k;
 	k->connect_timeout.handler = server_connect_timeout;
 	iv_validate_now();
-	k->connect_timeout.expires = now;
+	k->connect_timeout.expires = iv_now;
 	k->connect_timeout.expires.tv_sec += 120;
 	iv_timer_register(&k->connect_timeout);
 
@@ -522,23 +398,35 @@ int kojines_instance_register(struct kojines_instance *ki)
 	ki->listen_fd.handler_in = got_kojine;
 	iv_fd_register(&ki->listen_fd);
 
-	INIT_LIST_HEAD(&ki->kojines);
+	INIT_IV_LIST_HEAD(&ki->kojines);
 
 	return 1;
 }
 
 void kojines_instance_unregister(struct kojines_instance *ki)
 {
-	struct list_head *lh;
-	struct list_head *lh2;
+	struct iv_list_head *ilh;
+	struct iv_list_head *ilh2;
 
 	iv_fd_unregister(&ki->listen_fd);
 	close(ki->listen_fd.fd);
 
-	list_for_each_safe (lh, lh2, &ki->kojines) {
+	iv_list_for_each_safe (ilh, ilh2, &ki->kojines) {
 		struct kojine *k;
 
-		k = list_entry(lh, struct kojine, list);
-		kojine_kill(k, 0);
+		k = iv_list_entry(ilh, struct kojine, list);
+		kojine_kill(k);
 	}
+}
+
+void kojines_instance_detach(struct kojines_instance *ki)
+{
+	struct iv_list_head *ilh;
+	struct iv_list_head *ilh2;
+
+	iv_fd_unregister(&ki->listen_fd);
+	close(ki->listen_fd.fd);
+
+	iv_list_for_each_safe (ilh, ilh2, &ki->kojines)
+		iv_list_del_init(ilh);
 }

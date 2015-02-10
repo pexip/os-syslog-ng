@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -25,6 +25,25 @@
 #include "msg-format.h"
 #include "cfg.h"
 #include "plugin.h"
+#include "plugin-types.h"
+
+void
+msg_format_inject_parse_error(LogMessage *msg, const guchar *data, gsize length)
+{
+  gchar buf[2048];
+
+  log_msg_clear(msg);
+
+  msg->timestamps[LM_TS_STAMP] = msg->timestamps[LM_TS_RECVD];
+  log_msg_set_value(msg, LM_V_HOST, "", 0);
+  g_snprintf(buf, sizeof(buf), "Error processing log message: %.*s", (gint) length, data);
+  log_msg_set_value(msg, LM_V_MESSAGE, buf, -1);
+  log_msg_set_value(msg, LM_V_PROGRAM, "syslog-ng", 9);
+  g_snprintf(buf, sizeof(buf), "%d", (int) getpid());
+  log_msg_set_value(msg, LM_V_PID, buf, -1);
+
+  msg->pri = LOG_SYSLOG | LOG_ERR;
+}
 
 void
 msg_format_options_defaults(MsgFormatOptions *options)
@@ -34,53 +53,17 @@ msg_format_options_defaults(MsgFormatOptions *options)
   options->recv_time_zone_info = NULL;
   options->bad_hostname = NULL;
   options->default_pri = 0xFFFF;
+  options->sdata_param_value_max = 65535;
 }
 
-/*
- * NOTE: options_init and options_destroy are a bit weird, because their
- * invocation is not completely symmetric:
- *
- *   - init is called from driver init (e.g. affile_sd_init),
- *   - destroy is called from driver free method (e.g. affile_sd_free, NOT affile_sd_deinit)
- *
- * The reason:
- *   - when initializing the reloaded configuration fails for some reason,
- *     we have to fall back to the old configuration, thus we cannot dump
- *     the information stored in the Options structure.
- *
- * For the reasons above, init and destroy behave the following way:
- *
- *   - init is idempotent, it can be called multiple times without leaking
- *     memory, and without loss of information
- *   - destroy is only called once, when the options are indeed to be destroyed
- *
- * As init allocates memory, it has to take care about freeing memory
- * allocated by the previous init call (or it has to reuse those).
- *
- */
+/* NOTE: _init needs to be idempotent when called multiple times w/o invoking _destroy */
 void
 msg_format_options_init(MsgFormatOptions *options, GlobalConfig *cfg)
 {
-  gchar *recv_time_zone, *format;
-  TimeZoneInfo *recv_time_zone_info;
-  MsgFormatHandler *format_handler;
   Plugin *p;
 
-  recv_time_zone = options->recv_time_zone;
-  options->recv_time_zone = NULL;
-  recv_time_zone_info = options->recv_time_zone_info;
-  options->recv_time_zone_info = NULL;
-  format = options->format;
-  options->format = NULL;
-  format_handler = options->format_handler;
-  options->format_handler = NULL;
-
-  msg_format_options_destroy(options);
-
-  options->format = format;
-  options->format_handler = format_handler;
-  options->recv_time_zone = recv_time_zone;
-  options->recv_time_zone_info = recv_time_zone_info;
+  if (options->initialized)
+    return;
 
   if (cfg->bad_hostname_compiled)
     options->bad_hostname = &cfg->bad_hostname;
@@ -95,6 +78,7 @@ msg_format_options_init(MsgFormatOptions *options, GlobalConfig *cfg)
   p = plugin_find(cfg, LL_CONTEXT_FORMAT, options->format);
   if (p)
     options->format_handler = plugin_construct(p, cfg, LL_CONTEXT_FORMAT, options->format);
+  options->initialized = TRUE;
 }
 
 void
@@ -115,4 +99,27 @@ msg_format_options_destroy(MsgFormatOptions *options)
       time_zone_info_free(options->recv_time_zone_info);
       options->recv_time_zone_info = NULL;
     }
+  options->initialized = FALSE;
+}
+
+CfgFlagHandler msg_format_flag_handlers[] =
+{
+  { "no-parse",                   CFH_SET, offsetof(MsgFormatOptions, flags), LP_NOPARSE },
+  { "check-hostname",             CFH_SET, offsetof(MsgFormatOptions, flags), LP_CHECK_HOSTNAME },
+  { "syslog-protocol",            CFH_SET, offsetof(MsgFormatOptions, flags), LP_SYSLOG_PROTOCOL },
+  { "assume-utf8",                CFH_SET, offsetof(MsgFormatOptions, flags), LP_ASSUME_UTF8 },
+  { "validate-utf8",              CFH_SET, offsetof(MsgFormatOptions, flags), LP_VALIDATE_UTF8 },
+  { "no-multi-line",              CFH_SET, offsetof(MsgFormatOptions, flags), LP_NO_MULTI_LINE },
+  { "store-legacy-msghdr",        CFH_SET, offsetof(MsgFormatOptions, flags), LP_STORE_LEGACY_MSGHDR },
+  { "dont-store-legacy-msghdr", CFH_CLEAR, offsetof(MsgFormatOptions, flags), LP_STORE_LEGACY_MSGHDR },
+  { "expect-hostname",            CFH_SET, offsetof(MsgFormatOptions, flags), LP_EXPECT_HOSTNAME },
+  { "no-hostname",              CFH_CLEAR, offsetof(MsgFormatOptions, flags), LP_EXPECT_HOSTNAME },
+
+  { NULL },
+};
+
+gboolean
+msg_format_options_process_flag(MsgFormatOptions *options, gchar *flag)
+{
+  return cfg_process_flag(msg_format_flag_handlers, options, flag);
 }

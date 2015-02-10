@@ -33,25 +33,25 @@ main (void)
   bson_finish (b_new);
 
   b_builder = bson_build (BSON_TYPE_STRING, "author", "Gergely Nagy", -1,
-			  BSON_TYPE_ARRAY, "pages", pages,
-			  BSON_TYPE_BOOLEAN, "inline", TRUE,
-			  BSON_TYPE_NONE);
+                          BSON_TYPE_ARRAY, "pages", pages,
+                          BSON_TYPE_BOOLEAN, "inline", TRUE,
+                          BSON_TYPE_NONE);
   bson_finish (b_builder);
 
   b_builder_full = bson_build_full
     (BSON_TYPE_STRING, "author", FALSE, "Gergely Nagy", -1,
      BSON_TYPE_ARRAY, "pages", TRUE,
        bson_build_full (BSON_TYPE_DOCUMENT, "1", TRUE,
-			bson_build (BSON_TYPE_STRING, "title", "BSON tutorial", -1,
-				    BSON_TYPE_STRING, "content", "...", -1,
-				    BSON_TYPE_INT32, "importance", 1,
-				    BSON_TYPE_NONE),
-			BSON_TYPE_DOCUMENT, "2", TRUE,
-			bson_build (BSON_TYPE_STRING, "title", "Some other thing", -1,
-				    BSON_TYPE_STRING, "content", "...", -1,
-				    BSON_TYPE_INT32, "importance", 0,
-				    BSON_TYPE_NONE),
-			BSON_TYPE_NONE),
+                        bson_build (BSON_TYPE_STRING, "title", "BSON tutorial", -1,
+                                    BSON_TYPE_STRING, "content", "...", -1,
+                                    BSON_TYPE_INT32, "importance", 1,
+                                    BSON_TYPE_NONE),
+                        BSON_TYPE_DOCUMENT, "2", TRUE,
+                        bson_build (BSON_TYPE_STRING, "title", "Some other thing", -1,
+                                    BSON_TYPE_STRING, "content", "...", -1,
+                                    BSON_TYPE_INT32, "importance", 0,
+                                    BSON_TYPE_NONE),
+                        BSON_TYPE_NONE),
      BSON_TYPE_BOOLEAN, "inline", FALSE, TRUE,
      BSON_TYPE_NONE);
   bson_finish (b_builder_full);

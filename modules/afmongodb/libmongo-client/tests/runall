@@ -1,0 +1,17 @@
+#! /bin/sh
+set -e
+
+fail_counter=0
+
+trap '[ $? -eq 0 ] && rm -f current-test.out current-test.err' 0
+
+for test in $@; do
+    ${test} 2>current-test.err >current-test.out
+    if grep "not ok" current-test.out >/dev/null 2>/dev/null; then
+            echo "${test} failed:" >&2
+            cat current-test.err >&2
+            fail_counter=`expr ${fail_counter} + 1`
+    fi
+done
+
+exit ${fail_counter}

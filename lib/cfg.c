@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -23,20 +23,17 @@
  */
   
 #include "cfg.h"
-#include "sgroup.h"
-#include "dgroup.h"
-#include "filter.h"
-#include "center.h"
+#include "cfg-tree.h"
 #include "messages.h"
-#include "templates.h"
+#include "template/templates.h"
 #include "misc.h"
 #include "logmsg.h"
 #include "dnscache.h"
-#include "logparser.h"
 #include "serialize.h"
 #include "plugin.h"
 #include "cfg-parser.h"
 #include "stats.h"
+#include "logproto/logproto-builtins.h"
 
 #include <sys/types.h>
 #include <signal.h>
@@ -160,64 +157,29 @@ cfg_bad_hostname_set(GlobalConfig *self, gchar *bad_hostname_re)
   self->bad_hostname_re = g_strdup(bad_hostname_re);  
 }
 
-static gboolean
-cfg_insert_check_dups(GHashTable *hash, const gchar *kind, const gchar *key, void *value)
+gint
+cfg_lookup_mark_mode(gchar *mark_mode)
 {
-  gboolean res = TRUE;
+  if (!strcmp(mark_mode, "internal"))
+    return MM_INTERNAL;
+  if (!strcmp(mark_mode, "dst_idle") || !strcmp(mark_mode, "dst-idle"))
+    return MM_DST_IDLE;
+  if (!strcmp(mark_mode, "host_idle") || !strcmp(mark_mode, "host-idle"))
+    return MM_HOST_IDLE;
+  if (!strcmp(mark_mode, "periodical"))
+    return MM_PERIODICAL;
+  if (!strcmp(mark_mode, "none"))
+    return MM_NONE;
+  if (!strcmp(mark_mode, "global"))
+    return MM_GLOBAL;
 
-  res = (g_hash_table_lookup(hash, key) == NULL);
-  g_hash_table_replace(hash, (gpointer) key, value);
-  return res;
-}
-
-gboolean
-cfg_add_source(GlobalConfig *cfg, LogSourceGroup *group)
-{
-  return cfg_insert_check_dups(cfg->sources, "source", group->name, group);
-}
-
-gboolean
-cfg_add_dest(GlobalConfig *cfg, LogDestGroup *group)
-{
-  return cfg_insert_check_dups(cfg->destinations, "destination", group->name, group);
-}
-
-gboolean
-cfg_add_filter(GlobalConfig *cfg, LogProcessRule *rule)
-{
-  return cfg_insert_check_dups(cfg->filters, "filter", rule->name, rule);
-}
-
-gboolean
-cfg_add_parser(GlobalConfig *cfg, LogProcessRule *rule)
-{
-  return cfg_insert_check_dups(cfg->parsers, "parser", rule->name, rule);
-}
-
-gboolean
-cfg_add_rewrite(GlobalConfig *cfg, LogProcessRule *rule)
-{
-  return cfg_insert_check_dups(cfg->rewriters, "rewrite", rule->name, rule);
+  return -1;
 }
 
 void
-cfg_add_connection(GlobalConfig *cfg, LogConnection *conn)
+cfg_set_mark_mode(GlobalConfig *self, gchar *mark_mode)
 {
-  g_ptr_array_add(cfg->connections, conn);
-}
-
-gboolean
-cfg_add_template(GlobalConfig *cfg, LogTemplate *template)
-{
-  return cfg_insert_check_dups(cfg->templates, "template", template->name, template);
-}
-
-LogTemplate *
-cfg_lookup_template(GlobalConfig *cfg, const gchar *name)
-{
-  if (name)
-    return log_template_ref(g_hash_table_lookup(cfg->templates, name));
-  return NULL;
+  self->mark_mode = cfg_lookup_mark_mode(mark_mode);
 }
 
 gboolean
@@ -225,11 +187,11 @@ cfg_init(GlobalConfig *cfg)
 {
   gint regerr;
   
-  if (cfg->file_template_name && !(cfg->file_template = cfg_lookup_template(cfg, cfg->file_template_name)))
+  if (cfg->file_template_name && !(cfg->file_template = cfg_tree_lookup_template(&cfg->tree, cfg->file_template_name)))
     msg_error("Error resolving file template",
                evt_tag_str("name", cfg->file_template_name),
                NULL);
-  if (cfg->proto_template_name && !(cfg->proto_template = cfg_lookup_template(cfg, cfg->proto_template_name)))
+  if (cfg->proto_template_name && !(cfg->proto_template = cfg_tree_lookup_template(&cfg->tree, cfg->proto_template_name)))
     msg_error("Error resolving protocol template",
                evt_tag_str("name", cfg->proto_template_name),
                NULL);
@@ -252,70 +214,51 @@ cfg_init(GlobalConfig *cfg)
         }
     }
   dns_cache_set_params(cfg->dns_cache_size, cfg->dns_cache_expire, cfg->dns_cache_expire_failed, cfg->dns_cache_hosts);
-  return log_center_init(cfg->center, cfg);
+  log_proto_register_builtin_plugins(cfg);
+  return cfg_tree_start(&cfg->tree);
 }
 
 gboolean
 cfg_deinit(GlobalConfig *cfg)
 {
-  return log_center_deinit(cfg->center);
+  return cfg_tree_stop(&cfg->tree);
 }
 
 void
 cfg_set_version(GlobalConfig *self, gint version)
 {
-  self->version = version;
-  if (self->version < CFG_CURRENT_VERSION)
+  self->user_version = version;
+  if (cfg_is_config_version_older(self, VERSION_VALUE))
     {
-      msg_warning("WARNING: Configuration file format is too old, please update it to use the " CFG_CURRENT_VERSION_STRING " format as some constructs might operate inefficiently",
+      msg_warning("WARNING: Configuration file format is too old, syslog-ng is running in compatibility mode "
+                  "Please update it to use the " VERSION_CURRENT " format at your time of convinience, "
+                  "compatibility mode can operate less efficiently in some cases. "
+                  "To upgrade the configuration, please review the warnings about incompatible changes printed "
+                  "by syslog-ng, and once completed change the @version header at the top of the configuration "
+                  "file.",
                   NULL);
     }
-  else if (self->version > CFG_CURRENT_VERSION)
+  else if (version_convert_from_user(self->user_version) > VERSION_VALUE)
     {
-      msg_warning("WARNING: Configuration file format is newer than the current version, please specify the current version number (" CFG_CURRENT_VERSION_STRING ") in the @version directive",
+      msg_warning("WARNING: Configuration file format is newer than the current version, please specify the "
+                  "current version number ("  VERSION_CURRENT_VER_ONLY ") in the @version directive. "
+                  "syslog-ng will operate at its highest supported version in this mode",
                   NULL);
-      self->version = CFG_CURRENT_VERSION;
+      self->user_version = VERSION_VALUE;
     }
 
-  if (self->version < 0x0300)
+  if (cfg_is_config_version_older(self, 0x0300))
     {
-      msg_warning("WARNING: global: the default value of chain_hostnames is changing to 'no' in version 3.0, please update your configuration accordingly",
+      msg_warning("WARNING: global: the default value of chain_hostnames is changing to 'no' in " VERSION_3_0 ", please update your configuration accordingly",
                   NULL);
       self->chain_hostnames = TRUE;
     }
-
-  if (self->version < 0x0303)
+  if (cfg_is_config_version_older(self, 0x0303))
     {
-      msg_warning("WARNING: global: the default value of log_fifo_size() has changed to 10000 in version 3.3 to reflect log_iw_size() changes for tcp()/udp() window size changes",
+      msg_warning("WARNING: global: the default value of log_fifo_size() has changed to 10000 in " VERSION_3_3 " to reflect log_iw_size() changes for tcp()/udp() window size changes",
                   NULL);
     }
 
-  if (self->version <= 0x0301 || atoi(cfg_args_get(self->lexer->globals, "autoload-compiled-modules")))
-    {
-      gint i;
-      gchar **mods;
-
-      mods = g_strsplit(default_modules, ",", 0);
-      for (i = 0; mods[i]; i++)
-        {
-          plugin_load_module(mods[i], self, NULL);
-        }
-      g_strfreev(mods);
-    }
-}
-
-struct _LogTemplate *
-cfg_check_inline_template(GlobalConfig *cfg, const gchar *template_or_name, GError **error)
-{
-  LogTemplate *template = cfg_lookup_template(configuration, template_or_name);
-
-  if (template == NULL)
-    {
-      template = log_template_new(cfg, NULL);
-      log_template_compile(template, template_or_name, error);
-      template->def_inline = TRUE;
-    }
-  return template;
 }
 
 gboolean
@@ -323,7 +266,7 @@ cfg_allow_config_dups(GlobalConfig *self)
 {
   const gchar *s;
 
-  if (self->version < 0x0303)
+  if (cfg_is_config_version_older(self, 0x0303))
     return TRUE;
 
   s = cfg_args_get(self->lexer->globals, "allow-config-dups");
@@ -344,18 +287,12 @@ cfg_new(gint version)
 {
   GlobalConfig *self = g_new0(GlobalConfig, 1);
 
-  self->version = version;
-  self->sources = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, (GDestroyNotify) log_pipe_unref);
-  self->destinations = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, (GDestroyNotify) log_pipe_unref);
-  self->filters = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, (GDestroyNotify) log_process_rule_unref);
-  self->parsers = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, (GDestroyNotify) log_process_rule_unref);
-  self->rewriters = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, (GDestroyNotify) log_process_rule_unref);
-  self->templates = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, (GDestroyNotify) log_template_unref);
-  self->connections = g_ptr_array_new();
+  self->user_version = version;
 
   self->flush_lines = 0;
   self->flush_timeout = 10000;  /* 10 seconds */
   self->mark_freq = 1200;	/* 20 minutes */
+  self->mark_mode = MM_HOST_IDLE;
   self->stats_freq = 600;
   self->chain_hostnames = 0;
   self->use_fqdn = 0;
@@ -366,7 +303,6 @@ cfg_new(gint version)
   self->log_fifo_size = 10000;
   self->log_msg_size = 8192;
 
-  self->follow_freq = -1;
   self->file_uid = 0;
   self->file_gid = 0;
   self->file_perm = 0600;
@@ -383,8 +319,11 @@ cfg_new(gint version)
   log_template_options_defaults(&self->template_options);
   self->template_options.ts_format = TS_FMT_BSD;
   self->template_options.frac_digits = 0;
+  self->template_options.on_error = ON_ERROR_DROP_MESSAGE;
   self->recv_time_zone = NULL;
   self->keep_timestamp = TRUE;
+
+  cfg_tree_init_instance(&self->tree, self);
   return self;
 }
 
@@ -414,6 +353,19 @@ cfg_run_parser(GlobalConfig *self, CfgLexer *lexer, CfgParser *parser, gpointer 
   return res;
 }
 
+void
+cfg_load_candidate_modules(GlobalConfig *self)
+{
+  /* we enable autoload for pre-3.1 configs or when the user requested
+   * auto-load (the default) */
+
+  if ((cfg_is_config_version_older(self, 0x0302) ||
+      atoi(cfg_args_get(self->lexer->globals, "autoload-compiled-modules"))) && !self->candidate_plugins)
+    {
+      plugin_load_candidate_modules(self);
+    }
+}
+
 gboolean
 cfg_read_config(GlobalConfig *self, gchar *fname, gboolean syntax_only, gchar *preprocess_into)
 {
@@ -432,7 +384,6 @@ cfg_read_config(GlobalConfig *self, gchar *fname, gboolean syntax_only, gchar *p
       if (res)
 	{
 	  /* successfully parsed */
-	  self->center = log_center_new();
 	  return TRUE;
 	}
     }
@@ -450,8 +401,6 @@ cfg_read_config(GlobalConfig *self, gchar *fname, gboolean syntax_only, gchar *p
 void
 cfg_free(GlobalConfig *self)
 {
-  int i;
-
   g_assert(self->persist == NULL);
   if (self->state)
     persist_state_free(self->state);
@@ -460,26 +409,14 @@ cfg_free(GlobalConfig *self)
   g_free(self->proto_template_name);  
   log_template_unref(self->file_template);
   log_template_unref(self->proto_template);
-  
-  if (self->center)
-    log_center_free(self->center);
-  
-  for (i = 0; i < self->connections->len; i++)
-    {
-      log_connection_free(g_ptr_array_index(self->connections, i));
-    }
-  g_hash_table_destroy(self->sources);
-  g_hash_table_destroy(self->destinations);
-  g_hash_table_destroy(self->filters);
-  g_hash_table_destroy(self->parsers);
-  g_hash_table_destroy(self->rewriters);
-  g_hash_table_destroy(self->templates);
-  g_ptr_array_free(self->connections, TRUE);
+
   if (self->bad_hostname_compiled)
     regfree(&self->bad_hostname);
   g_free(self->bad_hostname_re);
   g_free(self->dns_cache_hosts);
   g_list_free(self->plugins);
+  plugin_free_candidate_modules(self);
+  cfg_tree_free_instance(&self->tree);
   g_free(self);
 }
 

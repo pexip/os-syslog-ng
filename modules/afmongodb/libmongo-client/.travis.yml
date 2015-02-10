@@ -1,0 +1,17 @@
+language: c
+install:
+  - sudo apt-get update -qq
+  - sudo apt-get install -qq libglib2.0-dev perl
+before_script:
+  - install -d m4
+  - autoreconf -i
+script:
+  - ./configure
+  - make
+  - "export TEST_PRIMARY=localhost:27017"
+  - make check
+compiler:
+  - gcc
+  - clang
+services:
+  - mongodb

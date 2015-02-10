@@ -35,10 +35,10 @@ test_mongo_wire_cmd_delete (void)
   /* Test basic header data */
   mongo_wire_packet_get_header (p, &hdr);
   cmp_ok ((data_size = mongo_wire_packet_get_data (p, &data)), "!=", -1,
-	  "Packet data size appears fine");
+          "Packet data size appears fine");
 
   cmp_ok (hdr.length, "==", sizeof (mongo_packet_header) + data_size,
-	  "Packet header length is correct");
+          "Packet header length is correct");
   cmp_ok (hdr.id, "==", 1, "Header ID is ok");
   cmp_ok (hdr.resp_to, "==", 0, "Response ID is ok");
 
@@ -50,17 +50,17 @@ test_mongo_wire_cmd_delete (void)
   pos = sizeof (gint32) + strlen ("test.ns") + 1 + sizeof (gint32);
 
   ok ((s = bson_new_from_data (data + pos,
-			       bson_stream_doc_size (data, pos) - 1)) != NULL,
+                               bson_stream_doc_size (data, pos) - 1)) != NULL,
       "Packet contains a valid BSON update document");
   bson_finish (s);
 
   ok ((c = bson_find (s, "int32")) != NULL,
       "BSON contains 'int32'");
   cmp_ok (bson_cursor_type (c), "==", BSON_TYPE_INT32,
-	  "int32 has correct type");
+          "int32 has correct type");
   bson_cursor_next (c);
   cmp_ok (bson_cursor_type (c), "==", BSON_TYPE_INT64,
-	  "next element has correct type too");
+          "next element has correct type too");
   ok (bson_cursor_next (c) == FALSE,
       "No more data after the update BSON object");
 

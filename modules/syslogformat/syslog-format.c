@@ -1,18 +1,18 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published
  * by the Free Software Foundation, or (at your option) any later version.
  *
- * This library is distributed in the hope that it will be useful,
+ * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  * As an additional exemption you are allowed to compile & link against the
@@ -45,6 +45,8 @@
 
 static const char aix_fwd_string[] = "Message forwarded from ";
 static const char repeat_msg_string[] = "last message repeated";
+static NVHandle is_synced;
+static NVHandle cisco_seqid;
 
 static gboolean
 log_msg_parse_pri(LogMessage *self, const guchar **data, gint *length, guint flags, guint16 default_pri)
@@ -180,7 +182,36 @@ log_msg_parse_column(LogMessage *self, NVHandle handle, const guchar **data, gin
   *length = left;
 }
 
+static gboolean
+log_msg_parse_seq(LogMessage *self, const guchar **data, gint *length)
+{
+  const guchar *src = *data;
+  gint left = *length;
 
+
+  while (left && *src != ':')
+    {
+      if (!isdigit(*src))
+          return FALSE;
+      src++;
+      left--;
+    }
+  src++;
+  left--;
+
+  /* if the next char is not space, then we may try to read a date */
+
+  if (*src != ' ')
+    return FALSE;
+
+  log_msg_set_value(self, cisco_seqid, (gchar *) *data, *length - left - 1);
+
+  *data = src;
+  *length = left;
+  return TRUE;
+}
+
+/* FIXME: this function should really be exploded to a lot of smaller functions... (Bazsi) */
 static gboolean
 log_msg_parse_date(LogMessage *self, const guchar **data, gint *length, guint parse_flags, glong assume_timezone)
 {
@@ -192,6 +223,23 @@ log_msg_parse_date(LogMessage *self, const guchar **data, gint *length, guint pa
 
   cached_g_current_time(&now);
 
+  if ((parse_flags & LP_SYSLOG_PROTOCOL) == 0)
+    {
+      /* Cisco timestamp extensions, the first '*' indicates that the clock is
+       * unsynced, '.' if it is known to be synced */
+      if (G_UNLIKELY(src[0] == '*'))
+        {
+          log_msg_set_value(self, is_synced, "0", 1);
+          src++;
+          left--;
+        }
+      else if (G_UNLIKELY(src[0] == '.'))
+        {
+          log_msg_set_value(self, is_synced, "1", 1);
+          src++;
+          left--;
+        }
+    }
   /* If the next chars look like a date, then read them as a date. */
   if (left >= 19 && src[4] == '-' && src[7] == '-' && src[10] == 'T' && src[13] == ':' && src[16] == ':')
     {
@@ -359,7 +407,16 @@ log_msg_parse_date(LogMessage *self, const guchar **data, gint *length, guint pa
     }
   else
     {
-      return FALSE;
+      if (left >= 1 && src[0] == '-')
+        {
+          /* NILVALUE */
+          self->timestamps[LM_TS_STAMP] = self->timestamps[LM_TS_RECVD];
+          *length = --left;
+          *data = ++src;
+          return TRUE;
+        }
+      else
+        return FALSE;
     }
 
   /* NOTE: mktime() returns the time assuming that the timestamp we
@@ -575,7 +632,7 @@ sd_step_and_store(LogMessage *self, const guchar **data, gint *left)
  * in @self.values and dup the SD string. Parsing is affected by the bits set @flags argument.
  **/
 static gboolean
-log_msg_parse_sd(LogMessage *self, const guchar **data, gint *length, guint flags)
+log_msg_parse_sd(LogMessage *self, const guchar **data, gint *length, const MsgFormatOptions *options)
 {
   /*
    * STRUCTURED-DATA = NILVALUE / 1*SD-ELEMENT
@@ -601,7 +658,7 @@ log_msg_parse_sd(LogMessage *self, const guchar **data, gint *length, guint flag
   gchar sd_param_name[33];
 
   /* UTF-8 string */
-  gchar sd_param_value[256];
+  gchar sd_param_value[options->sdata_param_value_max + 1];
   gsize sd_param_value_len;
   gchar sd_value_name[66];
   NVHandle handle;
@@ -803,7 +860,7 @@ log_msg_parse_sd(LogMessage *self, const guchar **data, gint *length, guint flag
  * in @self. Parsing is affected by the bits set @flags argument.
  **/
 static gboolean
-log_msg_parse_legacy(MsgFormatOptions *parse_options,
+log_msg_parse_legacy(const MsgFormatOptions *parse_options,
                      const guchar *data, gint length,
                      LogMessage *self)
 {
@@ -819,6 +876,7 @@ log_msg_parse_legacy(MsgFormatOptions *parse_options,
       return FALSE;
     }
 
+  log_msg_parse_seq(self, &src, &left);
   log_msg_parse_skip_chars(self, &src, &left, " ", -1);
   cached_g_current_time(&now);
   if (log_msg_parse_date(self, &src, &left, parse_options->flags & ~LP_SYSLOG_PROTOCOL, time_zone_info_get_offset(parse_options->recv_time_zone_info, now.tv_sec)))
@@ -875,7 +933,8 @@ log_msg_parse_legacy(MsgFormatOptions *parse_options,
       /* Different format */
 
       /* A kernel message? Use 'kernel' as the program name. */
-      if ((self->flags & LF_INTERNAL) == 0 && ((self->pri & LOG_FACMASK) == LOG_KERN))
+      if ((self->flags & LF_INTERNAL) == 0 && ((self->pri & LOG_FACMASK) == LOG_KERN &&
+                                               (self->flags & LF_LOCAL) != 0))
         {
           log_msg_set_value(self, LM_V_PROGRAM, "kernel", 6);
         }
@@ -901,7 +960,7 @@ log_msg_parse_legacy(MsgFormatOptions *parse_options,
  * Parse a message according to the latest syslog-protocol drafts.
  **/
 static gboolean
-log_msg_parse_syslog_proto(MsgFormatOptions *parse_options, const guchar *data, gint length, LogMessage *self)
+log_msg_parse_syslog_proto(const MsgFormatOptions *parse_options, const guchar *data, gint length, LogMessage *self)
 {
   /**
    *	SYSLOG-MSG      = HEADER SP STRUCTURED-DATA [SP MSG]
@@ -967,7 +1026,7 @@ log_msg_parse_syslog_proto(MsgFormatOptions *parse_options, const guchar *data, 
     return FALSE;
 
   /* structured data part */
-  if (!log_msg_parse_sd(self, &src, &left, parse_options->flags))
+  if (!log_msg_parse_sd(self, &src, &left, parse_options))
     return FALSE;
 
   /* checking if there are remaining data in log message */
@@ -1000,7 +1059,7 @@ log_msg_parse_syslog_proto(MsgFormatOptions *parse_options, const guchar *data, 
 
 
 void
-syslog_format_handler(MsgFormatOptions *parse_options,
+syslog_format_handler(const MsgFormatOptions *parse_options,
                       const guchar *data, gsize length,
                       LogMessage *self)
 {
@@ -1032,28 +1091,7 @@ syslog_format_handler(MsgFormatOptions *parse_options,
 
   if (G_UNLIKELY(!success))
     {
-      gchar buf[2048];
-
-      self->timestamps[LM_TS_STAMP] = self->timestamps[LM_TS_RECVD];
-      if ((self->flags & LF_STATE_OWN_PAYLOAD) && self->payload)
-        nv_table_unref(self->payload);
-      self->flags |= LF_STATE_OWN_PAYLOAD;
-      self->payload = nv_table_new(LM_V_MAX, 16, MAX(length * 2, 256));
-      log_msg_set_value(self, LM_V_HOST, "", 0);
-
-      g_snprintf(buf, sizeof(buf), "Error processing log message: %.*s", (gint) length, data);
-      log_msg_set_value(self, LM_V_MESSAGE, buf, -1);
-      log_msg_set_value(self, LM_V_PROGRAM, "syslog-ng", 9);
-      g_snprintf(buf, sizeof(buf), "%d", (int) getpid());
-      log_msg_set_value(self, LM_V_PID, buf, -1);
-
-      if (self->sdata)
-        {
-          g_free(self->sdata);
-          self->alloc_sdata = self->num_sdata = 0;
-          self->sdata = NULL;
-        }
-      self->pri = LOG_SYSLOG | LOG_ERR;
+      msg_format_inject_parse_error(self, data, length);
       return;
     }
 
@@ -1069,5 +1107,18 @@ syslog_format_handler(MsgFormatOptions *parse_options,
           p++;
         }
 
+    }
+}
+
+void
+syslog_format_init(void)
+{
+  static gboolean handles_initialized = FALSE;
+
+  if (!handles_initialized)
+    {
+      is_synced = log_msg_get_value_handle(".SDATA.timeQuality.isSynced");
+      cisco_seqid = log_msg_get_value_handle(".SDATA.meta.sequenceId");
+      handles_initialized = TRUE;
     }
 }

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -23,89 +23,57 @@
  */
 
 #include "logreader.h"
-#include "messages.h"
-#include "logproto.h"
-#include "misc.h"
-#include "stats.h"
-#include "tags.h"
-#include "cfg-parser.h"
-#include "timeutils.h"
-#include "compat.h"
-#include "mainloop.h"
-
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <string.h>
-#include <ctype.h>
-#include <time.h>
-#include <errno.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <iv.h>
-#include <iv_work.h>
-
-/**
- * FIXME: LogReader has grown big enough that it is difficult to
- * maintain it. The root of the problem is a design issue, instead of
- * having each source driver derive from LogReader, they use a
- * log-reader object. As most of the common options are implemented
- * here, each driver specific hack was added to logreader, making it
- * much more difficult to read and modify.
- *
- * Examples: 
- * 
- *  - file position tracking, follow-freq and immediate-check are file
- *    source specific
- *  - name resolution and peer addresses applies only to network based sources
- *  - etc.
- *
- * The solution I have in mind is to get rid of LogDriver (which is
- * very thin anyway, basically is only a "next" pointer in the linked
- * list of an s/dgroup, then convert sgroup and dgroup to use GList or
- * GPtrArray, this way sgroup/dgroup would not rely on LogDriver
- * instances, it'd simple use LogPipes. Then, each of the source
- * drivers would be derived from LogReader (probably after a rename to
- * reflect the change), and each driver specific features would be
- * added by using virtual methods instead of using a monolithic class.
- *
- * Of course a similar change can be applied to LogWriters as well.
- **/
 
 struct _LogReader
 {
   LogSource super;
-  LogProto *proto;
-  LogReaderWatch *source;
+  LogProtoServer *proto;
   gboolean immediate_check;
   gboolean waiting_for_preemption;
   LogPipe *control;
   LogReaderOptions *options;
+  PollEvents *poll_events;
   GSockAddr *peer_addr;
-  gchar *follow_filename;
   ino_t inode;
   gint64 size;
 
   /* NOTE: these used to be LogReaderWatch members, which were merged into
    * LogReader with the multi-thread refactorization */
 
-  struct iv_fd fd_watch;
-  struct iv_timer follow_timer;
   struct iv_task restart_task;
   struct iv_event schedule_wakeup;
   MainLoopIOWorkerJob io_job;
-  gboolean suspended:1;
-  gint pollable_state;
+  gboolean watches_running:1, suspended:1;
   gint notify_code;
+
+
+  /* proto & poll_events pending to be applied. As long as the previous
+   * processing is being done, we can't replace these in self->proto and
+   * self->poll_events, they get applied to the production ones as soon as
+   * the previous work is finished */
+  gboolean pending_proto_present;
+  GCond *pending_proto_cond;
+  GStaticMutex pending_proto_lock;
+  LogProtoServer *pending_proto;
+  PollEvents *pending_poll_events;
 };
 
 static gboolean log_reader_fetch_log(LogReader *self);
 
-static gboolean log_reader_start_watches(LogReader *self);
 static void log_reader_stop_watches(LogReader *self);
 static void log_reader_update_watches(LogReader *self);
 
+static void
+log_reader_apply_proto_and_poll_events(LogReader *self, LogProtoServer *proto, PollEvents *poll_events)
+{
+  if (self->proto)
+    log_proto_server_free(self->proto);
+  if (self->poll_events)
+    poll_events_free(self->poll_events);
+
+  self->proto = proto;
+  self->poll_events = poll_events;
+}
 
 static void
 log_reader_work_perform(void *s)
@@ -120,19 +88,38 @@ log_reader_work_finished(void *s)
 {
   LogReader *self = (LogReader *) s;
 
-  if (self->notify_code == 0)
+  if (self->pending_proto_present)
     {
-      if (self->super.super.flags & PIF_INITIALIZED)
-        {
-          /* reenable polling the source assuming that we're still in
-           * business (e.g. the reader hasn't been uninitialized) */
+      /* pending proto is only set in the main thread, so no need to
+       * lock it before coming here. After we're syncing with the
+       * log_writer_reopen() call, quite possibly coming from a
+       * non-main thread. */
 
-          log_reader_start_watches(self);
-        }
+      g_static_mutex_lock(&self->pending_proto_lock);
+
+      log_reader_apply_proto_and_poll_events(self, self->pending_proto, self->pending_poll_events);
+      self->pending_proto = NULL;
+      self->pending_poll_events = NULL;
+      self->pending_proto_present = FALSE;
+
+      g_cond_signal(self->pending_proto_cond);
+      g_static_mutex_unlock(&self->pending_proto_lock);
     }
-  else
+
+  if (self->notify_code)
     {
-      log_pipe_notify(self->control, &self->super.super, self->notify_code, self);
+      gint notify_code = self->notify_code;
+
+      self->notify_code = 0;
+      log_pipe_notify(self->control, notify_code, self);
+    }
+  if (self->super.super.flags & PIF_INITIALIZED)
+    {
+      /* reenable polling the source assuming that we're still in
+       * business (e.g. the reader hasn't been uninitialized) */
+
+      log_proto_server_reset_error(self->proto);
+      log_reader_update_watches(self);
     }
   log_pipe_unref(&self->super.super);
 }
@@ -188,123 +175,25 @@ log_reader_io_process_input(gpointer s)
     }
   else
     {
-      log_reader_work_perform(s);
-      log_reader_work_finished(s);
-    }
-}
-
-/* follow timer callback. Check if the file has new content, or deleted or
- * moved.  Ran every follow_freq seconds.  */
-static void
-log_reader_io_follow_file(gpointer s)
-{
-  LogReader *self = (LogReader *) s;
-  struct stat st, followed_st;
-  off_t pos = -1;
-  gint fd = log_proto_get_fd(self->proto);
-
-  msg_trace("Checking if the followed file has new lines",
-            evt_tag_str("follow_filename", self->follow_filename),
-            NULL);
-  if (fd >= 0)
-    {
-      pos = lseek(fd, 0, SEEK_CUR);
-      if (pos == (off_t) -1)
+      /* Checking main_loop_io_worker_job_quit() helps to speed up the
+       * reload process.  If reload/shutdown is requested we shouldn't do
+       * anything here, outstanding messages will be processed by the new
+       * configuration.
+       *
+       * Our current understanding is that it doesn't prevent race
+       * conditions of any kind.
+       */
+      if (!main_loop_io_worker_job_quit())
         {
-          msg_error("Error invoking seek on followed file",
-                    evt_tag_errno("error", errno),
-                    NULL);
-          goto reschedule;
-        }
-
-      if (fstat(fd, &st) < 0)
-        {
-          if (errno == ESTALE)
-            {
-              msg_trace("log_reader_fd_check file moved ESTALE",
-                        evt_tag_str("follow_filename", self->follow_filename),
-                        NULL);
-              log_pipe_notify(self->control, &self->super.super, NC_FILE_MOVED, self);
-              return;
-            }
-          else
-            {
-              msg_error("Error invoking fstat() on followed file",
-                        evt_tag_errno("error", errno),
-                        NULL);
-              goto reschedule;
-            }
-        }
-
-      msg_trace("log_reader_fd_check",
-                evt_tag_int("pos", pos),
-                evt_tag_int("size", st.st_size),
-                NULL);
-
-      if (pos < st.st_size)
-        {
-          /* we have data to read */
-          log_reader_io_process_input(s);
-          return;
-        }
-      else if (pos == st.st_size)
-        {
-          /* we are at EOF */
-          log_pipe_notify(self->control, &self->super.super, NC_FILE_EOF, self);
-        }
-      else if (pos > st.st_size)
-        {
-          /* the last known position is larger than the current size of the file. it got truncated. Restart from the beginning. */
-          log_pipe_notify(self->control, &self->super.super, NC_FILE_MOVED, self);
-
-          /* we may be freed by the time the notification above returns */
-          return;
+          log_reader_work_perform(s);
+          log_reader_work_finished(s);
         }
     }
-
-  if (self->follow_filename)
-    {
-      if (stat(self->follow_filename, &followed_st) != -1)
-        {
-          if (fd < 0 || (st.st_ino != followed_st.st_ino && followed_st.st_size > 0))
-            {
-              msg_trace("log_reader_fd_check file moved eof",
-                        evt_tag_int("pos", pos),
-                        evt_tag_int("size", followed_st.st_size),
-                        evt_tag_str("follow_filename", self->follow_filename),
-                        NULL);
-              /* file was moved and we are at EOF, follow the new file */
-              log_pipe_notify(self->control, &self->super.super, NC_FILE_MOVED, self);
-              /* we may be freed by the time the notification above returns */
-              return;
-            }
-        }
-      else
-        {
-          msg_verbose("Follow mode file still does not exist",
-                      evt_tag_str("filename", self->follow_filename),
-                      NULL);
-        }
-    }
- reschedule:
-  log_reader_update_watches(self);
 }
 
 static void
 log_reader_init_watches(LogReader *self)
 {
-  gint fd;
-  GIOCondition cond;
-
-  log_proto_prepare(self->proto, &fd, &cond);
-
-  IV_FD_INIT(&self->fd_watch);
-  self->fd_watch.cookie = self;
-
-  IV_TIMER_INIT(&self->follow_timer);
-  self->follow_timer.cookie = self;
-  self->follow_timer.handler = log_reader_io_follow_file;
-
   IV_TASK_INIT(&self->restart_task);
   self->restart_task.cookie = self;
   self->restart_task.handler = log_reader_io_process_input;
@@ -319,165 +208,84 @@ log_reader_init_watches(LogReader *self)
   self->io_job.completion = (void (*)(void *)) log_reader_work_finished;
 }
 
-/* NOTE: the return value is only used during initialization, and it is not
- * expected that it'd change once it returns success */
-static gboolean
-log_reader_start_watches(LogReader *self)
-{
-  gint fd;
-  GIOCondition cond;
-
-  log_proto_prepare(self->proto, &fd, &cond);
-
-  if (self->pollable_state < 0 && fd >= 0)
-    self->pollable_state = iv_fd_pollable(fd);
-
-  if (self->options->follow_freq > 0)
-    {
-      /* follow freq specified (only the file source does that, go into timed polling */
-
-      /* NOTE: the fd may not be set here, as it may not have been opened yet */
-      iv_timer_register(&self->follow_timer);
-    }
-  else if (fd < 0)
-    {
-      msg_error("In order to poll non-yet-existing files, follow_freq() must be set",
-                NULL);
-      return FALSE;
-    }
-  else if (self->pollable_state > 0)
-    {
-      /* we have an FD, it is possible to poll it, register it  */
-      self->fd_watch.fd = fd;
-      iv_fd_register(&self->fd_watch);
-    }
-  else
-    {
-      msg_error("Unable to determine how to monitor this fd, follow_freq() not set and it is not possible to poll it with the current ivykis polling method, try changing IV_EXCLUDE_POLL_METHOD environment variable",
-                evt_tag_int("fd", fd),
-                NULL);
-      return FALSE;
-    }
-
-  log_reader_update_watches(self);
-  return TRUE;
-}
-
-
 static void
 log_reader_stop_watches(LogReader *self)
 {
-  if (iv_fd_registered(&self->fd_watch))
-    iv_fd_unregister(&self->fd_watch);
-  if (iv_timer_registered(&self->follow_timer))
-    iv_timer_unregister(&self->follow_timer);
-  if (iv_task_registered(&self->restart_task))
-    iv_task_unregister(&self->restart_task);
+  if (self->watches_running)
+    {
+      poll_events_stop_watches(self->poll_events);
+
+      if (iv_task_registered(&self->restart_task))
+        iv_task_unregister(&self->restart_task);
+      self->watches_running = FALSE;
+    }
+}
+
+static void
+log_reader_start_watches_if_stopped(LogReader *self)
+{
+  if (!self->watches_running)
+    {
+      poll_events_start_watches(self->poll_events);
+      self->watches_running = TRUE;
+    }
+}
+
+static gboolean
+log_reader_is_opened(LogReader *self)
+{
+  return self->proto && self->poll_events;
+}
+
+static void
+log_reader_suspend_until_awoken(LogReader *self)
+{
+  self->immediate_check = FALSE;
+  poll_events_suspend_watches(self->poll_events);
+  self->suspended = TRUE;
+}
+
+static void
+log_reader_force_check_in_next_poll(LogReader *self)
+{
+  self->immediate_check = FALSE;
+  poll_events_suspend_watches(self->poll_events);
+  self->suspended = FALSE;
+
+  if (!iv_task_registered(&self->restart_task))
+    {
+      iv_task_register(&self->restart_task);
+    }
 }
 
 static void
 log_reader_update_watches(LogReader *self)
 {
-  gint fd;
   GIOCondition cond;
   gboolean free_to_send;
+  gboolean line_is_ready_in_buffer;
 
   main_loop_assert_main_thread();
-  
-  self->suspended = FALSE;
+
+  if (!log_reader_is_opened(self))
+    return;
+
+  log_reader_start_watches_if_stopped(self);
+
   free_to_send = log_source_free_to_send(&self->super);
-  if (!free_to_send ||
-      self->immediate_check ||
-      log_proto_prepare(self->proto, &fd, &cond))
+  if (!free_to_send)
     {
-      /* we disable all I/O related callbacks here because we either know
-       * that we can continue (e.g.  immediate_check == TRUE) or we know
-       * that we can't continue even if data would be available (e.g.
-       * free_to_send == FALSE)
-       */
-
-      self->immediate_check = FALSE;
-      if (iv_fd_registered(&self->fd_watch))
-        {
-          iv_fd_set_handler_in(&self->fd_watch, NULL);
-          iv_fd_set_handler_out(&self->fd_watch, NULL);
-
-          /* we disable the error handler too, as it might be
-           * triggered even when we don't want to read data
-           * (e.g. log_source_free_to_send() is FALSE).
-           *
-           * And at least on Linux, it may happen that EPOLLERR is
-           * set, while there's still data in the socket buffer.  Thus
-           * in reaction to an EPOLLERR, we could possibly send
-           * further messages without validating the
-           * log_source_free_to_send() would allow us to, potentially
-           * overflowing our window (and causing a failed assertion in
-           * log_source_queue().
-           */
-
-          iv_fd_set_handler_err(&self->fd_watch, NULL);
-        }
-
-      if (iv_timer_registered(&self->follow_timer))
-        iv_timer_unregister(&self->follow_timer);
-
-      if (free_to_send)
-        {
-          /* we have data in our input buffer, we need to start working
-           * on it immediately, without waiting for I/O events */
-          if (!iv_task_registered(&self->restart_task))
-            {
-              iv_task_register(&self->restart_task);
-            }
-        }
-      else
-        {
-          self->suspended = TRUE;
-        }
+      log_reader_suspend_until_awoken(self);
       return;
     }
 
-  if (iv_fd_registered(&self->fd_watch))
+  line_is_ready_in_buffer = log_proto_server_prepare(self->proto, &cond);
+  if (self->immediate_check || line_is_ready_in_buffer)
     {
-      /* this branch is executed when our fd is connected to a non-file
-       * source (e.g. TCP, UDP socket). We set up I/O callbacks here.
-       * files cannot be polled using epoll, as it causes an I/O error
-       * (thus abort in ivykis).
-       */
-      if (cond & G_IO_IN)
-        iv_fd_set_handler_in(&self->fd_watch, log_reader_io_process_input);
-      else
-        iv_fd_set_handler_in(&self->fd_watch, NULL);
-
-      if (cond & G_IO_OUT)
-        iv_fd_set_handler_out(&self->fd_watch, log_reader_io_process_input);
-      else
-        iv_fd_set_handler_out(&self->fd_watch, NULL);
-
-      if (cond & (G_IO_IN + G_IO_OUT))
-        iv_fd_set_handler_err(&self->fd_watch, log_reader_io_process_input);
-      else
-        iv_fd_set_handler_err(&self->fd_watch, NULL);
-
+      log_reader_force_check_in_next_poll(self);
+      return;
     }
-  else
-    {
-      if (self->options->follow_freq > 0)
-        {
-          if (iv_timer_registered(&self->follow_timer))
-            iv_timer_unregister(&self->follow_timer);
-          iv_validate_now();
-          self->follow_timer.expires = iv_now;
-          timespec_add_msec(&self->follow_timer.expires, self->options->follow_freq);
-          iv_timer_register(&self->follow_timer);
-        }
-      else
-        {
-          /* NOTE: we don't need to unregister the timer here as follow_freq
-           * never changes during runtime, thus if ever it was registered that
-           * also means that we go into the if branch above. */
-        }
-    }
+  poll_events_update_watches(self->poll_events, cond);
 }
 
 static gboolean
@@ -535,7 +343,7 @@ log_reader_fetch_log(LogReader *self)
        * protocol, it resets may_read to FALSE after the first read was issued.
        */
 
-      status = log_proto_fetch(self->proto, &msg, &msg_len, &sa, &may_read);
+      status = log_proto_server_fetch(self->proto, &msg, &msg_len, &sa, &may_read);
       switch (status)
         {
         case LPS_EOF:
@@ -561,20 +369,20 @@ log_reader_fetch_log(LogReader *self)
           if (!log_reader_handle_line(self, msg, msg_len, sa))
             {
               /* window is full, don't generate further messages */
-              log_proto_queued(self->proto);
+              log_proto_server_queued(self->proto);
               g_sockaddr_unref(sa);
               break;
             }
         }
-      log_proto_queued(self->proto);
+      log_proto_server_queued(self->proto);
       g_sockaddr_unref(sa);
     }
   if (self->options->flags & LR_PREEMPT)
     {
-      if (log_proto_is_preemptable(self->proto))
+      if (log_proto_server_is_preemptable(self->proto))
         {
           self->waiting_for_preemption = FALSE;
-          log_pipe_notify(self->control, &self->super.super, NC_FILE_SKIP, self);
+          log_pipe_notify(self->control, NC_FILE_SKIP, self);
         }
       else
         {
@@ -593,28 +401,10 @@ log_reader_init(LogPipe *s)
 
   if (!log_source_init(s))
     return FALSE;
-  /* check for new data */
-  if (self->options->padding)
-    {
-      if (self->options->msg_size < self->options->padding)
-	{
-	  msg_error("Buffer is too small to hold padding number of bytes",
-	            evt_tag_int("padding", self->options->padding),
-                    evt_tag_int("msg_size", self->options->msg_size),
-                    NULL);
-	  return FALSE;
-	}
-    }
-  if (self->options->text_encoding)
-    {
-      if (!log_proto_set_encoding(self->proto, self->options->text_encoding))
-        {
-          msg_error("Unknown character set name specified",
-                    evt_tag_str("encoding", self->options->text_encoding),
-                    NULL);
-          return FALSE;
-        }
-    }
+
+  if (!log_proto_server_validate_options(self->proto))
+    return FALSE;
+
   if (!self->options->parse_options.format_handler)
     {
       msg_error("Unknown format plugin specified",
@@ -622,8 +412,10 @@ log_reader_init(LogPipe *s)
                 NULL);
       return FALSE;
     }
-  if (!log_reader_start_watches(self))
-    return FALSE;
+
+  poll_events_set_callback(self->poll_events, log_reader_io_process_input, self);
+
+  log_reader_update_watches(self);
   iv_event_register(&self->schedule_wakeup);
 
   return TRUE;
@@ -648,18 +440,24 @@ static void
 log_reader_free(LogPipe *s)
 {
   LogReader *self = (LogReader *) s;
-  
-  /* when this function is called the source is already removed, because it
-     holds a reference to this reader */
-  log_proto_free(self->proto);
+
+  if (self->proto)
+    {
+      log_proto_server_free(self->proto);
+      self->proto = NULL;
+    }
+  if (self->poll_events)
+    poll_events_free(self->poll_events);
+
   log_pipe_unref(self->control);
   g_sockaddr_unref(self->peer_addr);
-  g_free(self->follow_filename);
+  g_static_mutex_free(&self->pending_proto_lock);
+  g_cond_free(self->pending_proto_cond);
   log_source_free(s);
 }
 
 void
-log_reader_set_options(LogPipe *s, LogPipe *control, LogReaderOptions *options, gint stats_level, gint stats_source, const gchar *stats_id, const gchar *stats_instance)
+log_reader_set_options(LogReader *s, LogPipe *control, LogReaderOptions *options, gint stats_level, gint stats_source, const gchar *stats_id, const gchar *stats_instance)
 {
   LogReader *self = (LogReader *) s;
 
@@ -670,26 +468,67 @@ log_reader_set_options(LogPipe *s, LogPipe *control, LogReaderOptions *options, 
   self->control = control;
 
   self->options = options;
+  if (self->proto)
+    log_proto_server_set_options(self->proto, &self->options->proto_options.super);
+}
+
+/* run in the main thread in reaction to a log_reader_reopen to change
+ * the source LogProtoServer instance. It needs to be ran in the main
+ * thread as it reregisters the watches associated with the main
+ * thread. */
+void
+log_reader_reopen_deferred(gpointer s)
+{
+  gpointer *args = (gpointer *) s;
+  LogReader *self = args[0];
+  LogProtoServer *proto = args[1];
+  PollEvents *poll_events = args[2];
+
+  if (self->io_job.working)
+    {
+      self->pending_proto = proto;
+      self->pending_poll_events = poll_events;
+      self->pending_proto_present = TRUE;
+      return;
+    }
+
+  log_reader_stop_watches(self);
+  log_reader_apply_proto_and_poll_events(self, proto, poll_events);
+  log_reader_update_watches(self);
 }
 
 void
-log_reader_set_follow_filename(LogPipe *s, const gchar *follow_filename)
+log_reader_reopen(LogReader *self, LogProtoServer *proto, PollEvents *poll_events)
 {
-  /* try to free */
-  LogReader *self = (LogReader *) s;
-  g_free(self->follow_filename);
-  self->follow_filename = g_strdup(follow_filename);
+  gpointer args[] = { self, proto, poll_events };
+
+  log_source_deinit(&self->super.super);
+
+  main_loop_call((MainLoopTaskFunc) log_reader_reopen_deferred, args, TRUE);
+
+  if (!main_loop_is_main_thread())
+    {
+      g_static_mutex_lock(&self->pending_proto_lock);
+      while (self->pending_proto_present)
+        {
+          g_cond_wait(self->pending_proto_cond, g_static_mutex_get_mutex(&self->pending_proto_lock));
+        }
+      g_static_mutex_unlock(&self->pending_proto_lock);
+    }
+  log_source_init(&self->super.super);
 }
 
 void
-log_reader_set_peer_addr(LogPipe *s, GSockAddr *peer_addr)
+log_reader_set_peer_addr(LogReader *s, GSockAddr *peer_addr)
 {
   LogReader *self = (LogReader *) s;
+
+  g_sockaddr_unref(self->peer_addr);
   self->peer_addr = g_sockaddr_ref(peer_addr);
 }
 
-LogPipe *
-log_reader_new(LogProto *proto)
+LogReader *
+log_reader_new(void)
 {
   LogReader *self = g_new0(LogReader, 1);
 
@@ -698,15 +537,15 @@ log_reader_new(LogProto *proto)
   self->super.super.deinit = log_reader_deinit;
   self->super.super.free_fn = log_reader_free;
   self->super.wakeup = log_reader_wakeup;
-  self->proto = proto;
   self->immediate_check = FALSE;
-  self->pollable_state = -1;
   log_reader_init_watches(self);
-  return &self->super.super;
+  g_static_mutex_init(&self->pending_proto_lock);
+  self->pending_proto_cond = g_cond_new();
+  return self;
 }
 
 void 
-log_reader_set_immediate_check(LogPipe *s)
+log_reader_set_immediate_check(LogReader *s)
 {
   LogReader *self = (LogReader*) s;
   
@@ -717,18 +556,15 @@ void
 log_reader_options_defaults(LogReaderOptions *options)
 {
   log_source_options_defaults(&options->super);
+  log_proto_server_options_defaults(&options->proto_options.super);
   msg_format_options_defaults(&options->parse_options);
-  options->padding = 0;
   options->fetch_limit = 10;
-  options->msg_size = -1;
-  options->follow_freq = -1; 
-  options->text_encoding = NULL;
-  if (configuration && configuration->version < 0x0300)
+  if (configuration && cfg_is_config_version_older(configuration, 0x0300))
     {
       static gboolean warned;
       if (!warned)
         {
-          msg_warning("WARNING: input: sources do not remove new-line characters from messages by default in version 3.0, please add 'no-multi-line' flag to your configuration if you want to retain this functionality",
+          msg_warning("WARNING: input: sources do not remove new-line characters from messages by default from " VERSION_3_0 ", please add 'no-multi-line' flag to your configuration if you want to retain this functionality",
                       NULL);
           warned = TRUE;
         }
@@ -737,16 +573,17 @@ log_reader_options_defaults(LogReaderOptions *options)
 }
 
 /*
- * NOTE: options_init and options_destroy are a bit weird, because their
- * invocation is not completely symmetric:
+ * NOTE: _init needs to be idempotent when called multiple times w/o invoking _destroy
  *
+ * Rationale:
  *   - init is called from driver init (e.g. affile_sd_init), 
  *   - destroy is called from driver free method (e.g. affile_sd_free, NOT affile_sd_deinit)
  *
  * The reason:
  *   - when initializing the reloaded configuration fails for some reason,
  *     we have to fall back to the old configuration, thus we cannot dump
- *     the information stored in the Options structure.
+ *     the information stored in the Options structure at deinit time, but
+ *     have to recover it when the old configuration is initialized.
  *
  * For the reasons above, init and destroy behave the following way:
  *
@@ -754,66 +591,21 @@ log_reader_options_defaults(LogReaderOptions *options)
  *     memory, and without loss of information
  *   - destroy is only called once, when the options are indeed to be destroyed
  *
- * As init allocates memory, it has to take care about freeing memory
- * allocated by the previous init call (or it has to reuse those).
- *   
+ * Also important to note is that when init is called multiple times, the
+ * GlobalConfig reference is the same, this means that it is enough to
+ * remember whether init was called already and return w/o doing anything in
+ * that case, which is actually how idempotency is implemented here.
  */
 void
 log_reader_options_init(LogReaderOptions *options, GlobalConfig *cfg, const gchar *group_name)
 {
-  gchar *recv_time_zone;
-  TimeZoneInfo *recv_time_zone_info;
-  gchar *host_override, *program_override, *text_encoding, *format;
-  MsgFormatHandler *format_handler;
-  GArray *tags;
-
-  recv_time_zone = options->parse_options.recv_time_zone;
-  options->parse_options.recv_time_zone = NULL;
-  recv_time_zone_info = options->parse_options.recv_time_zone_info;
-  options->parse_options.recv_time_zone_info = NULL;
-  text_encoding = options->text_encoding;
-  options->text_encoding = NULL;
-
-  /* NOTE: having to save super's variables is a crude hack, but I know of
-   * no other way to do it in the scheme described above. Be sure that you
-   * know what you are doing when you modify this code. */
-  
-  tags = options->super.tags;
-  options->super.tags = NULL;
-  host_override = options->super.host_override;
-  options->super.host_override = NULL;
-  program_override = options->super.program_override;
-  options->super.program_override = NULL;
-
-  format = options->parse_options.format;
-  options->parse_options.format = NULL;
-  format_handler = options->parse_options.format_handler;
-  options->parse_options.format_handler = NULL;
-
-  /***********************************************************************
-   * PLEASE NOTE THIS. please read the comment at the top of the function
-   ***********************************************************************/
-  log_reader_options_destroy(options);
-
-  options->parse_options.format = format;
-  options->parse_options.format_handler = format_handler;
-
-  options->super.host_override = host_override;
-  options->super.program_override = program_override;
-  options->super.tags = tags;
-  
-  options->parse_options.recv_time_zone = recv_time_zone;
-  options->parse_options.recv_time_zone_info = recv_time_zone_info;
-  options->text_encoding = text_encoding;
-  options->parse_options.format = format;
+  if (options->initialized)
+    return;
 
   log_source_options_init(&options->super, cfg, group_name);
+  log_proto_server_options_init(&options->proto_options.super, cfg);
   msg_format_options_init(&options->parse_options, cfg);
 
-  if (options->msg_size == -1)
-    options->msg_size = cfg->log_msg_size;
-  if (options->follow_freq == -1)
-    options->follow_freq = cfg->follow_freq;
   if (options->check_hostname == -1)
     options->check_hostname = cfg->check_hostname;
   if (options->check_hostname)
@@ -827,38 +619,25 @@ log_reader_options_init(LogReaderOptions *options, GlobalConfig *cfg, const gcha
       else
         options->parse_options.default_pri = LOG_USER | LOG_NOTICE;
     }
-  if (options->text_encoding)
+  if (options->proto_options.super.encoding)
     options->parse_options.flags |= LP_ASSUME_UTF8;
   if (cfg->threaded)
     options->flags |= LR_THREADED;
+  options->initialized = TRUE;
 }
 
 void
 log_reader_options_destroy(LogReaderOptions *options)
 {
   log_source_options_destroy(&options->super);
+  log_proto_server_options_destroy(&options->proto_options.super);
   msg_format_options_destroy(&options->parse_options);
-  if (options->text_encoding)
-    {
-      g_free(options->text_encoding);
-      options->text_encoding = NULL;
-    }
+  options->initialized = FALSE;
 }
 
 CfgFlagHandler log_reader_flag_handlers[] =
 {
-  /* LogParseOptions */
   /* NOTE: underscores are automatically converted to dashes */
-  { "no-parse",                   CFH_SET, offsetof(LogReaderOptions, parse_options.flags), LP_NOPARSE },
-  { "check-hostname",             CFH_SET, offsetof(LogReaderOptions, parse_options.flags), LP_CHECK_HOSTNAME },
-  { "syslog-protocol",            CFH_SET, offsetof(LogReaderOptions, parse_options.flags), LP_SYSLOG_PROTOCOL },
-  { "assume-utf8",                CFH_SET, offsetof(LogReaderOptions, parse_options.flags), LP_ASSUME_UTF8 },
-  { "validate-utf8",              CFH_SET, offsetof(LogReaderOptions, parse_options.flags), LP_VALIDATE_UTF8 },
-  { "no-multi-line",              CFH_SET, offsetof(LogReaderOptions, parse_options.flags), LP_NO_MULTI_LINE },
-  { "store-legacy-msghdr",        CFH_SET, offsetof(LogReaderOptions, parse_options.flags), LP_STORE_LEGACY_MSGHDR },
-  { "dont-store-legacy-msghdr", CFH_CLEAR, offsetof(LogReaderOptions, parse_options.flags), LP_STORE_LEGACY_MSGHDR },
-  { "expect-hostname",            CFH_SET, offsetof(LogReaderOptions, parse_options.flags), LP_EXPECT_HOSTNAME },
-  { "no-hostname",              CFH_CLEAR, offsetof(LogReaderOptions, parse_options.flags), LP_EXPECT_HOSTNAME },
 
   /* LogReaderOptions */
   { "kernel",                     CFH_SET, offsetof(LogReaderOptions, flags),               LR_KERNEL },
@@ -870,5 +649,7 @@ CfgFlagHandler log_reader_flag_handlers[] =
 gboolean
 log_reader_options_process_flag(LogReaderOptions *options, gchar *flag)
 {
-  return cfg_process_flag(log_reader_flag_handlers, options, flag);
+  if (!msg_format_options_process_flag(&options->parse_options, flag))
+    return cfg_process_flag(log_reader_flag_handlers, options, flag);
+  return TRUE;
 }

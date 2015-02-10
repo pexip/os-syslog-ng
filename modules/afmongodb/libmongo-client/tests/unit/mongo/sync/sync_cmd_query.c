@@ -77,7 +77,7 @@ test_mongo_sync_cmd_query (void)
    */
   c = mongo_sync_connect (config.primary_host, config.primary_port, TRUE);
   p = mongo_wire_cmd_query (12345, config.ns, MONGO_WIRE_FLAG_QUERY_SLAVE_OK,
-			    0, 1, s, NULL);
+                            0, 1, s, NULL);
   mongo_packet_send ((mongo_connection *)c, p);
   mongo_wire_packet_free (p);
 

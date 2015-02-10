@@ -34,7 +34,7 @@ test_mongo_sync_cursor_get_data (void)
   b = mongo_sync_cursor_get_data (c);
   ok (b != NULL,
       "mongo_sync_cursor_get_data() works");
-  
+
   c->offset = 5;
 
   errno = 0;

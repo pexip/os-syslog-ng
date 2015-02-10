@@ -11,7 +11,7 @@ test_mongo_sync_cmd_ping_net_secondary (void)
   mongo_sync_connection *c;
 
   skip (!config.secondary_host, 2,
-	"Secondary server not configured");
+        "Secondary server not configured");
 
   c = mongo_sync_connect (config.secondary_host, config.secondary_port, TRUE);
 
@@ -65,13 +65,13 @@ test_mongo_sync_cmd_ping (void)
   ok (mongo_sync_cmd_ping (NULL) == FALSE,
       "mongo_sync_cmd_ping(NULL) returns FALSE");
   cmp_ok (errno, "==", ENOTCONN,
-	  "errno is set to ENOTCONN");
+          "errno is set to ENOTCONN");
 
   errno = 0;
   ok (mongo_sync_cmd_ping (c) == FALSE,
       "Pinging a bogus connection fails");
   cmp_ok (errno, "!=", 0,
-	  "errno is not 0");
+          "errno is not 0");
 
   mongo_sync_disconnect (c);
 

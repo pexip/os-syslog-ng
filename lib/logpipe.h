@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -29,6 +29,7 @@
 #include "logmsg.h"
 #include "cfg.h"
 #include "atomic.h"
+#include "messages.h"
 
 /* notify code values */
 #define NC_CLOSE       1
@@ -46,12 +47,18 @@
 /* log statement flags that are copied to the head of a branch */
 #define PIF_BRANCH_FINAL      0x0004
 #define PIF_BRANCH_FALLBACK   0x0008
+#define PIF_BRANCH_PROPERTIES (PIF_BRANCH_FINAL + PIF_BRANCH_FALLBACK)
 
 /* branch starting with this pipe wants hard flow control */
 #define PIF_HARD_FLOW_CONTROL 0x0010
 
-/* branch starting with this pipe needs a cloned message because it modifies it */
-#define PIF_CLONE             0x0040
+/* this pipe is a source for messages, it is not meant to be used to
+ * forward messages, syslog-ng will only use these pipes for the
+ * left-hand side of the processing graph, e.g. no other pipes may be
+ * sending messages to these pipes and these are expected to generate
+ * messages "automatically". */
+
+#define PIF_SOURCE            0x0020
 
 /* private flags range, to be used by other LogPipe instances for their own purposes */
 
@@ -198,13 +205,12 @@ struct _LogPathOptions
 
 #define LOG_PATH_OPTIONS_INIT { TRUE, FALSE, NULL }
 
-typedef struct _LogPipe LogPipe;
-
 struct _LogPipe
 {
   GAtomicCounter ref_cnt;
   gint32 flags;
   GlobalConfig *cfg;
+  LogExprNode *expr_node;
   LogPipe *pipe_next;
 
   /* user_data pointer of the "queue" method in case it is overridden
@@ -213,15 +219,23 @@ struct _LogPipe
   void (*queue)(LogPipe *self, LogMessage *msg, const LogPathOptions *path_options, gpointer user_data);
   gboolean (*init)(LogPipe *self);
   gboolean (*deinit)(LogPipe *self);
+
+  /* clone this pipe when used in multiple locations in the processing
+   * pipe-line. If it contains state, it should behave as if it was
+   * the same instance, otherwise it can be a copy.
+   */
+  LogPipe *(*clone)(LogPipe *self);
+
   void (*free_fn)(LogPipe *self);
-  void (*notify)(LogPipe *self, struct _LogPipe *sender, gint notify_code, gpointer user_data);
+  void (*notify)(LogPipe *self, gint notify_code, gpointer user_data);
 };
 
 
 LogPipe *log_pipe_ref(LogPipe *self);
 void log_pipe_unref(LogPipe *self);
+LogPipe *log_pipe_new(void);
 void log_pipe_init_instance(LogPipe *self);
-void log_pipe_forward_notify(LogPipe *self, LogPipe *sender, gint notify_code, gpointer user_data);
+void log_pipe_forward_notify(LogPipe *self, gint notify_code, gpointer user_data);
 
 
 static inline GlobalConfig *
@@ -283,6 +297,24 @@ log_pipe_forward_msg(LogPipe *self, LogMessage *msg, const LogPathOptions *path_
 static inline void
 log_pipe_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options)
 {
+  g_assert((s->flags & PIF_INITIALIZED) != 0);
+
+  if (G_UNLIKELY(s->flags & (PIF_HARD_FLOW_CONTROL)))
+    {
+      LogPathOptions local_path_options = *path_options;
+
+      local_path_options.flow_control_requested = 1;
+      path_options = &local_path_options;
+      if (G_UNLIKELY(debug_flag))
+        {
+          gchar buf[32];
+
+          msg_debug("Requesting flow control",
+                    evt_tag_str("location", log_expr_node_format_location(s->expr_node, buf, sizeof(buf))),
+                    NULL);
+        }
+    }
+
   if (s->queue)
     {
       s->queue(s, msg, path_options, s->queue_data);
@@ -293,11 +325,19 @@ log_pipe_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options)
     }
 }
 
+static inline LogPipe *
+log_pipe_clone(LogPipe *self)
+{
+  if (self->clone)
+    return self->clone(self);
+  return NULL;
+}
+
 static inline void
-log_pipe_notify(LogPipe *s, LogPipe *sender, gint notify_code, gpointer user_data)
+log_pipe_notify(LogPipe *s, gint notify_code, gpointer user_data)
 {
   if (s->notify)
-    s->notify(s, sender, notify_code, user_data);
+    s->notify(s, notify_code, user_data);
 }
 
 static inline void

@@ -1,18 +1,18 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published
  * by the Free Software Foundation, or (at your option) any later version.
  *
- * This library is distributed in the hope that it will be useful,
+ * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  * As an additional exemption you are allowed to compile & link against the
@@ -31,11 +31,10 @@
 
 #include "csvparser.h"
 #include "cfg-parser.h"
+#include "cfg-grammar.h"
 #include "csvparser-grammar.h"
 #include "syslog-names.h"
 #include "messages.h"
-
-extern LogParser *last_parser;
 
 }
 
@@ -73,23 +72,6 @@ parser_expr_csv
           ')'					{ $$ = last_parser; }
         ;
 
-parser_column_opt
-        : parser_opt
-        | KW_COLUMNS '(' string_list ')'        { log_column_parser_set_columns((LogColumnParser *) last_parser, $3); }
-        ;
-
-parser_opt
-        : KW_TEMPLATE '(' string ')'            {
-                                                  LogTemplate *template;
-                                                  GError *error = NULL;
-
-						  template = cfg_check_inline_template(configuration, $3, &error);
-                                                  CHECK_ERROR(template != NULL, @3, "Error compiling template (%s)", error->message);
-                                                  log_parser_set_template(last_parser, template);
-                                                  free($3);
-                                                }
-        ;
-
 
 parser_csv_opts
         : parser_csv_opt parser_csv_opts
@@ -97,12 +79,12 @@ parser_csv_opts
         ;
 
 parser_csv_opt
-        : parser_column_opt
-        | KW_FLAGS '(' parser_csv_flags ')'     { log_csv_parser_set_flags((LogColumnParser *) last_parser, $3); }
+        : KW_FLAGS '(' parser_csv_flags ')'     { log_csv_parser_set_flags((LogColumnParser *) last_parser, $3); }
         | KW_DELIMITERS '(' string ')'          { log_csv_parser_set_delimiters((LogColumnParser *) last_parser, $3); free($3); }
         | KW_QUOTES '(' string ')'              { log_csv_parser_set_quotes((LogColumnParser *) last_parser, $3); free($3); }
         | KW_QUOTE_PAIRS '(' string ')'         { log_csv_parser_set_quote_pairs((LogColumnParser *) last_parser, $3); free($3); }
         | KW_NULL '(' string ')'                { log_csv_parser_set_null_value((LogColumnParser *) last_parser, $3); free($3); }
+        | parser_column_opt
         ;
 
 parser_csv_flags

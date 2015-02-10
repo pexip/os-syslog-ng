@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -50,7 +50,7 @@
  * "plugins" to drivers.  These plugins basically get a chance to override
  * LogDriver virtual methods, change their semantics and possibly rely on
  * the original behaviour too.  This way, functionalities that are present
- * in all destination drivers can easily shared, without having to recode
+ * in all destination drivers can easily be shared, without having to recode
  * the same stuff multiple times.
  *
  * Driver plugins are activated with the "attach" virtual method, which in
@@ -112,7 +112,9 @@ struct _LogDriver
   gchar *group;
   gchar *id;
   GList *plugins;
-  LogDriver *drv_next;
+
+  StatsCounterItem *processed_group_messages;
+
 };
 
 void log_driver_add_plugin(LogDriver *self, LogDriverPlugin *plugin);
@@ -130,20 +132,12 @@ typedef struct _LogSrcDriver LogSrcDriver;
 struct _LogSrcDriver
 {
   LogDriver super;
+  gint group_len;
+  StatsCounterItem *received_global_messages;
 };
 
-static inline gboolean
-log_src_driver_init_method(LogPipe *s)
-{
-  return log_driver_init_method(s);
-}
-
-static inline gboolean
-log_src_driver_deinit_method(LogPipe *s)
-{
-  return log_driver_deinit_method(s);
-}
-
+gboolean log_src_driver_init_method(LogPipe *s);
+gboolean log_src_driver_deinit_method(LogPipe *s);
 void log_src_driver_init_instance(LogSrcDriver *self);
 void log_src_driver_free(LogPipe *s);
 
@@ -166,8 +160,10 @@ struct _LogDestDriver
 
   gint log_fifo_size;
   gint throttle;
+  StatsCounterItem *queued_global_messages;
 };
 
+/* returns a reference */
 static inline LogQueue *
 log_dest_driver_acquire_queue(LogDestDriver *self, gchar *persist_name)
 {
@@ -182,6 +178,7 @@ log_dest_driver_acquire_queue(LogDestDriver *self, gchar *persist_name)
   return q;
 }
 
+/* consumes the reference in @q */
 static inline void
 log_dest_driver_release_queue(LogDestDriver *self, LogQueue *q)
 {
@@ -189,17 +186,16 @@ log_dest_driver_release_queue(LogDestDriver *self, LogQueue *q)
     {
       self->queues = g_list_remove(self->queues, q);
 
+      /* this drops the reference passed by the caller */
       self->release_queue(self, q, self->release_queue_data);
+      /* this drops the reference stored on the list */
+      log_queue_unref(q);
     }
 }
 
-static inline gboolean
-log_dest_driver_init_method(LogPipe *s)
-{
-  return log_driver_init_method(s);
-}
-
+gboolean log_dest_driver_init_method(LogPipe *s);
 gboolean log_dest_driver_deinit_method(LogPipe *s);
+void log_dest_driver_queue_method(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options, gpointer user_data);
 
 void log_dest_driver_init_instance(LogDestDriver *self);
 void log_dest_driver_free(LogPipe *s);

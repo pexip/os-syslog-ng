@@ -12,10 +12,10 @@ test_mongo_sync_cmd_delete_net_secondary (void)
   GList *l;
 
   skip (!config.secondary_host, 2,
-	"Secondary server not configured");
+        "Secondary server not configured");
 
   conn = mongo_sync_connect (config.primary_host, config.primary_port,
-			     TRUE);
+                             TRUE);
 
   b = bson_new ();
   bson_append_string (b, "unit-test", __FILE__, -1);
@@ -26,7 +26,7 @@ test_mongo_sync_cmd_delete_net_secondary (void)
   mongo_sync_disconnect (conn);
 
   conn = mongo_sync_connect (config.secondary_host, config.secondary_port,
-			     TRUE);
+                             TRUE);
   mongo_sync_conn_set_auto_reconnect (conn, TRUE);
 
   ok (mongo_sync_cmd_delete (conn, config.ns, 0, b) == TRUE,
@@ -34,12 +34,12 @@ test_mongo_sync_cmd_delete_net_secondary (void)
   mongo_sync_disconnect (conn);
 
   conn = mongo_sync_connect (config.primary_host, config.primary_port,
-			     TRUE);
+                             TRUE);
   mongo_sync_cmd_insert (conn, config.ns, b, NULL);
   mongo_sync_disconnect (conn);
 
   conn = mongo_sync_connect (config.secondary_host, config.secondary_port,
-			     TRUE);
+                             TRUE);
   mongo_sync_conn_set_auto_reconnect (conn, TRUE);
 
   shutdown (conn->super.fd, SHUT_RDWR);

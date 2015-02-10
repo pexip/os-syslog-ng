@@ -1,18 +1,18 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2013 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published
  * by the Free Software Foundation, or (at your option) any later version.
  *
- * This library is distributed in the hope that it will be useful,
+ * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  * As an additional exemption you are allowed to compile & link against the
@@ -24,10 +24,11 @@
 #include "patterndb.h"
 #include "logmsg.h"
 #include "tags.h"
-#include "templates.h"
+#include "template/templates.h"
 #include "compat.h"
 #include "misc.h"
-#include "filter-expr-parser.h"
+#include "filter/filter-expr-parser.h"
+#include "logpipe.h"
 #include "patterndb-int.h"
 
 #include <string.h>
@@ -37,6 +38,7 @@
 
 static NVHandle class_handle = 0;
 static NVHandle rule_id_handle = 0;
+static NVHandle context_id_handle = 0;
 static LogTagId system_tag;
 static LogTagId unknown_tag;
 
@@ -388,6 +390,19 @@ pdb_action_set_trigger(PDBAction *self, const gchar *trigger, GError **error)
     g_set_error(error, 0, 1, "Unknown trigger type: %s", trigger);
 }
 
+void
+pdb_action_set_inheritance(PDBAction *self, const gchar *inherit_properties, GError **error)
+{
+  if (inherit_properties[0] == 'T' || inherit_properties[0] == 't' ||
+      inherit_properties[0] == '1')
+    self->inherit_properties = TRUE;
+  else if (inherit_properties[0] == 'F' || inherit_properties[0] == 'f' ||
+           inherit_properties[0] == '0')
+    self->inherit_properties = FALSE;
+  else
+    g_set_error(error, 0, 1, "Unknown inheritance type: %s", inherit_properties);
+}
+
 PDBAction *
 pdb_action_new(gint id)
 {
@@ -543,16 +558,27 @@ pdb_rule_run_actions(PDBRule *self, gint trigger, PatternDB *db, PDBContext *con
         {
           LogMessage *genmsg;
 
-          if ((!action->condition || filter_expr_eval_with_context(action->condition, (LogMessage **) context->messages->pdata, context->messages->len)) && pdb_rule_check_rate_limit(self, db, action, msg, buffer))
+          if ((!action->condition ||
+               (!context || filter_expr_eval_with_context(action->condition, (LogMessage **) context->messages->pdata, context->messages->len))) &&
+              pdb_rule_check_rate_limit(self, db, action, msg, buffer))
             {
               switch (action->content_type)
                 {
                 case RAC_NONE:
                   break;
                 case RAC_MESSAGE:
-                  genmsg = log_msg_new_empty();
-                  genmsg->flags |= LF_LOCAL;
-                  genmsg->timestamps[LM_TS_STAMP] = msg->timestamps[LM_TS_STAMP];
+                  if (action->inherit_properties)
+                    {
+                      LogPathOptions path_options = LOG_PATH_OPTIONS_INIT;
+                      path_options.ack_needed = FALSE;
+                      genmsg = log_msg_clone_cow(msg, &path_options);
+                    }
+                  else
+                    {
+                      genmsg = log_msg_new_empty();
+                      genmsg->flags |= LF_LOCAL;
+                      genmsg->timestamps[LM_TS_STAMP] = msg->timestamps[LM_TS_STAMP];
+                    }
                   if (context)
                     {
                       switch (context->key.scope)
@@ -764,7 +790,14 @@ typedef struct _PDBLoader
   gchar *test_value_name;
   GlobalConfig *cfg;
   gint action_id;
+  GArray *program_patterns;
 } PDBLoader;
+
+typedef struct _PDBProgramPattern
+{
+  gchar *pattern;
+  PDBRule *rule;
+} PDBProgramPattern;
 
 void
 pdb_loader_start_element(GMarkupParseContext *context, const gchar *element_name, const gchar **attribute_names,
@@ -783,6 +816,7 @@ pdb_loader_start_element(GMarkupParseContext *context, const gchar *element_name
 
       state->in_ruleset = TRUE;
       state->first_program = TRUE;
+      state->program_patterns = g_array_new(0, 0, sizeof(PDBProgramPattern));
     }
   else if (strcmp(element_name, "example") == 0)
     {
@@ -932,6 +966,11 @@ pdb_loader_start_element(GMarkupParseContext *context, const gchar *element_name
     }
   else if (strcmp(element_name, "message") == 0)
     {
+      for (i = 0; attribute_names[i]; i++)
+        {
+          if (strcmp(attribute_names[i], "inherit-properties") == 0)
+            pdb_action_set_inheritance(state->current_action, attribute_values[i], error);
+        }
       if (!state->in_action)
         {
           *error = g_error_new(1, 0, "Unexpected <message> element, it must be inside an action");
@@ -946,6 +985,9 @@ void
 pdb_loader_end_element(GMarkupParseContext *context, const gchar *element_name, gpointer user_data, GError **error)
 {
   PDBLoader *state = (PDBLoader *) user_data;
+  PDBProgramPattern *program_pattern;
+  PDBProgram *program;
+  int i;
 
   if (strcmp(element_name, "ruleset") == 0)
     {
@@ -955,8 +997,25 @@ pdb_loader_end_element(GMarkupParseContext *context, const gchar *element_name, 
           return;
         }
 
+      program = (state->current_program ? state->current_program : state->root_program);
+
+      /* Copy stored rules into current program */
+      for (i = 0; i < state->program_patterns->len; i++)
+        {
+          program_pattern = &g_array_index(state->program_patterns, PDBProgramPattern, i);
+
+          r_insert_node(program->rules,
+                        program_pattern->pattern,
+                        program_pattern->rule,
+                        TRUE, pdb_rule_get_name);
+          g_free(program_pattern->pattern);
+        }
+
       state->current_program = NULL;
       state->in_ruleset = FALSE;
+
+      g_array_free(state->program_patterns, TRUE);
+      state->program_patterns = NULL;
     }
   else if (strcmp(element_name, "example") == 0)
     {
@@ -1045,6 +1104,7 @@ pdb_loader_text(GMarkupParseContext *context, const gchar *text, gsize text_len,
   PDBLoader *state = (PDBLoader *) user_data;
   LogTemplate *value;
   GError *err = NULL;
+  PDBProgramPattern program_pattern;
   RNode *node = NULL;
   gchar *txt;
   gchar **nv;
@@ -1055,10 +1115,9 @@ pdb_loader_text(GMarkupParseContext *context, const gchar *text, gsize text_len,
 
       if (state->in_rule)
         {
-          r_insert_node(state->current_program ? state->current_program->rules : state->root_program->rules,
-                        txt,
-                        pdb_rule_ref(state->current_rule),
-                        TRUE, pdb_rule_get_name);
+          program_pattern.pattern = g_strdup(text);
+          program_pattern.rule = pdb_rule_ref(state->current_rule);
+          g_array_append_val(state->program_patterns, program_pattern);
         }
       else if (state->in_ruleset)
         {
@@ -1097,10 +1156,20 @@ pdb_loader_text(GMarkupParseContext *context, const gchar *text, gsize text_len,
     }
   else if (state->in_tag)
     {
+      if (!state->in_rule)
+        {
+          *error = g_error_new(1, 0, "Unexpected <tag> element, must be within a rule");
+          return;
+        }
       pdb_message_add_tag(state->current_message, text);
     }
   else if (state->value_name)
     {
+      if (!state->in_rule)
+        {
+          *error = g_error_new(1, 0, "Unexpected <value> element, must be within a rule");
+          return;
+        }
       if (!state->current_message->values)
         state->current_message->values = g_ptr_array_new();
 
@@ -1135,6 +1204,7 @@ pdb_loader_text(GMarkupParseContext *context, const gchar *text, gsize text_len,
     }
 }
 
+static
 GMarkupParser db_parser =
 {
   .start_element = pdb_loader_start_element,
@@ -1211,27 +1281,66 @@ pdb_rule_set_load(PDBRuleSet *self, GlobalConfig *cfg, const gchar *config, GLis
   return success;
 }
 
+/**
+ * log_db_add_matches:
+ *
+ * Adds the values from the given GArray of RParserMatch entries to the NVTable
+ * of the passed LogMessage.
+ *
+ * @msg: the LogMessage to add the matches to
+ * @matches: an array of RParserMatch entries
+ * @ref_handle: if the matches are indirect matches, they are referenced based on this handle (eg. LM_V_MESSAGE)
+ **/
+void
+log_db_add_matches(LogMessage *msg, GArray *matches, NVHandle ref_handle, const gchar *input_string)
+{
+  gint i;
+  for (i = 0; i < matches->len; i++)
+    {
+      RParserMatch *match = &g_array_index(matches, RParserMatch, i);
+
+      if (match->match)
+        {
+          log_msg_set_value(msg, match->handle, match->match, match->len);
+          g_free(match->match);
+        }
+      else if (ref_handle != LM_V_NONE && log_msg_is_handle_settable_with_an_indirect_value(match->handle))
+        {
+          log_msg_set_value_indirect(msg, match->handle, ref_handle, match->type, match->ofs, match->len);
+        }
+      else
+        {
+          log_msg_set_value(msg, match->handle, input_string + match->ofs, match->len);
+        }
+    }
+}
+
 /*
  * Looks up a matching rule in the ruleset.
  *
  * NOTE: it also modifies @msg to store the name-value pairs found during lookup, so
  */
 PDBRule *
-pdb_rule_set_lookup(PDBRuleSet *self, LogMessage *msg, GArray *dbg_list)
+pdb_rule_set_lookup(PDBRuleSet *self, PDBInput *input, GArray *dbg_list)
 {
   RNode *node;
-  GArray *matches;
+  LogMessage *msg = input->msg;
+  GArray *prg_matches, *matches;
   const gchar *program;
   gssize program_len;
 
   if (G_UNLIKELY(!self->programs))
     return FALSE;
 
-  program = log_msg_get_value(msg, LM_V_PROGRAM, &program_len);
-  node = r_find_node(self->programs, (gchar *) program, (gchar *) program, program_len, NULL);
+  program = log_msg_get_value(msg, input->program_handle, &program_len);
+  prg_matches = g_array_new(FALSE, TRUE, sizeof(RParserMatch));
+  node = r_find_node(self->programs, (gchar *) program, (gchar *) program, program_len, prg_matches);
 
   if (node)
     {
+      log_db_add_matches(msg, prg_matches, input->program_handle, program);
+      g_array_free(prg_matches, TRUE);
+
       PDBProgram *program = (PDBProgram *) node->value;
 
       if (program->rules)
@@ -1247,7 +1356,16 @@ pdb_rule_set_lookup(PDBRuleSet *self, LogMessage *msg, GArray *dbg_list)
           matches = g_array_new(FALSE, TRUE, sizeof(RParserMatch));
           g_array_set_size(matches, 1);
 
-          message = log_msg_get_value(msg, LM_V_MESSAGE, &message_len);
+          if (input->message_handle)
+            {
+              message = log_msg_get_value(msg, input->message_handle, &message_len);
+            }
+          else
+            {
+              message = input->message_string;
+              message_len = input->message_len;
+            }
+
           if (G_UNLIKELY(dbg_list))
             msg_node = r_find_node_dbg(program->rules, (gchar *) message, (gchar *) message, message_len, matches, dbg_list);
           else
@@ -1257,7 +1375,6 @@ pdb_rule_set_lookup(PDBRuleSet *self, LogMessage *msg, GArray *dbg_list)
             {
               PDBRule *rule = (PDBRule *) msg_node->value;
               GString *buffer = g_string_sized_new(32);
-              gint i;
 
               msg_debug("patterndb rule matches",
                         evt_tag_str("rule_id", rule->rule_id),
@@ -1265,21 +1382,7 @@ pdb_rule_set_lookup(PDBRuleSet *self, LogMessage *msg, GArray *dbg_list)
               log_msg_set_value(msg, class_handle, rule->class ? rule->class : "system", -1);
               log_msg_set_value(msg, rule_id_handle, rule->rule_id, -1);
 
-              for (i = 0; i < matches->len; i++)
-                {
-                  RParserMatch *match = &g_array_index(matches, RParserMatch, i);
-
-                  if (match->match)
-                    {
-                      log_msg_set_value(msg, match->handle, match->match, match->len);
-                      g_free(match->match);
-                    }
-                  else
-                    {
-                      log_msg_set_value_indirect(msg, match->handle, LM_V_MESSAGE, match->type, match->ofs, match->len);
-                    }
-                }
-
+              log_db_add_matches(msg, matches, input->message_handle, message);
               g_array_free(matches, TRUE);
 
               if (!rule->class)
@@ -1299,6 +1402,11 @@ pdb_rule_set_lookup(PDBRuleSet *self, LogMessage *msg, GArray *dbg_list)
           g_array_free(matches, TRUE);
         }
     }
+  else
+    {
+      g_array_free(prg_matches, TRUE);
+    }
+
   return NULL;
 
 }
@@ -1473,16 +1581,16 @@ pattern_db_get_ruleset_version(PatternDB *self)
 }
 
 gboolean
-pattern_db_process(PatternDB *self, LogMessage *msg)
+pattern_db_process(PatternDB *self, PDBInput *input)
 {
   PDBRule *rule;
+  LogMessage *msg = input->msg;
 
   if (G_UNLIKELY(!self->ruleset))
     return FALSE;
 
-
   g_static_rw_lock_reader_lock(&self->lock);
-  rule = pdb_rule_set_lookup(self->ruleset, msg, NULL);
+  rule = pdb_rule_set_lookup(self->ruleset, input, NULL);
   g_static_rw_lock_reader_unlock(&self->lock);
   if (rule)
     {
@@ -1496,6 +1604,7 @@ pattern_db_process(PatternDB *self, LogMessage *msg)
           PDBStateKey key;
 
           log_template_format(rule->context_id_template, msg, NULL, LTZ_LOCAL, 0, NULL, buffer);
+          log_msg_set_value(msg, context_id_handle, buffer->str, -1);
 
           pdb_state_key_setup(&key, PSK_CONTEXT, rule, msg, buffer->str);
           context = g_hash_table_lookup(self->state, &key);
@@ -1522,7 +1631,6 @@ pattern_db_process(PatternDB *self, LogMessage *msg)
                         NULL);
             }
 
-          msg->flags |= LF_STATE_REFERENCED;
           g_ptr_array_add(context->messages, log_msg_ref(msg));
 
           if (context->timer)
@@ -1553,6 +1661,9 @@ pattern_db_process(PatternDB *self, LogMessage *msg)
         }
       pdb_rule_unref(rule);
       g_static_rw_lock_writer_unlock(&self->lock);
+
+      if (context)
+        log_msg_write_protect(msg);
 
       g_string_free(buffer, TRUE);
     }
@@ -1599,6 +1710,7 @@ pattern_db_global_init(void)
 {
   class_handle = log_msg_get_value_handle(".classifier.class");
   rule_id_handle = log_msg_get_value_handle(".classifier.rule_id");
+  context_id_handle = log_msg_get_value_handle(".classifier.context_id");
   system_tag = log_tags_get_by_name(".classifier.system");
   unknown_tag = log_tags_get_by_name(".classifier.unknown");
 }

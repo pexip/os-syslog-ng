@@ -35,13 +35,13 @@ test_bson_huge_doc (void)
   bson_free (b);
 
   cmp_ok (bson_size (s), ">", ds1,
-	  "Document embedding another huge one, has bigger size");
+          "Document embedding another huge one, has bigger size");
 
   c = bson_find (s, "hugedoc");
   bson_cursor_get_document (c, &b);
 
   cmp_ok (bson_size (b), "==", ds1,
-	  "The embedded document has the correct, huge size");
+          "The embedded document has the correct, huge size");
 
   bson_cursor_free (c);
   bson_free (s);

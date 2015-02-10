@@ -16,8 +16,8 @@ test_bson_null (void)
 
   cmp_ok (bson_size (b), "==", 11, "BSON NULL element size check");
   ok (memcmp (bson_data (b),
-	      "\013\000\000\000\012\156\165\154\154\000\000",
-	      bson_size (b)) == 0,
+              "\013\000\000\000\012\156\165\154\154\000\000",
+              bson_size (b)) == 0,
       "BSON NULL element contents check");
 
   bson_free (b);
@@ -29,7 +29,7 @@ test_bson_null (void)
       "bson_append_null() should fail without a BSON object");
   bson_finish (b);
   cmp_ok (bson_size (b), "==", 5,
-	  "BSON object should be empty");
+          "BSON object should be empty");
 
   ok (bson_append_null (b, "null") == FALSE,
       "Appending to a finished element should fail");

@@ -12,18 +12,18 @@ test_mongo_sync_cmd_drop_net_secondary (void)
   gboolean ret;
 
   skip (!config.secondary_host, 1,
-	"Secondary server not configured");
+        "Secondary server not configured");
 
   conn = mongo_sync_connect (config.primary_host, config.primary_port, FALSE);
   b = bson_build (BSON_TYPE_BOOLEAN, "filler", TRUE,
-		  BSON_TYPE_NONE);
+                  BSON_TYPE_NONE);
   bson_finish (b);
   mongo_sync_cmd_insert (conn, config.ns, b, NULL);
   bson_free (b);
   mongo_sync_disconnect (conn);
 
   conn = mongo_sync_connect (config.secondary_host, config.secondary_port,
-			     TRUE);
+                             TRUE);
   mongo_sync_cmd_is_master (conn);
   mongo_sync_conn_set_auto_reconnect (conn, TRUE);
 
@@ -47,7 +47,7 @@ test_mongo_sync_cmd_drop_net (void)
   mongo_sync_conn_set_auto_reconnect (conn, TRUE);
 
   b = bson_build (BSON_TYPE_BOOLEAN, "filler", TRUE,
-		  BSON_TYPE_NONE);
+                  BSON_TYPE_NONE);
   bson_finish (b);
   mongo_sync_cmd_insert (conn, config.ns, b, NULL);
 

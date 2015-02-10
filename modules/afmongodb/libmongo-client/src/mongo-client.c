@@ -1,5 +1,5 @@
 /* mongo-client.c - libmongo-client user API
- * Copyright 2011 Gergely Nagy <algernon@balabit.hu>
+ * Copyright 2011, 2012 Gergely Nagy <algernon@balabit.hu>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
  * MongoDB client API implementation.
  */
 
+#include "config.h"
 #include "mongo-client.h"
 #include "bson.h"
 #include "mongo-wire.h"
@@ -29,6 +30,7 @@
 #include <arpa/inet.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <netdb.h>
 #include <sys/uio.h>
 #include <netinet/in.h>
@@ -45,7 +47,7 @@
 static const int one = 1;
 
 mongo_connection *
-mongo_connect (const char *host, int port)
+mongo_tcp_connect (const char *host, int port)
 {
   struct addrinfo *res = NULL, *r;
   struct addrinfo hints;
@@ -58,8 +60,6 @@ mongo_connect (const char *host, int port)
       errno = EINVAL;
       return NULL;
     }
-
-  conn = g_new0 (mongo_connection, 1);
 
   memset (&hints, 0, sizeof (hints));
   hints.ai_socktype = SOCK_STREAM;
@@ -74,7 +74,6 @@ mongo_connect (const char *host, int port)
     {
       int err = errno;
 
-      g_free (conn);
       g_free (port_s);
       errno = err;
       return NULL;
@@ -85,29 +84,76 @@ mongo_connect (const char *host, int port)
     {
       fd = socket (r->ai_family, r->ai_socktype, r->ai_protocol);
       if (fd != -1 && connect (fd, r->ai_addr, r->ai_addrlen) == 0)
-	break;
+        break;
       if (fd != -1)
-	{
-	  close (fd);
-	  fd = -1;
-	}
+        {
+          close (fd);
+          fd = -1;
+        }
     }
   freeaddrinfo (res);
 
   if (fd == -1)
     {
-      g_free (conn);
-
       errno = EADDRNOTAVAIL;
       return NULL;
     }
 
   setsockopt (fd, IPPROTO_TCP, TCP_NODELAY, (char *)&one, sizeof (one));
 
+  conn = g_new0 (mongo_connection, 1);
   conn->fd = fd;
 
   return conn;
 }
+
+static mongo_connection *
+mongo_unix_connect (const char *path)
+{
+  int fd = -1;
+  mongo_connection *conn;
+  struct sockaddr_un remote;
+
+  if (!path || strlen (path) >= sizeof (remote.sun_path))
+    {
+      errno = path ? ENAMETOOLONG : EINVAL;
+      return NULL;
+    }
+
+  fd = socket (AF_UNIX, SOCK_STREAM, 0);
+  if (fd == -1)
+    {
+      errno = EADDRNOTAVAIL;
+      return NULL;
+    }
+
+  remote.sun_family = AF_UNIX;
+  strncpy (remote.sun_path, path, sizeof (remote.sun_path));
+  if (connect (fd, (struct sockaddr *)&remote, sizeof (remote)) == -1)
+    {
+      close (fd);
+      errno = EADDRNOTAVAIL;
+      return NULL;
+    }
+
+  conn = g_new0 (mongo_connection, 1);
+  conn->fd = fd;
+
+  return conn;
+}
+
+mongo_connection *
+mongo_connect (const char *address, int port)
+{
+  if (port == MONGO_CONN_LOCAL)
+    return mongo_unix_connect (address);
+
+  return mongo_tcp_connect (address, port);
+}
+
+#if VERSIONED_SYMBOLS
+__asm__(".symver mongo_tcp_connect,mongo_connect@LMC_0.1.0");
+#endif
 
 void
 mongo_disconnect (mongo_connection *conn)
@@ -198,7 +244,7 @@ mongo_packet_recv (mongo_connection *conn)
 
   memset (&h, 0, sizeof (h));
   if (recv (conn->fd, &h, sizeof (mongo_packet_header),
-	    MSG_NOSIGNAL | MSG_WAITALL) != sizeof (mongo_packet_header))
+            MSG_NOSIGNAL | MSG_WAITALL) != sizeof (mongo_packet_header))
     {
       return NULL;
     }

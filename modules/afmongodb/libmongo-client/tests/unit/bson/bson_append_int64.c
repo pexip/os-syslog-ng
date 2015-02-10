@@ -16,9 +16,9 @@ test_bson_int64 (void)
 
   cmp_ok (bson_size (b), "==", 18, "BSON int64 element size check");
   ok (memcmp (bson_data (b),
-	      "\022\000\000\000\022\151\066\064\000\352\026\260\114\002\000"
-	      "\000\000\000",
-	      bson_size (b)) == 0,
+              "\022\000\000\000\022\151\066\064\000\352\026\260\114\002\000"
+              "\000\000\000",
+              bson_size (b)) == 0,
       "BSON int64 element contents check");
 
   bson_free (b);
@@ -30,7 +30,7 @@ test_bson_int64 (void)
       "bson_append_int64() without a BSON object should fail");
   bson_finish (b);
   cmp_ok (bson_size (b), "==", 5,
-	  "BSON object should be empty");
+          "BSON object should be empty");
 
   ok (bson_append_int64 (b, "i64", l) == FALSE,
       "Appending to a finished element should fail");

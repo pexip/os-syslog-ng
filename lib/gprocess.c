@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -98,7 +98,9 @@ static gint startup_result_pipe[2] = { -1, -1 };
 static gint init_result_pipe[2] = { -1, -1 };
 static GProcessKind process_kind = G_PK_STARTUP;
 static gboolean stderr_present = TRUE;
+#if ENABLE_LINUX_CAPS
 static int have_capsyslog = FALSE;
+#endif
 
 /* global variables */
 static struct
@@ -598,8 +600,8 @@ g_process_detach_tty(void)
 #ifdef TIOCNOTTY
           ioctl(STDIN_FILENO, TIOCNOTTY, 0);
 #endif
-          setsid();
         }
+      setsid();
     }
 }
 
@@ -1055,10 +1057,15 @@ g_process_perform_supervise(void)
   pid_t pid;
   gboolean first = TRUE, exited = FALSE;
   gchar proc_title[PROC_TITLE_SPACE];
+  struct sigaction sa;
 
   g_snprintf(proc_title, PROC_TITLE_SPACE, "supervising %s", process_opts.name);
   g_process_setproctitle(proc_title);
   
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = SIG_IGN;
+  sigaction(SIGHUP, &sa, NULL);
+
   while (1)
     {
       if (pipe(init_result_pipe) != 0)

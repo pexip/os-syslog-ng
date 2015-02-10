@@ -1,5 +1,5 @@
 /* bson.h - libmongo-client's BSON implementation
- * Copyright 2011 Gergely Nagy <algernon@balabit.hu>
+ * Copyright 2011, 2012 Gergely Nagy <algernon@balabit.hu>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -72,15 +72,15 @@ typedef enum
     BSON_TYPE_OID, /**< 12byte ObjectID */
     BSON_TYPE_BOOLEAN, /**< 1byte boolean value */
     BSON_TYPE_UTC_DATETIME, /**< 8byte timestamp; milliseconds since
-			       Unix epoch */
+                               Unix epoch */
     BSON_TYPE_NULL, /**< NULL value, No following data. */
     BSON_TYPE_REGEXP, /**< Two NULL terminated C strings, the regex
-			 itself, and the options. */
+                         itself, and the options. */
     BSON_TYPE_DBPOINTER, /* Deprecated */
     BSON_TYPE_JS_CODE, /**< 4byte length + NULL terminated string */
     BSON_TYPE_SYMBOL, /**< 4byte length + NULL terminated string */
     BSON_TYPE_JS_CODE_W_SCOPE, /**< 4byte length, followed by a
-				  string and a document */
+                                  string and a document */
     BSON_TYPE_INT32, /**< 4byte integer */
     BSON_TYPE_TIMESTAMP, /**< 4bytes increment + 4bytes timestamp */
     BSON_TYPE_INT64, /**< 8byte integer */
@@ -101,17 +101,17 @@ const gchar *bson_type_as_string (bson_type type);
 typedef enum
   {
     BSON_BINARY_SUBTYPE_GENERIC = 0x00, /**< The Generic subtype, the
-					   default. */
+                                           default. */
     BSON_BINARY_SUBTYPE_FUNCTION = 0x01, /**< Binary representation
-					    of a function. */
+                                            of a function. */
     BSON_BINARY_SUBTYPE_BINARY = 0x02, /**< Obsolete, do not use. */
     BSON_BINARY_SUBTYPE_UUID = 0x03, /**< Binary representation of an
-					UUID. */
+                                        UUID. */
     BSON_BINARY_SUBTYPE_MD5 = 0x05, /**< Binary representation of an
-				       MD5 sum. */
+                                       MD5 sum. */
     BSON_BINARY_SUBTYPE_USER_DEFINED = 0x80 /**< User defined data,
-					       nothing's known about
-					       the structure. */
+                                               nothing's known about
+                                               the structure. */
   } bson_binary_subtype;
 
 /** @} */
@@ -205,7 +205,7 @@ bson *bson_new_from_data (const guint8 *data, gint32 size);
  * NULL on error.
  */
 bson *bson_build_full (bson_type type, const gchar *name,
-		       gboolean free_after, ...);
+                       gboolean free_after, ...);
 
 /** Build a BSON object in one go.
  *
@@ -298,7 +298,7 @@ const guint8 *bson_data (const bson *b);
  * to the application.
  */
 gboolean bson_validate_key (const gchar *key, gboolean forbid_dots,
-			    gboolean no_dollar);
+                            gboolean no_dollar);
 
 /** Reads out the 32-bit documents size from a BSON bytestream.
  *
@@ -352,7 +352,7 @@ static __inline__ gint32 bson_stream_doc_size (const guint8 *doc, gint32 pos)
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean bson_append_string (bson *b, const gchar *name, const gchar *val,
-			     gint32 length);
+                             gint32 length);
 
 /** Append a double to a BSON object.
  *
@@ -405,8 +405,8 @@ gboolean bson_append_array (bson *b, const gchar *name, const bson *array);
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean bson_append_binary (bson *b, const gchar *name,
-			     bson_binary_subtype subtype,
-			     const guint8 *data, gint32 size);
+                             bson_binary_subtype subtype,
+                             const guint8 *data, gint32 size);
 
 /** Append an ObjectID to a BSON object.
  *
@@ -467,7 +467,7 @@ gboolean bson_append_null (bson *b, const gchar *name);
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean bson_append_regex (bson *b, const gchar *name, const gchar *regexp,
-			    const gchar *options);
+                            const gchar *options);
 
 /** Append Javascript code to a BSON object.
  *
@@ -480,7 +480,7 @@ gboolean bson_append_regex (bson *b, const gchar *name, const gchar *regexp,
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean bson_append_javascript (bson *b, const gchar *name, const gchar *js,
-				 gint32 len);
+                                 gint32 len);
 
 /** Append a symbol to a BSON object.
  *
@@ -493,7 +493,7 @@ gboolean bson_append_javascript (bson *b, const gchar *name, const gchar *js,
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean bson_append_symbol (bson *b, const gchar *name, const gchar *symbol,
-			     gint32 len);
+                             gint32 len);
 
 /** Append Javascript code (with scope) to a BSON object.
  *
@@ -507,8 +507,8 @@ gboolean bson_append_symbol (bson *b, const gchar *name, const gchar *symbol,
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean bson_append_javascript_w_scope (bson *b, const gchar *name,
-					 const gchar *js, gint32 len,
-					 const bson *scope);
+                                         const gchar *js, gint32 len,
+                                         const bson *scope);
 
 /** Append a 32-bit integer to a BSON object.
  *
@@ -721,8 +721,8 @@ gboolean bson_cursor_get_array (const bson_cursor *c, bson **dest);
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean bson_cursor_get_binary (const bson_cursor *c,
-				 bson_binary_subtype *subtype,
-				 const guint8 **data, gint32 *size);
+                                 bson_binary_subtype *subtype,
+                                 const guint8 **data, gint32 *size);
 
 /** Get the value stored at the cursor, as an ObjectID.
  *
@@ -772,7 +772,7 @@ gboolean bson_cursor_get_utc_datetime (const bson_cursor *c, gint64 *dest);
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean bson_cursor_get_regex (const bson_cursor *c, const gchar **regex,
-				const gchar **options);
+                                const gchar **options);
 
 /** Get the value stored at the cursor, as javascript code.
  *
@@ -814,8 +814,8 @@ gboolean bson_cursor_get_symbol (const bson_cursor *c, const gchar **dest);
  * @returns TRUE on success, FALSE otherwise.
  */
 gboolean bson_cursor_get_javascript_w_scope (const bson_cursor *c,
-					     const gchar **js,
-					     bson **scope);
+                                             const gchar **js,
+                                             bson **scope);
 
 /** Get the value stored at the cursor, as a 32-bit integer.
  *

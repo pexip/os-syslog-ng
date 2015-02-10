@@ -32,17 +32,17 @@ test_bson_cursor_get_binary (void)
   ok (memcmp (d, "deadbeef", sizeof ("deadbeef")) == 0,
       "binary destination remains unchanged after failed cursor operations");
   cmp_ok (t, "==", 0xff,
-	  "subtype destination remains unchanged after failed cursor "
-	  "operations");
+          "subtype destination remains unchanged after failed cursor "
+          "operations");
   cmp_ok (s, "==", -1,
-	  "size destination remains unchanged after failed cursor operations");
+          "size destination remains unchanged after failed cursor operations");
   bson_cursor_free (c);
 
   c = bson_find (b, "binary0");
   ok (bson_cursor_get_binary (c, &t, &d, &s),
       "bson_cursor_get_binary() works");
   cmp_ok (s, "==", 7,
-	  "bson_cursor_get_binary() returns the correct result");
+          "bson_cursor_get_binary() returns the correct result");
   ok (memcmp (d, "foo\0bar", s) == 0,
       "bson_cursor_get_binary() returns the correct result");
   cmp_ok (t, "==", BSON_BINARY_SUBTYPE_GENERIC,

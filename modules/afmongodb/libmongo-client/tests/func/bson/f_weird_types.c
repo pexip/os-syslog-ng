@@ -20,13 +20,13 @@ test_func_weird_types (void)
   /* Append weird stuff */
   b->data = g_byte_array_append (b->data, (const guint8 *)&type, sizeof (type));
   b->data = g_byte_array_append (b->data, (const guint8 *)"dbpointer",
-				 strlen ("dbpointer") + 1);
+                                 strlen ("dbpointer") + 1);
   slen = GINT32_TO_LE (strlen ("refname") + 1);
   b->data = g_byte_array_append (b->data, (const guint8 *)&slen, sizeof (gint32));
   b->data = g_byte_array_append (b->data, (const guint8 *)"refname",
-				 strlen ("refname") + 1);
+                                 strlen ("refname") + 1);
   b->data = g_byte_array_append (b->data, (const guint8 *)"0123456789ABCDEF",
-				 12);
+                                 12);
 
   bson_append_boolean (b, "Here be dragons?", TRUE);
   bson_finish (b);
@@ -45,9 +45,9 @@ test_func_weird_types (void)
   type = BSON_TYPE_NONE;
   b->data = g_byte_array_append (b->data, (const guint8 *)&type, sizeof (type));
   b->data = g_byte_array_append (b->data, (const guint8 *)"dbpointer",
-				 strlen ("dbpointer") + 1);
+                                 strlen ("dbpointer") + 1);
   b->data = g_byte_array_append (b->data, (const guint8 *)"0123456789ABCDEF",
-				 12);
+                                 12);
 
   bson_append_boolean (b, "Here be dragons?", TRUE);
   bson_finish (b);
@@ -59,7 +59,7 @@ test_func_weird_types (void)
 
   c = bson_cursor_new (b);
   bson_cursor_next (c); /* This will find the first element, and
-			   position us there. */
+                           position us there. */
   bson_cursor_next (c); /* This positions after the first element. */
   ok (bson_cursor_next (c) == FALSE,
       "bson_cursor_next() should bail out when encountering an invalid element.");

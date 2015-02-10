@@ -1,5 +1,5 @@
 /* gridfs.c - A GridFS utility; example application
- * Copyright 2011 Gergely Nagy <algernon@balabit.hu>
+ * Copyright 2011, 2012 Gergely Nagy <algernon@balabit.hu>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -54,7 +54,7 @@ mongo_gridfs_connect (config_t *config)
   mongo_sync_gridfs *gfs;
 
   VLOG ("Connecting to %s:%d/%s.%s...\n", config->host, config->port,
-	config->db, config->coll);
+        config->db, config->coll);
 
   conn = mongo_sync_connect (config->host, config->port, config->slaveok);
   if (!conn)
@@ -65,7 +65,7 @@ mongo_gridfs_connect (config_t *config)
       VLOG ("Syncing to master...\n");
       conn = mongo_sync_reconnect (conn, TRUE);
       if (!conn)
-	mongo_gridfs_error (errno);
+        mongo_gridfs_error (errno);
     }
 
   gfs = mongo_sync_gridfs_new (conn, config->ns);
@@ -90,7 +90,7 @@ mongo_gridfs_get (config_t *config, gint argc, gchar *argv[])
   if (argc < 4)
     {
       fprintf (stderr, "Usage: %s get GRIDFS_FILENAME OUTPUT_FILENAME\n",
-	       argv[0]);
+               argv[0]);
       exit (1);
     }
   gfn = argv[2];
@@ -101,7 +101,7 @@ mongo_gridfs_get (config_t *config, gint argc, gchar *argv[])
   VLOG ("Trying to find '%s'...\n", gfn);
 
   query = bson_build (BSON_TYPE_STRING, "filename", gfn, -1,
-		      BSON_TYPE_NONE);
+                      BSON_TYPE_NONE);
   bson_finish (query);
   gfile = mongo_sync_gridfs_chunked_find (gfs, query);
   if (!gfile)
@@ -113,14 +113,14 @@ mongo_gridfs_get (config_t *config, gint argc, gchar *argv[])
   if (fd == -1)
     {
       fprintf (stderr, "Error opening output file '%s': %s\n",
-	       ofn, strerror (errno));
+               ofn, strerror (errno));
       exit (1);
     }
 
   VLOG ("Writing '%s' -> '%s' (%" G_GINT64_FORMAT " bytes in %" G_GINT64_FORMAT
-	" chunks)\n", gfn, ofn,
-	mongo_sync_gridfs_file_get_length (gfile),
-	mongo_sync_gridfs_file_get_chunks (gfile));
+        " chunks)\n", gfn, ofn,
+        mongo_sync_gridfs_file_get_length (gfile),
+        mongo_sync_gridfs_file_get_chunks (gfile));
 
   cursor = mongo_sync_gridfs_chunked_file_cursor_new (gfile, 0, 0);
   if (!cursor)
@@ -135,9 +135,13 @@ mongo_gridfs_get (config_t *config, gint argc, gchar *argv[])
 
       data = mongo_sync_gridfs_chunked_file_cursor_get_chunk (cursor, &size);
       if (!data)
-	mongo_gridfs_error (errno);
+        mongo_gridfs_error (errno);
 
-      write (fd, data, size);
+      if (write (fd, data, size) != size)
+        {
+          perror ("write()");
+          exit (1);
+        }
       g_free (data);
     }
   mongo_sync_cursor_free (cursor);
@@ -165,7 +169,7 @@ mongo_gridfs_put (config_t *config, gint argc, gchar *argv[])
   if (argc < 4)
     {
       fprintf (stderr, "Usage: %s put INPUT_FILENAME GRIDFS_FILENAME\n",
-	       argv[0]);
+               argv[0]);
       exit (1);
     }
   ifn = argv[2];
@@ -180,13 +184,13 @@ mongo_gridfs_put (config_t *config, gint argc, gchar *argv[])
   if (!fd)
     {
       fprintf (stderr, "Error opening input file: %s\n",
-	       strerror (errno));
+               strerror (errno));
       exit (1);
     }
   if (fstat (fd, &st) != 0)
     {
       fprintf (stderr, "Error stat'ing the input file: %s\n",
-	       strerror (errno));
+               strerror (errno));
       exit (1);
     }
 
@@ -194,17 +198,17 @@ mongo_gridfs_put (config_t *config, gint argc, gchar *argv[])
   if (data == MAP_FAILED)
     {
       fprintf (stderr, "Error mmapping the input file: %s\n",
-	       strerror (errno));
+               strerror (errno));
     }
 
   meta = bson_build (BSON_TYPE_STRING, "filename", gfn, -1,
-		     BSON_TYPE_NONE);
+                     BSON_TYPE_NONE);
   bson_finish (meta);
 
   VLOG ("Uploading '%s' -> '%s'...\n", ifn, gfn);
 
   gfile = mongo_sync_gridfs_chunked_file_new_from_buffer (gfs, meta,
-							  data, st.st_size);
+                                                          data, st.st_size);
   if (!gfile)
     mongo_gridfs_error (errno);
   bson_free (meta);
@@ -212,8 +216,8 @@ mongo_gridfs_put (config_t *config, gint argc, gchar *argv[])
 
   oid_s = mongo_util_oid_as_string (mongo_sync_gridfs_file_get_id (gfile));
   printf ("Uploaded file: %s (_id: %s; md5 = %s)\n", gfn,
-	  oid_s,
-	  mongo_sync_gridfs_file_get_md5 (gfile));
+          oid_s,
+          mongo_sync_gridfs_file_get_md5 (gfile));
 
   g_free (oid_s);
   mongo_sync_gridfs_chunked_file_free (gfile);
@@ -242,28 +246,28 @@ mongo_gridfs_list (config_t *config)
 
       c = bson_find (meta, "_id");
       if (!bson_cursor_get_oid (c, (const guint8 **)&oid))
-	mongo_gridfs_error (errno);
+        mongo_gridfs_error (errno);
 
       bson_cursor_find (c, "length");
       if (!bson_cursor_get_int32 (c, &i32))
-	{
-	  if (!bson_cursor_get_int64 (c, &length))
-	    mongo_gridfs_error (errno);
-	}
+        {
+          if (!bson_cursor_get_int64 (c, &length))
+            mongo_gridfs_error (errno);
+        }
       else
-	length = i32;
+        length = i32;
 
       bson_cursor_find (c, "chunkSize");
       if (!bson_cursor_get_int32 (c, &chunk_size))
-	mongo_gridfs_error (errno);
+        mongo_gridfs_error (errno);
 
       bson_cursor_find (c, "uploadDate");
       if (!bson_cursor_get_utc_datetime (c, &date))
-	mongo_gridfs_error (errno);
+        mongo_gridfs_error (errno);
 
       bson_cursor_find (c, "md5");
       if (!bson_cursor_get_string (c, &md5))
-	mongo_gridfs_error (errno);
+        mongo_gridfs_error (errno);
 
       bson_cursor_find (c, "filename");
       bson_cursor_get_string (c, &filename);
@@ -272,36 +276,36 @@ mongo_gridfs_list (config_t *config)
 
       oid_s = mongo_util_oid_as_string (oid);
       printf ("{ _id: ObjectID(\"%s\"), length: %" G_GINT64_FORMAT
-	      ", chunkSize: %i, uploadDate: %"
-	      G_GINT64_FORMAT ", md5: \"%s\"",
+              ", chunkSize: %i, uploadDate: %"
+              G_GINT64_FORMAT ", md5: \"%s\"",
 
-	      oid_s, length, chunk_size, date, md5);
+              oid_s, length, chunk_size, date, md5);
       g_free (oid_s);
 
       if (filename)
-	printf (", filename: \"%s\"", filename);
+        printf (", filename: \"%s\"", filename);
       printf (" }\n");
 
       if (config->verbose)
-	{
-	  c = bson_cursor_new (meta);
-	  printf ("\tExtra metadata: [ ");
-	  while (bson_cursor_next (c))
-	    {
-	      if (strcmp (bson_cursor_key (c), "_id") &&
-		  strcmp (bson_cursor_key (c), "length") &&
-		  strcmp (bson_cursor_key (c), "chunkSize") &&
-		  strcmp (bson_cursor_key (c), "uploadDate") &&
-		  strcmp (bson_cursor_key (c), "md5") &&
-		  strcmp (bson_cursor_key (c), "filename"))
-		{
-		  printf ("%s (%s), ", bson_cursor_key (c),
-			  bson_cursor_type_as_string (c));
-		}
-	    }
-	  bson_cursor_free (c);
-	  printf ("]\n");
-	}
+        {
+          c = bson_cursor_new (meta);
+          printf ("\tExtra metadata: [ ");
+          while (bson_cursor_next (c))
+            {
+              if (strcmp (bson_cursor_key (c), "_id") &&
+                  strcmp (bson_cursor_key (c), "length") &&
+                  strcmp (bson_cursor_key (c), "chunkSize") &&
+                  strcmp (bson_cursor_key (c), "uploadDate") &&
+                  strcmp (bson_cursor_key (c), "md5") &&
+                  strcmp (bson_cursor_key (c), "filename"))
+                {
+                  printf ("%s (%s), ", bson_cursor_key (c),
+                          bson_cursor_type_as_string (c));
+                }
+            }
+          bson_cursor_free (c);
+          printf ("]\n");
+        }
     }
 
   mongo_sync_gridfs_free (gfs, TRUE);
@@ -326,7 +330,7 @@ mongo_gridfs_remove (config_t *config, gint argc, gchar *argv[])
   VLOG ("Deleting file: '%s'...\n", fn);
 
   query = bson_build (BSON_TYPE_STRING, "filename", fn, -1,
-		      BSON_TYPE_NONE);
+                      BSON_TYPE_NONE);
   bson_finish (query);
 
   if (mongo_sync_gridfs_remove (gfs, query))
@@ -354,17 +358,17 @@ main (int argc, char *argv[])
   GOptionEntry entries[] =
     {
       { "host", 'h', 0, G_OPTION_ARG_STRING, &config.host,
-	"Host to connect to", "HOST" },
+        "Host to connect to", "HOST" },
       { "port", 'p', 0, G_OPTION_ARG_INT, &config.port, "Port", "PORT" },
       { "db", 'd', 0, G_OPTION_ARG_STRING, &config.db, "Database", "DB" },
       { "collection", 'c', 0, G_OPTION_ARG_STRING, &config.coll, "Collection",
-	"COLL" },
+        "COLL" },
       { "verbose", 'v', 0, G_OPTION_ARG_NONE, &config.verbose,
-	"Be verbose", NULL },
+        "Be verbose", NULL },
       { "slave-ok", 's', 0, G_OPTION_ARG_NONE, &config.slaveok,
-	"Connecting to slaves is ok", NULL },
+        "Connecting to slaves is ok", NULL },
       { "master-sync", 'm', 0, G_OPTION_ARG_NONE, &config.master_sync,
-	"Reconnect to the replica master", NULL },
+        "Reconnect to the replica master", NULL },
       { NULL, 0, 0, 0, NULL, NULL, NULL }
     };
 

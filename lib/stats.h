@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -42,6 +42,14 @@ typedef enum
 
 enum
 {
+  STATS_LEVEL0 = 0,
+  STATS_LEVEL1,
+  STATS_LEVEL2,
+  STATS_LEVEL3
+};
+
+enum
+{
   SCS_SOURCE         = 0x0100,
   SCS_DESTINATION    = 0x0200,
   SCS_FILE           = 1,
@@ -53,23 +61,28 @@ enum
   SCS_UNIX_STREAM    = 7,
   SCS_UNIX_DGRAM     = 8,
   SCS_SYSLOG         = 9,
-  SCS_INTERNAL       = 10,
-  SCS_LOGSTORE       = 11,
-  SCS_PROGRAM        = 12,
-  SCS_SQL            = 13,
-  SCS_SUN_STREAMS    = 14,
-  SCS_USERTTY        = 15,
-  SCS_GROUP          = 16,
-  SCS_CENTER         = 17,
-  SCS_HOST           = 18,
-  SCS_GLOBAL         = 19,
-  SCS_MONGODB        = 20,
-  SCS_CLASS          = 21,
-  SCS_RULE_ID        = 22,
-  SCS_TAG            = 23,
-  SCS_SEVERITY       = 24,
-  SCS_FACILITY       = 25,
-  SCS_SENDER         = 26,
+  SCS_NETWORK        = 10,
+  SCS_INTERNAL       = 11,
+  SCS_LOGSTORE       = 12,
+  SCS_PROGRAM        = 13,
+  SCS_SQL            = 14,
+  SCS_SUN_STREAMS    = 15,
+  SCS_USERTTY        = 16,
+  SCS_GROUP          = 17,
+  SCS_CENTER         = 18,
+  SCS_HOST           = 19,
+  SCS_GLOBAL         = 20,
+  SCS_MONGODB        = 21,
+  SCS_CLASS          = 22,
+  SCS_RULE_ID        = 23,
+  SCS_TAG            = 24,
+  SCS_SEVERITY       = 25,
+  SCS_FACILITY       = 26,
+  SCS_SENDER         = 27,
+  SCS_SMTP           = 28,
+  SCS_AMQP           = 29,
+  SCS_STOMP          = 30,
+  SCS_REDIS          = 31,
   SCS_MAX,
   SCS_SOURCE_MASK    = 0xff
 };

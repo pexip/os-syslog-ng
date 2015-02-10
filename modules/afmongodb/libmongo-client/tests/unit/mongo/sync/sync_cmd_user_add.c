@@ -13,7 +13,7 @@ test_mongo_sync_cmd_user_add_net_secondary (void)
   gboolean ret;
 
   skip (!config.secondary_host, 1,
-	"Secondary server not configured");
+        "Secondary server not configured");
 
   c = mongo_sync_connect (config.secondary_host, config.secondary_port, TRUE);
   mongo_sync_conn_set_auto_reconnect (c, TRUE);
@@ -64,25 +64,25 @@ test_mongo_sync_cmd_user_add (void)
   ok (mongo_sync_cmd_user_add (NULL, "test", "test", "s3kr1+") == FALSE,
       "mongo_sync_cmd_user_add() fails with a NULL connection");
   cmp_ok (errno, "==", ENOTCONN,
-	  "errno is set to ENOTCONN");
+          "errno is set to ENOTCONN");
 
   errno = 0;
   ok (mongo_sync_cmd_user_add (c, NULL, "test", "s3kr1+") == FALSE,
       "mongo_sync_cmd_user_add() fails with a NULL db");
   cmp_ok (errno, "==", EINVAL,
-	  "errno is set to EINVAL");
+          "errno is set to EINVAL");
 
   errno = 0;
   ok (mongo_sync_cmd_user_add (c, "test", NULL, "s3kr1+") == FALSE,
       "mongo_sync_cmd_user_add() fails with a NULL user");
   cmp_ok (errno, "==", EINVAL,
-	  "errno is set to EINVAL");
+          "errno is set to EINVAL");
 
   errno = 0;
   ok (mongo_sync_cmd_user_add (c, "test", "test", NULL) == FALSE,
       "mongo_sync_cmd_user_add() fails with a NULL password");
   cmp_ok (errno, "==", EINVAL,
-	  "errno is set to EINVAL");
+          "errno is set to EINVAL");
 
   ok (mongo_sync_cmd_user_add (c, "test", "test", "s3kr1+") == FALSE,
       "mongo_sync_cmd_user_add() fails with a bogus FD");

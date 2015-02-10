@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -36,8 +36,11 @@
 #define YYDEBUG 1
 #endif
 
+#define GLIB_DISABLE_DEPRECATION_WARNINGS 1
+
 #include <glib.h>
 #include "compat.h"
+#include "versioning.h"
 
 #define PATH_SYSLOG_NG_CONF     PATH_SYSCONFDIR "/syslog-ng.conf"
 #define PATH_INSTALL_DAT	PATH_SYSCONFDIR "/install.dat"
@@ -59,6 +62,7 @@
 
 #define SAFE_STRING(x) ((x) ? (x) : "NULL")
 
+typedef struct _LogPipe LogPipe;
 typedef struct _LogMessage LogMessage;
 typedef struct _GlobalConfig GlobalConfig;
 

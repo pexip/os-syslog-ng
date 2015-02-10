@@ -125,6 +125,7 @@ mongo_sync_unit_tests	= \
 		unit/mongo/sync/sync_cmd_is_master \
 		unit/mongo/sync/sync_cmd_ping \
 		unit/mongo/sync/sync_cmd_user_add \
+		unit/mongo/sync/sync_cmd_user_add_with_roles \
 		unit/mongo/sync/sync_cmd_user_remove \
 		unit/mongo/sync/sync_cmd_authenticate \
 		unit/mongo/sync/sync_cmd_index_create \
@@ -136,7 +137,9 @@ mongo_sync_func_tests	= \
 		func/mongo/sync/f_sync_conn_seed_add \
 		func/mongo/sync/f_sync_safe_mode \
 		func/mongo/sync/f_sync_auto_reconnect \
-		func/mongo/sync/f_sync_oidtest
+		func/mongo/sync/f_sync_oidtest \
+		func/mongo/sync/f_sync_auto_reauth \
+		func/mongo/sync/f_sync_invalid_getlasterror
 
 mongo_sync_cursor_unit_tests	= \
 		unit/mongo/sync-cursor/sync_cursor_new \
@@ -201,27 +204,30 @@ FUNC_TESTS	= ${bson_func_tests} ${mongo_sync_func_tests} \
 PERF_TESTS	= ${bson_perf_tests}
 TESTCASES	= ${UNIT_TESTS} ${FUNC_TESTS} ${PERF_TESTS}
 
-check_PROGRAMS	= ${TESTCASES}
-noinst_PROGRAMS= test_cleanup
+check_PROGRAMS	= ${TESTCASES} test_cleanup
 
 AM_CFLAGS = -I$(top_srcdir)/src/ -I${top_srcdir}/tests/libtap/ @GLIB_CFLAGS@
+AM_LDFLAGS = -no-install
 LDADD = $(top_builddir)/src/libmongo-client.la ${top_builddir}/tests/libtap/libtap.la @GLIB_LIBS@
 
 EXTRA_DIST = README \
+	     runall \
 	     coverage.sh \
              tools/coverage-report-entry.pl tools/coverage-report.pl \
              tools/coverage-report.xsl
 
+PROVE      = prove -e "${PROVE_ENV}" ${PROVE_OPTIONS}
+
 check-%: BASE=$(subst -,_,$(subst check-,,$@))
 check-%: TESTCASES=$(value $(BASE)_unit_tests) $(value $(BASE)_func_tests) $(value $(BASE)_tests)
-check-%: ${TESTCASES} ${noinst_PROGRAMS}
+check-%: check-recursive test_cleanup ${TESTCASES}
 	$(AM_V_at) ${builddir}/test_cleanup
-	$(AM_V_GEN) srcdir=${srcdir} prove -e "${PROVE_ENV}" ${PROVE_OPTIONS} ${TESTCASES}
+	$(AM_V_GEN) srcdir=${srcdir} ${PROVE} ${TESTCASES}
 	$(AM_V_at) ${builddir}/test_cleanup
 
-check: ${TESTCASES} ${noinst_PROGRAMS}
+check: check-recursive test_cleanup ${TESTCASES}
 	$(AM_V_at) ${builddir}/test_cleanup
-	$(AM_V_GEN) srcdir=${srcdir} prove -e "${PROVE_ENV}" ${PROVE_OPTIONS} ${TESTCASES}
+	$(AM_V_GEN) srcdir=${srcdir} ${PROVE} ${TESTCASES}
 	$(AM_V_at) ${builddir}/test_cleanup
 
 .PHONY: check

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -22,6 +22,7 @@
  *
  */
 
+#include "compat.h"
 #include "timeutils.h"
 #include "messages.h"
 #include "syslog-ng.h"
@@ -575,7 +576,7 @@ zone_info_parser(unsigned char **input, gboolean is64bitData, gint *version)
    * if '\0', we have just one copy of data,
    * if '2', there is additional 64 bit version at the end.
    */
-  if (buf[0] != 0 && buf[0] != '2')
+  if (buf[0] != 0 && buf[0] != '2' && buf[0] != '3')
     {
       msg_error("Error in the time zone file", 
                 evt_tag_str("message", "Bad Olson version info"), 
@@ -656,13 +657,18 @@ zone_info_parser(unsigned char **input, gboolean is64bitData, gint *version)
  /* Read types (except for the isstd and isgmt flags, which come later (why??)) */
   for (i = 0; i<typecnt; ++i)
     {
+      gint offs = 24;
+
+      if (*version == 3)
+        offs = 167;
+
       gmt_offsets[i] = readcoded32(input, G_MININT64, G_MAXINT64);
-      if (gmt_offsets[i] > 24 * 60 * 60 || gmt_offsets[i] < -1 * 24 * 60 * 60)
+      if (gmt_offsets[i] > offs * 60 * 60 || gmt_offsets[i] < -1 * offs * 60 * 60)
         {
           msg_warning("Error in the time zone file", 
                       evt_tag_str("message", "Illegal gmtoffset number"), 
                       evt_tag_int("val", gmt_offsets[i]), 
-                      evt_tag_printf("expected", "[%d, %d]", -1 * 24 * 60 * 60, 24 * 60 * 60), 
+                      evt_tag_printf("expected", "[%d, %d]", -1 * offs * 60 * 60, offs * 60 * 60), 
                       NULL);
           goto error;
         }
@@ -844,7 +850,7 @@ zone_info_read(const gchar *zonename, ZoneInfo **zone, ZoneInfo **zone64)
   if (byte_read == -1)
     {
       msg_error("Failed to read the time zone file", evt_tag_str("filename", filename), NULL);
-      g_mapped_file_free(file_map);
+      g_mapped_file_unref(file_map);
       g_free(filename);
       return FALSE;
     }
@@ -857,7 +863,7 @@ zone_info_read(const gchar *zonename, ZoneInfo **zone, ZoneInfo **zone64)
       *zone64 = zone_info_parser(&buff, TRUE, &version);
     }
 
-  g_mapped_file_free(file_map);
+  g_mapped_file_unref(file_map);
     g_free(filename);
   return TRUE;
 }

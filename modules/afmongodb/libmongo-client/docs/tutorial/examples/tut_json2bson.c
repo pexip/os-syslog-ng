@@ -11,7 +11,7 @@ static bson *json_to_bson (struct json_object *json);
 
 static void
 json_key_to_bson_key (bson *b, void *val,
-		      const gchar *key)
+                      const gchar *key)
 {
   switch (json_object_get_type (val))
     {
@@ -29,33 +29,33 @@ json_key_to_bson_key (bson *b, void *val,
       break;
     case json_type_object:
       {
-	bson *sub;
+        bson *sub;
 
-	sub = json_to_bson (val);
-	bson_append_document (b, key, sub);
-	bson_free (sub);
-	break;
+        sub = json_to_bson (val);
+        bson_append_document (b, key, sub);
+        bson_free (sub);
+        break;
       }
     case json_type_array:
       {
-	gint pos;
-	bson *sub;
+        gint pos;
+        bson *sub;
 
-	sub = bson_new ();
+        sub = bson_new ();
 
-	for (pos = 0; pos < json_object_array_length (val); pos++)
-	  {
-	    gchar *nk = g_strdup_printf ("%d", pos);
+        for (pos = 0; pos < json_object_array_length (val); pos++)
+          {
+            gchar *nk = g_strdup_printf ("%d", pos);
 
-	    json_key_to_bson_key (sub, json_object_array_get_idx (val, pos),
-				  nk);
-	    g_free (nk);
-	  }
-	bson_finish (sub);
+            json_key_to_bson_key (sub, json_object_array_get_idx (val, pos),
+                                  nk);
+            g_free (nk);
+          }
+        bson_finish (sub);
 
-	bson_append_array (b, key, sub);
-	bson_free (sub);
-	break;
+        bson_append_array (b, key, sub);
+        bson_free (sub);
+        break;
       }
     default:
       break;
@@ -97,7 +97,7 @@ main (int argc, char **argv)
   tokener = json_tokener_new ();
 
   while (g_io_channel_read_line_string (input, json_str,
-					NULL, &error) == G_IO_STATUS_NORMAL)
+                                        NULL, &error) == G_IO_STATUS_NORMAL)
     {
       struct json_object *json;
       bson *bson;
@@ -106,19 +106,19 @@ main (int argc, char **argv)
 
       json = json_tokener_parse_ex (tokener, json_str->str, json_str->len);
       if (!json)
-	{
-	  fprintf (stderr, "Error parsing json: %s\n", json_str->str);
-	  break;
-	}
+        {
+          fprintf (stderr, "Error parsing json: %s\n", json_str->str);
+          break;
+        }
 
       if (json_object_get_type (json) != json_type_object)
-	{
-	  fprintf (stderr,
-		   "Error: json's top-level object is not object: %s\n",
-		   json_str->str);
-	  json_object_put (json);
-	  break;
-	}
+        {
+          fprintf (stderr,
+                   "Error: json's top-level object is not object: %s\n",
+                   json_str->str);
+          json_object_put (json);
+          break;
+        }
 
       bson = json_to_bson (json);
       json_object_put (json);

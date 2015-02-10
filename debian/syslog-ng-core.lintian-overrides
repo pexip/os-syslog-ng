@@ -1,0 +1,3 @@
+# These are ignored due to a Lintian bug: #727683
+syslog-ng-core: binary-or-shlib-defines-rpath usr/bin/pdbtool *
+syslog-ng-core: binary-or-shlib-defines-rpath usr/lib/syslog-ng/* *

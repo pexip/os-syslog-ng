@@ -4,7 +4,7 @@ from messagegen import *
 from messagecheck import *
 from control import flush_files, stop_syslogng
 
-config = """@version: 3.3
+config = """@version: 3.5
 
 options { ts_format(iso); chain_hostnames(no); keep_hostname(yes); threaded(yes); };
 
@@ -45,7 +45,7 @@ def check_env():
         soext='.sl'
 
     found = False
-    paths = (os.environ.get('dbd_dir', None), '/usr/local/lib/dbd', '/usr/lib/dbd', '/opt/syslog-ng/lib/dbd')
+    paths = (os.environ.get('dbd_dir', None), '/usr/local/lib/dbd', '/usr/lib/dbd', '/usr/lib64/dbd/', '/opt/syslog-ng/lib/dbd')
     for pth in paths:
         if pth and os.path.isfile('%s/libdbdsqlite3%s' % (pth, soext)):
             found = True

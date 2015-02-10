@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -40,9 +40,15 @@
 #include <netinet/in.h>
 #include <arpa/nameser.h>
 #include <resolv.h>
+#include <time.h>
 #include <iv.h>
 #include <iv_signal.h>
 #include <iv_work.h>
+#include <iv_event.h>
+
+#if ENABLE_SYSTEMD
+#include <systemd/sd-daemon.h>
+#endif
 
 /**
  * Processing model
@@ -116,7 +122,7 @@ static GlobalConfig *current_configuration;
 typedef struct _MainLoopTaskCallSite MainLoopTaskCallSite;
 struct _MainLoopTaskCallSite
 {
-  struct list_head list;
+  struct iv_list_head list;
   MainLoopTaskFunc func;
   gpointer user_data;
   gpointer result;
@@ -135,7 +141,7 @@ TLS_BLOCK_START
 TLS_BLOCK_END;
 
 static GStaticMutex main_task_lock = G_STATIC_MUTEX_INIT;
-static struct list_head main_task_queue = LIST_HEAD_INIT(main_task_queue);
+static struct iv_list_head main_task_queue = IV_LIST_HEAD_INIT(main_task_queue);
 static struct iv_event main_task_posted;
 GThread *main_thread_handle;
 
@@ -166,14 +172,14 @@ main_loop_call(MainLoopTaskFunc func, gpointer user_data, gboolean wait)
     }
 
   /* call_info.lock is no longer needed, since we're the only ones using call_info now */
-  INIT_LIST_HEAD(&call_info.list);
+  INIT_IV_LIST_HEAD(&call_info.list);
   call_info.pending = TRUE;
   call_info.func = func;
   call_info.user_data = user_data;
   call_info.wait = wait;
   if (!call_info.cond)
     call_info.cond = g_cond_new();
-  list_add(&call_info.list, &main_task_queue);
+  iv_list_add(&call_info.list, &main_task_queue);
   iv_event_post(&main_task_posted);
   if (wait)
     {
@@ -188,13 +194,13 @@ static void
 main_loop_call_handler(gpointer user_data)
 {
   g_static_mutex_lock(&main_task_lock);
-  while (!list_empty(&main_task_queue))
+  while (!iv_list_empty(&main_task_queue))
     {
       MainLoopTaskCallSite *site;
       gpointer result;
 
-      site = list_entry(main_task_queue.next, MainLoopTaskCallSite, list);
-      list_del_init(&site->list);
+      site = iv_list_entry(main_task_queue.next, MainLoopTaskCallSite, list);
+      iv_list_del_init(&site->list);
       g_static_mutex_unlock(&main_task_lock);
 
       result = site->func(site->user_data);
@@ -290,8 +296,9 @@ main_loop_io_worker_thread_start(void *cookie)
 {
   gint id;
 
-  g_static_mutex_lock(&main_loop_io_workers_idmap_lock);
   dns_cache_init();
+  scratch_buffers_init();
+  g_static_mutex_lock(&main_loop_io_workers_idmap_lock);
   /* NOTE: this algorithm limits the number of I/O worker threads to 64,
    * since the ID map is stored in a single 64 bit integer.  If we ever need
    * more threads than that, we can generalize this algorithm further. */
@@ -315,14 +322,17 @@ void
 main_loop_io_worker_thread_stop(void *cookie)
 {
   g_static_mutex_lock(&main_loop_io_workers_idmap_lock);
-  dns_cache_destroy();
   if (main_loop_io_worker_id)
     {
       main_loop_io_workers_idmap &= ~(1 << (main_loop_io_worker_id - 1));
       main_loop_io_worker_id = 0;
     }
-  scratch_buffers_free ();
   g_static_mutex_unlock(&main_loop_io_workers_idmap_lock);
+  dns_cache_destroy();
+  scratch_buffers_free();
+
+  if (call_info.cond)
+    g_cond_free(call_info.cond);
 }
 
 /* NOTE: only used by the unit test program to emulate worker threads with LogQueue */
@@ -359,21 +369,21 @@ main_loop_io_worker_job_submit(MainLoopIOWorkerJob *self)
 static void
 main_loop_io_worker_job_start(MainLoopIOWorkerJob *self)
 {
-  struct list_head *lh, *lh2;
+  struct iv_list_head *lh, *lh2;
 
   g_assert(main_loop_current_job == NULL);
 
   main_loop_current_job = self;
   self->work(self->user_data);
   
-  list_for_each_safe(lh, lh2, &self->finish_callbacks)
+  iv_list_for_each_safe(lh, lh2, &self->finish_callbacks)
     {
-      MainLoopIOWorkerFinishCallback *cb = list_entry(lh, MainLoopIOWorkerFinishCallback, list);
+      MainLoopIOWorkerFinishCallback *cb = iv_list_entry(lh, MainLoopIOWorkerFinishCallback, list);
       
       cb->func(cb->user_data);
-      list_del_init(&cb->list);
+      iv_list_del_init(&cb->list);
     }
-  g_assert(list_empty(&self->finish_callbacks));
+  g_assert(iv_list_empty(&self->finish_callbacks));
   main_loop_current_job = NULL;
 }
 
@@ -429,7 +439,7 @@ main_loop_io_worker_register_finish_callback(MainLoopIOWorkerFinishCallback *cb)
 {
   g_assert(main_loop_current_job != NULL);
   
-  list_add(&cb->list, &main_loop_current_job->finish_callbacks);
+  iv_list_add(&cb->list, &main_loop_current_job->finish_callbacks);
 }
 
 void
@@ -439,7 +449,7 @@ main_loop_io_worker_job_init(MainLoopIOWorkerJob *self)
   self->work_item.cookie = self;
   self->work_item.work = (void (*)(void *)) main_loop_io_worker_job_start;
   self->work_item.completion = (void (*)(void *)) main_loop_io_worker_job_complete;
-  INIT_LIST_HEAD(&self->finish_callbacks);
+  INIT_IV_LIST_HEAD(&self->finish_callbacks);
 }
 
 static void
@@ -457,6 +467,42 @@ main_loop_io_worker_sync_call(void (*func)(void))
       main_loop_io_workers_sync_func = func;
     }
 }
+
+/************************************************************************************
+ *
+ ************************************************************************************/
+
+#if ENABLE_SYSTEMD
+static void
+main_loop_publish_status(const gchar *status)
+{
+  gchar *status_buffer;
+  time_t now = time(NULL);
+
+  status_buffer = g_strdup_printf("STATUS=%s (%s)", status, ctime(&now));
+  sd_notify(0, status_buffer);
+  g_free(status_buffer);
+}
+
+static void
+main_loop_clear_status(void)
+{
+  sd_notify(0, "STATUS=");
+}
+
+static void
+main_loop_indicate_readiness(void)
+{
+  sd_notify(0, "READY=1");
+}
+
+#else
+
+#define main_loop_publish_status(x)
+#define main_loop_clear_status()
+#define main_loop_indicate_readiness()
+
+#endif
 
 /************************************************************************************
  * config load/reload
@@ -501,10 +547,12 @@ main_loop_reload_config_apply(void)
       main_loop_new_config->persist = NULL;
       cfg_free(main_loop_old_config);
       current_configuration = main_loop_new_config;
+      main_loop_clear_status();
     }
   else
     {
       msg_error("Error initializing new configuration, reverting to old config", NULL);
+      main_loop_publish_status("Error initializing new configuration, using the old config");
       cfg_persist_config_move(main_loop_new_config, main_loop_old_config);
       if (!cfg_init(main_loop_old_config))
         {
@@ -540,9 +588,11 @@ main_loop_reload_config_apply(void)
 }
 
 /* initiate configuration reload */
-static void
+void
 main_loop_reload_config_initiate(void)
 {
+  main_loop_publish_status("Reloading configuration");
+
   if (main_loop_new_config)
     {
       /* This block is entered only if this function is reentered before
@@ -554,6 +604,7 @@ main_loop_reload_config_initiate(void)
       cfg_free(main_loop_new_config);
       main_loop_new_config = NULL;
     }
+
   main_loop_old_config = current_configuration;
   app_pre_config_loaded();
   main_loop_new_config = cfg_new(0);
@@ -565,6 +616,7 @@ main_loop_reload_config_initiate(void)
       msg_error("Error parsing configuration",
                 evt_tag_str(EVT_TAG_FILENAME, cfgfilename),
                 NULL);
+      main_loop_publish_status("Error parsing new configuration, using the old config");
       return;
     }
   main_loop_io_worker_sync_call(main_loop_reload_config_apply);
@@ -582,6 +634,7 @@ main_loop_exit_finish(void)
   /* deinit the current configuration, as at this point we _know_ that no
    * threads are running.  This will unregister ivykis tasks and timers
    * that could fire while the configuration is being destructed */
+  dns_cache_deinit();
   cfg_deinit(current_configuration);
   iv_quit();
 }
@@ -660,6 +713,8 @@ setup_signals(void)
 int
 main_loop_init(void)
 {
+  main_loop_publish_status("Starting up...");
+
   app_startup();
   setup_signals();
   main_loop_io_workers.thread_start = main_loop_io_worker_thread_start;
@@ -702,33 +757,36 @@ main_loop_run(void)
 
   IV_SIGNAL_INIT(&sighup_poll);
   sighup_poll.signum = SIGHUP;
-  sighup_poll.exclusive = 1;
+  sighup_poll.flags = IV_SIGNAL_FLAG_EXCLUSIVE;
   sighup_poll.cookie = NULL;
   sighup_poll.handler = sig_hup_handler;
   iv_signal_register(&sighup_poll);
 
   IV_SIGNAL_INIT(&sigchild_poll);
   sigchild_poll.signum = SIGCHLD;
-  sigchild_poll.exclusive = 1;
+  sigchild_poll.flags = IV_SIGNAL_FLAG_EXCLUSIVE;
   sigchild_poll.handler = sig_child_handler;
   iv_signal_register(&sigchild_poll);
 
   IV_SIGNAL_INIT(&sigterm_poll);
   sigterm_poll.signum = SIGTERM;
-  sigterm_poll.exclusive = 1;
+  sigterm_poll.flags = IV_SIGNAL_FLAG_EXCLUSIVE;
   sigterm_poll.handler = sig_term_handler;
   iv_signal_register(&sigterm_poll);
 
   IV_SIGNAL_INIT(&sigint_poll);
   sigint_poll.signum = SIGINT;
-  sigint_poll.exclusive = 1;
+  sigint_poll.flags = IV_SIGNAL_FLAG_EXCLUSIVE;
   sigint_poll.handler = sig_term_handler;
   iv_signal_register(&sigint_poll);
 
   stats_timer_kickoff(current_configuration);
 
   /* main loop */
+  main_loop_indicate_readiness();
+  main_loop_clear_status();
   iv_main();
+  main_loop_publish_status("Shutting down...");
 
   control_destroy();
 

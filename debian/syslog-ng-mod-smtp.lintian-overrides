@@ -1,0 +1,2 @@
+# These are ignored due to a Lintian bug: #727683
+syslog-ng-mod-smtp: binary-or-shlib-defines-rpath usr/lib/syslog-ng/* *

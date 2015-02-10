@@ -12,7 +12,7 @@ test_mongo_sync_connect (void)
   begin_network_tests (1);
 
   ok ((c = mongo_sync_connect (config.primary_host,
-			       config.primary_port, FALSE)) != NULL,
+                               config.primary_port, FALSE)) != NULL,
       "mongo_sync_connect() works");
   mongo_sync_disconnect (c);
 

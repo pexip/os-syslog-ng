@@ -30,7 +30,7 @@
     }                                                                   \
   while (0)
 
-void
+static void
 test_nv_registry()
 {
   NVRegistry *reg;
@@ -154,7 +154,7 @@ test_nv_registry()
 #define DYN_HANDLE 17
 #define DYN_NAME "VAL17"
 
-void
+static void
 test_nvtable_direct()
 {
   NVTable *tab;
@@ -322,7 +322,7 @@ test_nvtable_direct()
  *    - set/get dynamic NV entries that refer to a non-existant entry
  *        -
  */
-void
+static void
 test_nvtable_indirect()
 {
   NVTable *tab;
@@ -365,7 +365,7 @@ test_nvtable_indirect()
   /* NOTE: the sizing of the NVTable can easily be broken, it is sized
      to make it possible to store one direct entry */
 
-  tab = nv_table_new(STATIC_VALUES, 0, 138);
+  tab = nv_table_new(STATIC_VALUES, 0, 138+3);  // direct: +3
   success = nv_table_add_value(tab, STATIC_HANDLE, STATIC_NAME, 4, value, 128, NULL);
   TEST_ASSERT(success == TRUE);
 
@@ -437,7 +437,7 @@ test_nvtable_indirect()
   /* the new entry will not fit to the space allocated to the old and neither to the NVTable */
 
   /* setup code: add static and a dynamic-direct entry */
-  tab = nv_table_new(STATIC_VALUES, 1, 154);
+  tab = nv_table_new(STATIC_VALUES, 1, 154+3+4);  // direct: +3, indirect: +4
   success = nv_table_add_value(tab, STATIC_HANDLE, STATIC_NAME, 4, value, 128, NULL);
   TEST_ASSERT(success == TRUE);
   success = nv_table_add_value(tab, handle, name, strlen(name), value, 1, NULL);
@@ -535,7 +535,7 @@ test_nvtable_indirect()
 
   /* one that is too large */
 
-  tab = nv_table_new(STATIC_VALUES, STATIC_VALUES, 256);
+  tab = nv_table_new(STATIC_VALUES, 4, 256);
   success = nv_table_add_value(tab, STATIC_HANDLE, STATIC_NAME, 4, value, 128, NULL);
   TEST_ASSERT(success == TRUE);
   success = nv_table_add_value_indirect(tab, DYN_HANDLE, DYN_NAME, strlen(DYN_NAME), STATIC_HANDLE, 0, 1, 126, NULL);
@@ -600,7 +600,7 @@ test_nvtable_indirect()
 
   /* one that is too large */
 
-  tab = nv_table_new(STATIC_VALUES, STATIC_VALUES, 256);
+  tab = nv_table_new(STATIC_VALUES, 4, 256);
   success = nv_table_add_value(tab, STATIC_HANDLE, STATIC_NAME, 4, value, 128, NULL);
   TEST_ASSERT(success == TRUE);
   success = nv_table_add_value_indirect(tab, DYN_HANDLE, DYN_NAME, strlen(DYN_NAME), STATIC_HANDLE, 0, 1, 126, NULL);
@@ -644,7 +644,7 @@ test_nvtable_indirect()
  *
  * - change an entry that is referenced by other entries
  */
-void
+static void
 test_nvtable_others(void)
 {
   NVTable *tab;
@@ -689,7 +689,7 @@ test_nvtable_others(void)
   nv_table_unref(tab);
 }
 
-void
+static void
 test_nvtable_lookup()
 {
   NVTable *tab;
@@ -729,13 +729,157 @@ test_nvtable_lookup()
     }
 }
 
-void
+static void
+test_nvtable_clone_grows_the_cloned_structure(void)
+{
+  NVTable *tab, *tab_clone;
+  gboolean success;
+
+  tab = nv_table_new(STATIC_VALUES, STATIC_VALUES, 64);
+  success = nv_table_add_value(tab, STATIC_HANDLE, STATIC_NAME, strlen(STATIC_NAME), "value", 5, NULL);
+  TEST_ASSERT(success == TRUE);
+  TEST_NVTABLE_ASSERT(tab, STATIC_HANDLE, "value", 5);
+
+  tab_clone = nv_table_clone(tab, 64);
+  TEST_NVTABLE_ASSERT(tab_clone, STATIC_HANDLE, "value", 5);
+  TEST_ASSERT(tab->size < tab_clone->size);
+  nv_table_unref(tab_clone);
+  nv_table_unref(tab);
+}
+
+static void
+test_nvtable_clone_cannot_grow_nvtable_larger_than_nvtable_max_bytes(void)
+{
+  NVTable *tab, *tab_clone;
+  gboolean success;
+
+  tab = nv_table_new(STATIC_VALUES, STATIC_VALUES, NV_TABLE_MAX_BYTES - 1024);
+  success = nv_table_add_value(tab, STATIC_HANDLE, STATIC_NAME, strlen(STATIC_NAME), "value", 5, NULL);
+  TEST_ASSERT(success == TRUE);
+  TEST_NVTABLE_ASSERT(tab, STATIC_HANDLE, "value", 5);
+
+  tab_clone = nv_table_clone(tab, 2048);
+  TEST_NVTABLE_ASSERT(tab_clone, STATIC_HANDLE, "value", 5);
+  TEST_ASSERT(tab->size < tab_clone->size);
+  TEST_ASSERT(tab_clone->size <= NV_TABLE_MAX_BYTES);
+  nv_table_unref(tab_clone);
+  nv_table_unref(tab);
+}
+
+static void
+test_nvtable_clone(void)
+{
+  test_nvtable_clone_grows_the_cloned_structure();
+  test_nvtable_clone_cannot_grow_nvtable_larger_than_nvtable_max_bytes();
+}
+
+static void
+test_nvtable_realloc_doubles_nvtable_size(void)
+{
+  NVTable *tab;
+  gboolean success;
+  gsize old_size;
+
+  tab = nv_table_new(STATIC_VALUES, STATIC_VALUES, 1024);
+  success = nv_table_add_value(tab, STATIC_HANDLE, STATIC_NAME, strlen(STATIC_NAME), "value", 5, NULL);
+  TEST_ASSERT(success == TRUE);
+  TEST_NVTABLE_ASSERT(tab, STATIC_HANDLE, "value", 5);
+
+  old_size = tab->size;
+
+  TEST_ASSERT(nv_table_realloc(tab, &tab));
+  TEST_ASSERT(tab->size >= old_size * 2);
+  TEST_NVTABLE_ASSERT(tab, STATIC_HANDLE, "value", 5);
+
+  nv_table_unref(tab);
+
+}
+
+static void
+test_nvtable_realloc_sets_size_to_nv_table_max_bytes_at_most(void)
+{
+  NVTable *tab;
+  gboolean success;
+  gsize old_size;
+
+  tab = nv_table_new(STATIC_VALUES, STATIC_VALUES, NV_TABLE_MAX_BYTES - 1024);
+  success = nv_table_add_value(tab, STATIC_HANDLE, STATIC_NAME, strlen(STATIC_NAME), "value", 5, NULL);
+  TEST_ASSERT(success == TRUE);
+  TEST_NVTABLE_ASSERT(tab, STATIC_HANDLE, "value", 5);
+
+  old_size = tab->size;
+
+  TEST_ASSERT(nv_table_realloc(tab, &tab));
+  TEST_ASSERT(tab->size > old_size);
+  TEST_ASSERT(tab->size <= NV_TABLE_MAX_BYTES);
+  TEST_NVTABLE_ASSERT(tab, STATIC_HANDLE, "value", 5);
+
+  nv_table_unref(tab);
+}
+
+static void
+test_nvtable_realloc_fails_if_size_is_at_maximum(void)
+{
+  NVTable *tab;
+  gboolean success;
+
+  tab = nv_table_new(STATIC_VALUES, STATIC_VALUES, NV_TABLE_MAX_BYTES);
+  success = nv_table_add_value(tab, STATIC_HANDLE, STATIC_NAME, strlen(STATIC_NAME), "value", 5, NULL);
+  TEST_ASSERT(success == TRUE);
+  TEST_NVTABLE_ASSERT(tab, STATIC_HANDLE, "value", 5);
+
+  TEST_ASSERT(nv_table_realloc(tab, &tab) == FALSE);
+  TEST_ASSERT(tab->size == NV_TABLE_MAX_BYTES);
+  TEST_NVTABLE_ASSERT(tab, STATIC_HANDLE, "value", 5);
+
+  nv_table_unref(tab);
+}
+
+static void
+test_nvtable_realloc_leaves_original_intact_if_there_are_multiple_references(void)
+{
+  NVTable *tab_ref1, *tab_ref2;
+  gboolean success;
+  gsize old_size;
+
+  tab_ref1 = nv_table_new(STATIC_VALUES, STATIC_VALUES, 1024);
+  tab_ref2 = nv_table_ref(tab_ref1);
+
+  success = nv_table_add_value(tab_ref1, STATIC_HANDLE, STATIC_NAME, strlen(STATIC_NAME), "value", 5, NULL);
+  TEST_ASSERT(success == TRUE);
+  TEST_NVTABLE_ASSERT(tab_ref1, STATIC_HANDLE, "value", 5);
+  TEST_NVTABLE_ASSERT(tab_ref2, STATIC_HANDLE, "value", 5);
+
+  old_size = tab_ref1->size;
+
+  TEST_ASSERT(nv_table_realloc(tab_ref2, &tab_ref2));
+  TEST_ASSERT(tab_ref1->size == old_size);
+  TEST_ASSERT(tab_ref2->size >= old_size);
+  TEST_NVTABLE_ASSERT(tab_ref1, STATIC_HANDLE, "value", 5);
+  TEST_NVTABLE_ASSERT(tab_ref2, STATIC_HANDLE, "value", 5);
+
+  nv_table_unref(tab_ref1);
+  nv_table_unref(tab_ref2);
+}
+
+static void
+test_nvtable_realloc(void)
+{
+  test_nvtable_realloc_doubles_nvtable_size();
+  test_nvtable_realloc_sets_size_to_nv_table_max_bytes_at_most();
+  test_nvtable_realloc_fails_if_size_is_at_maximum();
+  test_nvtable_realloc_leaves_original_intact_if_there_are_multiple_references();
+}
+
+static void
 test_nvtable(void)
 {
   test_nvtable_direct();
   test_nvtable_indirect();
   test_nvtable_others();
   test_nvtable_lookup();
+  test_nvtable_clone();
+  test_nvtable_realloc();
 }
 
 int

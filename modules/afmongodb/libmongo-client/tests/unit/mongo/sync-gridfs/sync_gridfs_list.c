@@ -8,7 +8,7 @@ test_mongo_sync_gridfs_list (void)
   bson *query;
 
   query = bson_build (BSON_TYPE_STRING, "bogus-key", "bogus-value", -1,
-		      BSON_TYPE_NONE);
+                      BSON_TYPE_NONE);
   bson_finish (query);
 
   ok (mongo_sync_gridfs_list (NULL, NULL) == NULL,

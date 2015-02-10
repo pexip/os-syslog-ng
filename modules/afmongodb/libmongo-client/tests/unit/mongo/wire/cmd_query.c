@@ -40,33 +40,33 @@ test_mongo_wire_cmd_query (void)
 
   mongo_wire_packet_get_header (p, &hdr);
   cmp_ok ((data_size = mongo_wire_packet_get_data (p, &data)), "!=", -1,
-	  "Packet data size looks fine");
+          "Packet data size looks fine");
   cmp_ok (hdr.length, "==", sizeof (mongo_packet_header) + data_size,
-	  "Packet header length is OK");
+          "Packet header length is OK");
   cmp_ok (hdr.id, "==", 1, "Packet request ID is ok");
   cmp_ok (hdr.resp_to, "==", 0, "Packet reply ID is ok");
 
   /* pos = zero + collection_name + NULL + skip + ret */
   pos = sizeof (gint32) + strlen ("test.ns") + 1 + sizeof (gint32) * 2;
   ok ((tmp = bson_new_from_data (data + pos,
-				 bson_stream_doc_size (data, pos) - 1)) != NULL,
+                                 bson_stream_doc_size (data, pos) - 1)) != NULL,
       "Packet contains a valid BSON query document");
   bson_finish (tmp);
 
   ok ((c = bson_find (tmp, "int32")) != NULL,
       "BSON contains 'int32'");
   cmp_ok (bson_cursor_type (c), "==", BSON_TYPE_INT32,
-	  "int32 has correct type");
+          "int32 has correct type");
   bson_cursor_next (c);
   cmp_ok (bson_cursor_type (c), "==", BSON_TYPE_INT64,
-	  "next element has correct type too");
+          "next element has correct type too");
   ok (bson_cursor_next (c) == FALSE,
       "No more data after the update BSON object");
   bson_cursor_free (c);
 
   cmp_ok (hdr.length, "==", sizeof (mongo_packet_header) + pos +
-	  bson_size (q),
-	  "Packet header lenght is correct");
+          bson_size (q),
+          "Packet header lenght is correct");
   bson_free (tmp);
   mongo_wire_packet_free (p);
 
@@ -79,16 +79,16 @@ test_mongo_wire_cmd_query (void)
 
   mongo_wire_packet_get_header (p, &hdr);
   cmp_ok ((data_size = mongo_wire_packet_get_data (p, &data)), "!=", -1,
-	  "Packet data size looks fine");
+          "Packet data size looks fine");
   cmp_ok (hdr.length, "==", sizeof (mongo_packet_header) + data_size,
-	  "Packet header length is OK");
+          "Packet header length is OK");
   cmp_ok (hdr.id, "==", 1, "Packet request ID is ok");
   cmp_ok (hdr.resp_to, "==", 0, "Packet reply ID is ok");
 
   /* pos = zero + collection_name + NULL + skip + ret */
   pos = sizeof (gint32) + strlen ("test.ns") + 1 + sizeof (gint32) * 2;
   ok ((tmp = bson_new_from_data (data + pos,
-				 bson_stream_doc_size (data, pos) - 1)) != NULL,
+                                 bson_stream_doc_size (data, pos) - 1)) != NULL,
       "Packet contains a valid BSON query document");
   bson_finish (tmp);
   pos += bson_size (tmp);
@@ -97,17 +97,17 @@ test_mongo_wire_cmd_query (void)
   bson_free (s);
 
   ok ((s = bson_new_from_data (data + pos,
-			       bson_stream_doc_size (data, pos) - 1)) != NULL,
+                               bson_stream_doc_size (data, pos) - 1)) != NULL,
       "Packet contains a valid BSON selector document");
   bson_finish (s);
 
   ok ((c = bson_find (s, "_id")) != NULL,
       "BSON contains '_id'");
   cmp_ok (bson_cursor_type (c), "==", BSON_TYPE_BOOLEAN,
-	  "_id has correct type");
+          "_id has correct type");
   bson_cursor_next (c);
   cmp_ok (bson_cursor_type (c), "==", BSON_TYPE_BOOLEAN,
-	  "next element has correct type too");
+          "next element has correct type too");
 
   bson_cursor_free (c);
   bson_free (s);
