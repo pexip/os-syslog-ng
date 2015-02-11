@@ -3,6 +3,9 @@ syslog-ng (3.5.6-2pexip1) pexip; urgency=low
   * New upstream release; migrate to Jessie.
   * Drop patches -- fixed upstream
   * Drop hack for clean -- not needed
+  * Disable systemd support
+  * Fix up build depends for PexOS
+  * Introduce patch which adds ca-file TLS option
 
  -- John-Mark Bell <jmb@pexip.com>  Tue, 10 Feb 2015 13:53:29 +0000
 
