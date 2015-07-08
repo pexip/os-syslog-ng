@@ -1,3 +1,9 @@
+syslog-ng (3.5.6-2pexip2) pexip; urgency=low
+
+  * d/p/afsocket_retry.patch: backport fix for socket retry
+
+ -- Alan Ford <alan@pexip.com>  Wed, 08 Jul 2015 20:26:39 +0100
+
 syslog-ng (3.5.6-2pexip1) pexip; urgency=low
 
   * New upstream release; migrate to Jessie.
