@@ -1,3 +1,9 @@
+syslog-ng (3.5.6-2pexip3) pexip; urgency=low
+
+  * Rebuild against libssl1.0.2
+
+ -- John-Mark Bell <jmb@pexip.com>  Tue, 11 Oct 2016 22:29:42 +0100
+
 syslog-ng (3.5.6-2pexip2) pexip; urgency=low
 
   * d/p/afsocket_retry.patch: backport fix for socket retry
