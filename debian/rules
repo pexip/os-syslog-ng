@@ -35,70 +35,57 @@ endif
 # update the rules for every major version if it can be helped, figure
 # it out from the changelog instead.
 UMAJOR		   = $(shell dpkg-parsechangelog | sed -n '/^Version:/s/^Version: //p' | cut -d. -f1,2)
-# Furthermore, if the directory does not exist, lets suppose we're not
-# building from a git checkout, but some kind of tarball-thing, where
-# debian/ was laid out on top of the upstream sources. So in this
-# case, use the current directory as the source dir.
-SRCDIR	   	   = $(shell test -d syslog-ng-${UMAJOR} && echo syslog-ng-${UMAJOR} || echo .)
 
 # To better support the Incubator, and have looser dependencies, we
-# track the ABI version here. The aim is to produce a dependency of
-# syslog-ng (>= 3.5.5~), syslog-ng (<< 3.5.6~). We can't get looser
-# than that, because the module directory *will* change.
-ABI_VERSION_LOW	   = $(shell dpkg-parsechangelog | sed -n '/^Version:/s/^Version: //p' | cut -d- -f1)
-ABI_VERSION_HIGH   = $(shell echo $$(echo ${ABI_VERSION_LOW} | rev | cut -d. -f2- | rev).$$(expr $$(echo ${ABI_VERSION_LOW} | rev | cut -d. -f1) + 1))
+# track the ABI version here. Whenever the soname of libsyslog-ng
+# changes, up this one too!
+ABI_VERSION	   = 3.8-0
 
-export DH_OPTIONS += -O-Bdebian/build-tree --dbg-package=syslog-ng-dbg -O-D${SRCDIR}
+export DH_OPTIONS += -O-Bdebian/build-tree --dbg-package=syslog-ng-dbg
 
 CFLAGS		?= $(shell dpkg-buildflags --get CFLAGS)
 LDFLAGS		?= $(shell dpkg-buildflags --get LDFLAGS)
 
-# If debian/control does not have a build-dependency on
-# libsystemd-daemon, disable systemd support, otherwise enable it.
-ifeq ($(shell grep -q libsystemd-daemon-dev debian/control || echo disabled),disabled)
-SYSTEMD_SUPPORT	?= --disable-systemd
+
+# We want to enforce systemd support on Linux, but disable it
+# everywhere else.
+ifeq ($(shell dpkg-architecture -qDEB_HOST_ARCH_OS),linux)
+SYSTEMD_CONFIGURE_OPTS = --enable-systemd --with-systemd-journal=system
 else
-SYSTEMD_SUPPORT	?= --enable-systemd
+SYSTEMD_CONFIGURE_OPTS = --disable-systemd
 endif
 
-ifeq ($(shell dpkg-architecture -qDEB_HOST_ARCH_OS),linux)
-LINUX_CAP_SUPPORT ?= --enable-linux-caps
-else
-LINUX_CAP_SUPPORT ?= --disable-linux-caps
+# If DH_QUIET is set, then we want silent mode.
+# If DH_VERBOSE is set, we do not want silent mode.
+# If neither is set, we want the default: verbose mode.
+SILENT_MODE	       = --disable-silent-rules
+ifneq (,${DH_QUIET})
+SILENT_MODE	       = --enable-silent-rules
+endif
+ifneq (,${DH_VERBOSE})
+SILENT_MODE	       = --disable-silent-rules
 endif
 
 ##
 #* Overrides for dh_auto*
 ##
 
-# Autoreconf needs a few things:
-# - m4 directories for the submodules, because otherwise it can
-#   randomly fail.
-# - We need to call autogen.sh instead of autoreconf.
-override_dh_autoreconf:
-	install -d ${SRCDIR}/lib/ivykis/m4 ${SRCDIR}/modules/afmongodb/libmongo-client/m4 \
-		debian/build-tree/modules/afamqp/rabbitmq-c/librabbitmq
-	dh_autoreconf -- sh -c "cd ${SRCDIR} && ./autogen.sh"
-
 # Oh, the joys of configure!
 # We pass down all appropriate options, along with EXTRA_CONFIGURE_OPTS.
-# This also sets SOURCE_REVISION to the debian package version, plus
-# some other stuff that we keep in debian/source_revision (generated
-# by debian/tools/bootstrap.sh).
+# This also sets SOURCE_REVISION to the debian package version.
 override_dh_auto_configure:
 	install -d debian/build-tree
+	-rm -rf doc/man/*.?
 	SOURCE_REVISION="$(shell dpkg-parsechangelog | \
-			  sed -n "/^Version:/s/^Version: //p" | \
-			  sed -e "s,$$,$(shell cat debian/source_revision 2>/dev/null || true)," | \
-			  sed -e "s,$$, ($(shell lsb_release -is)/$(shell lsb_release -rs)),")"; \
+			  sed -n '/^Version:/s/^Version: //p')"; \
 	dh_auto_configure -- \
 		--build=$(dpkg-architecture -qDEB_BUILD_GNU_TYPE) \
 		--prefix=/usr \
 		--mandir=/usr/share/man \
 		--sysconfdir=/etc/syslog-ng \
 		--localstatedir=/var/lib/syslog-ng \
-		--datadir=/usr/share/syslog-ng \
 		--libdir=/usr/lib/syslog-ng \
+		${SILENT_MODE} \
 		\
 		--enable-dynamic-linking \
 		--enable-ssl \
@@ -107,59 +94,40 @@ override_dh_auto_configure:
 		--enable-sql \
 		--enable-mongodb \
 		--enable-json \
-		${SYSTEMD_SUPPORT} \
-		${LINUX_CAP_SUPPORT} \
+		--enable-riemann \
+		--disable-java \
+		--enable-manpages \
+		--enable-amqp \
 		\
-		--with-libmongo-client=system \
+		--with-mongoc=system \
 		--with-ivykis=system \
+		--with-jsonc=system \
+		--with-librabbitmq-client=system \
 		\
-		--with-module-dir='$${exec_prefix}/lib/syslog-ng/$${VERSION}' \
+		--with-module-dir='$${exec_prefix}/lib/syslog-ng/${UMAJOR}' \
 		--with-systemdsystemunitdir="/lib/systemd/system" \
 		\
 		SOURCE_REVISION="$${SOURCE_REVISION}" \
+		${SYSTEMD_CONFIGURE_OPTS} \
 		${EXTRA_CONFIGURE_OPTS}
-
-# Building is fine, but the manpages need some sed work, to replace
-# /opt/syslog-ng with something sensible.
-override_dh_auto_build:
-	dh_auto_build -- V=1
-	for f in debian/build-tree/doc/man/*; do \
-		sed -e "s#/opt/syslog\\\-ng/etc#/etc/syslog-ng#g" \
-		    -e "s#/opt/syslog\\\-ng##g" \
-		    -e "/affile/{s#,#, #g}" \
-		    -e 's#^/$$##' <$$f >$$f.new && \
-		rm $$f && mv $$f.new $$f; \
-	done
 
 # The pkg-config .pc file is installed into ${libdir}/pkgconfig, but
 # we override libdir above to place everything useful there. We want
 # the .pc file elsewhere, though, so do that here at install time.
+#
+# Similarly, we want to install python modules to their proper place,
+# and this is a great time to tell the build system where that is.
+# Also removing .la files, these files don't needed and just confuse
+# the list-missing option
 override_dh_auto_install:
-	dh_auto_install -- pkgconfigdir=/usr/lib/pkgconfig
+	dh_auto_install -- pkgconfigdir=/usr/lib/pkgconfig \
+			   PYSETUP_OPTIONS="--install-layout=deb --root=$(CURDIR)/debian/tmp/"
+	find . -name \*.la | xargs --no-run-if-empty rm
 
-# Tests. While tests are good, they're quite costy, and I'm not
-# convinced they'd run on the buildds at all. Therefore, they're
-# disabled.
+# To get better test results, and actually see failing tests, we need
+# to pass VERBOSE=1 to make when running the tests. Do that here.
 override_dh_auto_test:
-
-# Cleaning is another fun thing: make distclean will not remove
-# everything we want to remove (ie, everything generated, no
-# exceptions). So we do a bit of finding and remove a few things it
-# missed. We also remove the m4 directories we created for autoreconf
-# earlier.
-override_dh_auto_clean:
-	dh_auto_clean
-	find . \( -name 'Makefile.in' -or \
-		  -name 'aclocal.m4' -or \
-		  -name 'configure' -or \
-		  -name 'depcomp' -or -name 'missing' -or \
-		  -name 'install-sh' -or -name 'ltmain.sh' -or \
-		  -name 'ylwrap' -or \
-		  -regex '.*/config\.\(sub\|guess\|h\.in\)' \) \
-	     -exec rm '{}' \;
-	rm -f ${SRCDIR}/m4/lt*.m4 ${SRCDIR}/m4/libtool.m4 ${SRCDIR}/m4/pkg.m4
-	rm -rf ${SRCDIR}/lib/ivykis/m4 ${SRCDIR}/modules/afmongodb/libmongo-client/m4
-	rm -rf debian/build-tree/
+	dh_auto_test -- VERBOSE=1
 
 ##
 #* Overrides for other debhelper commands
@@ -167,55 +135,14 @@ override_dh_auto_clean:
 # Below are overrides for individual debhelper commands.
 ##
 
-# On kFreeBSD, d_console_all should log to /dev/ttyva, everywhere
-# else, to tty10. To keep the config as simple as possible, this is
-# accomplished by pulling the target device out of syslog-ng.conf,
-# into `scl-root`/system/tty10.conf.
-#
-# On kFreeBSD, this defines the `tty10` variable to /dev/ttyva,
-# everywhere else to /dev/tty10.
-#
-# It will be installed into the syslog-ng-core package by the
-# override_dh_install target.
-ifeq (${DEB_HOST_ARCH_OS},kfreebsd)
-TTY10_CONF = tty10.kfreebsd.conf
-else
-TTY10_CONF = tty10.linux.conf
-endif
-
-# Upstream installs the merge-grammar.pl as data, thus not
-# executable. Yet, it needs to be, since the Makefiles that upstream
-# also installs expect it so.
-#
-# So we simply flip a few bits after dh_install, and we're good to go!
-#
-# We also want to install the systemd unit file into syslog-ng-core,
-# so do that here too, along with installing tty10.conf.
-override_dh_install:
-	dh_install
-ifneq (,$(filter syslog-ng-dev,$(shell dh_listpackages)))
-	chmod +x debian/syslog-ng-dev/usr/share/syslog-ng/tools/merge-grammar.pl
-endif
-ifneq (,$(filter syslog-ng-core,$(shell dh_listpackages)))
-ifeq (${SYSTEMD_SUPPORT},--enable-systemd)
-	install -d debian/syslog-ng-core/lib/systemd/system
-	install -m 0644 ${SRCDIR}/contrib/systemd/syslog-ng.service \
-			debian/syslog-ng-core/lib/systemd/system/
-endif
-	install -m 0644 debian/${TTY10_CONF} \
-			debian/syslog-ng-core/usr/share/syslog-ng/include/scl/system/tty10.conf
-endif
-
 # Install the NEWS file as upstream changelog.
 # Rationale: the ChangeLog file is an old artifact from the Arch
 # times. It is not updated, and is obsolete.
 override_dh_installchangelogs:
-	dh_installchangelogs ${SRCDIR}/NEWS
+	dh_installchangelogs NEWS.md
 
 # Init files and whatnot were moved to syslog-ng-core, but we want to
-# retain the old filenames. Furthermore, the init script is now
-# triggered by dpkg triggers, so the maintainer scripts should not
-# stop, start or reload syslog-ng anymore.
+# retain the old filenames.
 override_dh_installinit:
 	dh_installinit --name syslog-ng --restart-after-upgrade
 
@@ -239,25 +166,10 @@ override_dh_installlogcheck:
 # explains how the dependency is calculated.
 override_dh_makeshlibs:
 ifneq (,$(filter syslog-ng-core,$(shell dh_listpackages)))
-	dh_makeshlibs -V "syslog-ng-core (>= ${ABI_VERSION_LOW}~), syslog-ng-core (<< ${ABI_VERSION_HIGH}~)" \
-		      -n -Xusr/lib/syslog-ng/$(shell cat ${SRCDIR}/VERSION)
+	dh_makeshlibs -V "syslog-ng-abi-${ABI_VERSION}" \
+		      -n -Xusr/lib/syslog-ng/${UMAJOR}
 else
-	dh_makeshlibs -n -Xusr/lib/syslog-ng/$(shell cat ${SRCDIR}/VERSION)
-endif
-
-# Compress the .debs with xz, it reduces the size of syslog-ng-core by
-# about 40%. Except, we don't compress the arch: all packages with it,
-# because I want to reuse those even on systems that do not support
-# data.tar.xz (lucid, I'm looking at you).
-#
-# Oh, and for compatibility with Ubuntu (Lucid), don't use -Zxz at
-# all.
-override_dh_builddeb:
-	dh_builddeb -i -- -Zgzip
-ifneq (Ubuntu,$(shell lsb_release -is))
-	dh_builddeb -a -- -Zxz
-else
-	dh_builddeb -a -- -Zgzip
+	dh_makeshlibs -n -Xusr/lib/syslog-ng/${UMAJOR}
 endif
 
 # Since syslog-ng depends on all the modules, and syslog-ng-core
@@ -268,16 +180,17 @@ endif
 # part of syslog-ng (or it depended on them) previously, in 3.3.
 override_dh_gencontrol:
 	dh_gencontrol -- -Vsng:Modules=$(shell debian/tools/list-modules.sh optional) \
-			 -Vsng:CoreModules=$(shell debian/tools/list-modules.sh core)
+			 -Vsng:CoreModules=$(shell debian/tools/list-modules.sh core) \
+			 -Vsng:ABI=${ABI_VERSION}
+
+# Sadly, dh_python2 barfs on --dbg-package=, so we work it around by
+# clearing DH_OPTIONS here.
+override_dh_python2:
+	DH_OPTIONS="" dh_python2
 
 ##
 #* Other, non-override targets
 ##
-
-# Dummy build thingy, to work around upstream build/ dir.
-build: build-stamp
-build-stamp:
-.PHONY: build-stamp
 
 # By default, the arch:all syslog-ng package does not need anything
 # built, so build-indep shall be empty. This avoids triggering another
@@ -286,31 +199,6 @@ build-stamp:
 # package has no build-dep-indeps, rightly so).
 build-indep: ;
 
-# We get the original source by calling an external tool, that will do
-# the heavy lifting for us.
-get-orig-source:
-	debian/tools/get-orig-source.sh
-
-# Provide a short interface to export-source.sh
-export-source:
-	debian/tools/export-source.sh
-
-# Without control, we are useless, politely tell the user to be our
-# good master.
-debian/control:
-	@echo "===============================================================" >&2
-	@echo "There is no debian/control, so this is probably a git checkout." >&2
-	@echo "Please run debian/tools/bootstrap.sh!" >&2
-	@echo "===============================================================" >&2
-	@exit 1
-
-binary binary-arch binary-indep build build-arch build-indep clean \
-install install-arch install-indep: debian/control
-
 # And for the rest, there is debhelper!
 %:
-ifeq (${SYSTEMD_SUPPORT},--enable-systemd)
-	dh $@ --with autoreconf,systemd
-else
-	dh $@ --with autoreconf
-endif
+	dh $@ --with autoreconf,systemd,python2 --parallel --list-missing

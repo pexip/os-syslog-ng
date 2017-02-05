@@ -1,3 +1,237 @@
+syslog-ng (3.8.1-10) unstable; urgency=medium
+
+  * Fix segfault in X509_STORE_CTX_get_app_data(ctx) (closes: #850743).
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.org>  Sun, 05 Feb 2017 08:34:41 +0000
+
+syslog-ng (3.8.1-9) unstable; urgency=medium
+
+  * Fix build with OpenSSL 1.1 (closes: #848786).
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.org>  Thu, 22 Dec 2016 10:44:32 +0000
+
+syslog-ng (3.8.1-8) unstable; urgency=medium
+
+  * [ee388fd] Declaring breaks because of file moving (Closes: 847708)
+  * [1ebe21f] Switch to unstable repo
+  * [18653b3] Added testing upgrade capability
+
+ -- SZALAY Attila <sasa@debian.org>  Sun, 11 Dec 2016 18:32:35 +0100
+
+syslog-ng (3.8.1-7) unstable; urgency=medium
+
+  * [45109e3] Moved templates depending on json to mod-json (Closes: #845799)
+  * [023a862] Added some more testcases to autopkg
+
+ -- SZALAY Attila <sasa@debian.org>  Tue, 06 Dec 2016 23:44:35 +0100
+
+syslog-ng (3.8.1-6) unstable; urgency=medium
+
+  * [41f337f] Updated configuration.
+    Removed the deprecated defines from scl.conf
+    and upgraded the version of the configuration
+    file. (Closes: #843937)
+
+ -- SZALAY Attila <sasa@debian.org>  Fri, 18 Nov 2016 16:23:17 +0100
+
+syslog-ng (3.8.1-5) unstable; urgency=medium
+
+  * [05e9749] Revert export method to head.
+    Much cleaner and can be changed in parameter list
+    if needed
+  * [6b49e04] Added basic test to check if syslog-ng can start
+  * [80260f3] Added tzdata dependency, needed by a testcase.
+    Because tzdata is neither essential nor build-essential
+    package explicit build-dependency is needed. (Closes: #839449)
+  * [e68e244] Upgraded ABI version to 3.8
+  * [1241045] Temporally stay with the libssl-1.0 until upstream fix this
+    (Closes: #828565)
+  * [c8dc698] Added dependency to lsb-base as lintian suggested
+
+ -- SZALAY Attila <sasa@debian.org>  Sat, 05 Nov 2016 19:09:39 +0100
+
+syslog-ng (3.8.1-4) experimental; urgency=medium
+
+  * [6b459d5] Bumped policy version to 3.9.8
+  * [de6480c] Added patch to fix man page line breaking issue
+  * [221a51e] Added new module: add-contextual-data
+  * [6733853] Removing unnecessary parts.
+    Removing commented out parts and also
+    parts which are obsoleted.
+  * [bb61029] Fixed Vcs field in debian/control
+  * [3d07696] Changed export method to Workspace.
+    With this change it is possible to build a debian package
+    from syslog-ng with the help of git-buildpackage and without
+    committing the change first.
+  * [f7a25e3] Enforce re-generating the man pages
+  * [abc4899] Remove unneeded files from build stage dir.
+    To make the --list-missing more practical.
+
+ -- SZALAY Attila <sasa@debian.org>  Sun, 11 Sep 2016 19:02:02 +0200
+
+syslog-ng (3.8.1-3) experimental; urgency=medium
+
+  * [e1adb55] Fixed debian/changelog wrapping
+  * [c3d1395] Do not use embedded libraries when possible
+  * [6f73327] Follow the upstream decision to change mongodb library
+  * [f893b95] Added patch to fix compile issue with system provided mongodbc
+  * [46ff5cd] Enabled rabbitmq module
+
+ -- SZALAY Attila <sasa@debian.org>  Fri, 02 Sep 2016 22:02:48 +0200
+
+syslog-ng (3.8.1-2) experimental; urgency=medium
+
+  * [fc743d9] Added upstream patch fixing hurd-i386 compilation
+  * [0efe489] Do not try to install systemd related things on kfreebsd
+
+ -- SZALAY Attila <sasa@debian.org>  Tue, 30 Aug 2016 21:42:18 +0200
+
+syslog-ng (3.8.1-1) experimental; urgency=medium
+
+  * [469c62c] Revert to the old watch file.
+    The tags does not work, because the downloaded archive does not
+    contain some essential part of the distribution.
+  * [b1f13dc] Imported Upstream version 3.8.1
+  * [da4ae60] Added import-orig options to exclude the .git files and the
+    debian directory
+  * [c29eaa1] Removed test patches
+  * [f7197f1] Added new dependencies needed by new test cases
+  * [cdfc0cc] Removed datadir which is not needed any more
+  * [e16ea28] Added new files to the appropriate package.
+    Also removed hack installing system init script.
+  * [da85f54] Added native connector to the dev package
+
+ -- SZALAY Attila <sasa@debian.org>  Fri, 26 Aug 2016 23:38:45 +0200
+
+syslog-ng (3.7.3-2) experimental; urgency=medium
+
+  * [db0cb33] Removed unneeded file mode change.
+    The install type is changed to script for that file, so this is not needed
+    any more.
+
+ -- SZALAY Attila <sasa@debian.org>  Thu, 11 Aug 2016 22:24:11 +0200
+
+syslog-ng (3.7.3-1) unstable; urgency=low
+
+  * New upstream release (Closes: #802888, #794585, #804667).
+  * Adapt to upstream changes handling PYSETUP_OPTIONS.
+  * I do not know how that files appeared there, but now definitively not
+    there.  (Closes: #801546)
+  * Check if we handled everything installed by the upstream installer.
+
+ -- SZALAY Attila <sasa@debian.org>  Sat, 16 Jul 2016 09:55:58 +0200
+
+syslog-ng (3.7.1-3) experimental; urgency=medium
+
+  * [d340beb] Re-add debian directory cleanup.
+    For some reason neither in the quilt format will the upstream files
+    removed from the debian directory. So we should do it by hand.
+
+ -- SZALAY Attila <sasa@debian.org>  Thu, 08 Oct 2015 21:51:09 +0200
+
+syslog-ng (3.7.1-2) experimental; urgency=medium
+
+  * [bec27e5] Removed get-orig-source target.
+    The git tree should contains the whole module and not just the
+    debian directory. therefore I added it and as a consequence
+    this target is obsoleted.
+  * [f11f92a] Remove README.markdown.
+    This file is violate the quilt package
+    policy
+  * [4bd2761] debian/rules: Switched to autoreconf from autogen.sh
+  * [e367348] Fixed autoreconf and automake running
+  * [9b38bc4] debian/control: Added needed dependency for testing
+  * [b8398e1] debian/control: Temporally remove syslog-ng-amqp
+
+ -- SZALAY Attila <sasa@debian.org>  Sat, 03 Oct 2015 18:31:11 +0200
+
+syslog-ng (3.7.1-1) experimental; urgency=medium
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * New upstream release.
+  * Transition to libsystemd-dev (Closes: #779765).
+  * Add a libriemann-client-dev (>= 1.6.0~) build-dependency (instead of
+    an unversioned one), because upstream needs the new version.
+  * Add python-dev, pep8 and pylint to build-depends, to be able to build
+    the python module.
+  * Explicitly disable Java for now.
+  * debian/watch updated to pull releases from GitHub.
+  * Updated the syslog-ng-core contents, to include new core modules.
+  * Updated the syslog-ng-mod-geoip contents, the module has been renamed.
+  * Added a new syslog-ng-mod-python package.
+  * Use dh-exec to install tty10.conf, instead of doing a crazy dance in
+    debian/rules.
+
+ -- Gergely Nagy <algernon@madhouse-project.org>  Wed, 09 Sep 2015 16:44:34 +0200
+
+syslog-ng (3.6.1+git20141206-g4d90138-4) experimental; urgency=medium
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * Run the test suite with VERBOSE=1, so we see the actual test results.
+  * Add a Replaces: to syslog-ng-mod-journal, for smooth upgrades.
+
+ -- Gergely Nagy <algernon@madhouse-project.org>  Sat, 13 Dec 2014 14:16:59 +0100
+
+syslog-ng (3.6.1+git20141206-g4d90138-3) experimental; urgency=low
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * Move the systemd-journal() source to a separate package, which is
+    depended on by syslog-ng-core on linux-any. This allows building the
+    binaries without gross hacks on all architectures.
+
+ -- Gergely Nagy <algernon@madhouse-project.org>  Sun, 07 Dec 2014 22:26:10 +0100
+
+syslog-ng (3.6.1+git20141206-g4d90138-2) experimental; urgency=low
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * Only force systemd on Linux, disable it everywhere else. This should
+    allow syslog-ng to build again on non-linux architectures.
+
+ -- Gergely Nagy <algernon@madhouse-project.org>  Sun, 07 Dec 2014 15:39:57 +0100
+
+syslog-ng (3.6.1+git20141206-g4d90138-1) experimental; urgency=low
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * New snapshot release, based on upstream git commit 4d90138.
+
+  * In scl.conf, include scl/*/*.conf, not just plugin.conf, so that all
+    SCL plugins are included.
+  * Use an updated systemd service file, that does not pull in
+    syslog.socket (we're reading directly from the Journal, and do not
+    need the forwarding socket).
+  * Update the Vcs-* fields in debian/control, packaging was moved to a
+    separate repository.
+
+ -- Gergely Nagy <algernon@madhouse-project.org>  Sun, 07 Dec 2014 12:27:51 +0100
+
+syslog-ng (3.6.1-1) experimental; urgency=low
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * New upstream stable release.
+    + Uploading to experimental, due to the Jessie freeze.
+  * Standards-Version bumped to 3.9.6 (no changes necessary).
+  * Homepage changed to www.syslog-ng.org.
+  * Updated copyrights in debian/copyright.
+  * Dropped the Lintian overrides, they're not needed anymore.
+  * Major packaging cleanup:
+    + Dropped all triggers, because they're not used anymore (since
+      3.5.6-2).
+    + Allow parallel building.
+    + Enabled the test suite.
+    + Greatly simplified the packaging, dropping support for ancient
+      distributions like Ubuntu Lucid.
+    + Use a virtual package for ABI tracking.
+    + Switched the packaging to a git-buildpackage compatible workflow.
+
+ -- Gergely Nagy <algernon@madhouse-project.org>  Mon, 10 Nov 2014 09:27:55 +0100
+
+syslog-ng (3.6.0~alpha1-1) experimental; urgency=medium
+
+  [ Gergely Nagy <algernon@madhouse-project.org> ]
+  * New upstream alpha release.
+
+ -- Gergely Nagy <algernon@madhouse-project.org>  Thu, 31 Jul 2014 12:30:12 +0200
+
 syslog-ng (3.5.6-2) unstable; urgency=high
 
   [ Gergely Nagy <algernon@madhouse-project.org> ]

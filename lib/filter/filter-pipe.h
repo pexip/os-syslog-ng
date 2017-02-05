@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2013 Balabit
  * Copyright (c) 1998-2013 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -41,6 +41,6 @@ typedef struct _LogFilterPipe
   gchar *name;
 } LogFilterPipe;
 
-LogPipe *log_filter_pipe_new(FilterExprNode *expr);
+LogPipe *log_filter_pipe_new(FilterExprNode *expr, GlobalConfig *cfg);
 
 #endif

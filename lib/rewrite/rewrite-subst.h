@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2013 Balabit
  * Copyright (c) 1998-2013 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -29,10 +29,10 @@
 #include "logmatcher.h"
 
 /* LogRewriteSubst */
-gboolean log_rewrite_subst_set_regexp(LogRewrite *s, const gchar *regexp);
-void log_rewrite_subst_set_matcher(LogRewrite *s, LogMatcher *matcher);
-void log_rewrite_subst_set_flags(LogRewrite *s, gint flags);
+LogMatcherOptions *log_rewrite_subst_get_matcher_options(LogRewrite *s);
 
-LogRewrite *log_rewrite_subst_new(LogTemplate *replacement);
+gboolean log_rewrite_subst_compile_pattern(LogRewrite *s, const gchar *regexp, GError **error);
+
+LogRewrite *log_rewrite_subst_new(LogTemplate *replacement, GlobalConfig *cfg);
 
 #endif

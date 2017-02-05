@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2013 Balabit
  * Copyright (c) 1998-2013 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 #define TRANSPORT_MAPPER_H_INCLUDED
 
 #include "socket-options.h"
+#include "transport/logtransport.h"
 #include "gsockaddr.h"
 
 typedef struct _TransportMapper TransportMapper;
@@ -45,6 +46,7 @@ struct _TransportMapper
   gint stats_source;
 
   gboolean (*apply_transport)(TransportMapper *self, GlobalConfig *cfg);
+  LogTransport *(*construct_log_transport)(TransportMapper *self, gint fd);
   void (*free_fn)(TransportMapper *self);
 };
 
@@ -58,6 +60,7 @@ gboolean transport_mapper_open_socket(TransportMapper *self,
                                       int *fd);
 
 gboolean transport_mapper_apply_transport_method(TransportMapper *self, GlobalConfig *cfg);
+LogTransport *transport_mapper_construct_log_transport_method(TransportMapper *self, gint fd);
 
 void transport_mapper_init_instance(TransportMapper *self, const gchar *transport);
 void transport_mapper_free(TransportMapper *self);
@@ -67,6 +70,12 @@ static inline gboolean
 transport_mapper_apply_transport(TransportMapper *self, GlobalConfig *cfg)
 {
   return self->apply_transport(self, cfg);
+}
+
+static inline LogTransport *
+transport_mapper_construct_log_transport(TransportMapper *self, gint fd)
+{
+  return self->construct_log_transport(self, fd);
 }
 
 #endif

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2011 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2011 Balabit
  * Copyright (c) 1998-2011 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -32,6 +32,10 @@ gint format_int32_padded(GString *result, gint field_len, gchar pad_char, gint b
 
 gint format_uint64_padded(GString *result, gint field_len, gchar pad_char, gint base, guint64 value);
 gint format_int64_padded(GString *result, gint field_len, gchar pad_char, gint base, gint64 value);
+
+gchar *format_hex_string(gpointer str, gsize str_len, gchar *result, gsize result_len);
+gchar *format_hex_string_with_delimiter(gpointer str, gsize str_len, gchar *result, gsize result_len, gchar delimiter);
+
 
 gboolean
 scan_iso_timestamp(const gchar **buf, gint *left, struct tm *tm);

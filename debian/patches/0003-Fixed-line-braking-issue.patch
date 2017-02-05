@@ -1,0 +1,40 @@
+From: SZALAY Attila <sasa@debian.org>
+Date: Sat, 3 Sep 2016 14:59:41 +0200
+Subject: Fixed line-braking issue
+
+The list of automatically loaded modules contained
+no space and therefore the man parser would not able
+add line break if needed.
+
+Signed-off-by: SZALAY Attila <sasa@debian.org>
+---
+ doc/man/syslog-ng.8     | 2 +-
+ doc/man/syslog-ng.8.xml | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/doc/man/syslog-ng.8 b/doc/man/syslog-ng.8
+index e61d92f..25d1909 100644
+--- a/doc/man/syslog-ng.8
++++ b/doc/man/syslog-ng.8
+@@ -67,7 +67,7 @@ Start syslog\-ng in debug mode\&.
+ A comma\-separated list of the modules that are loaded automatically\&. Modules not loaded automatically can be loaded by including the
+ \fI@module <modulename>\fR
+ statement in the syslog\-ng OSE configuration file\&. The following modules are loaded by default:
+-\fIaffile,afprog,afsocket,afuser,basicfuncs,csvparser,dbparser,syslogformat,afsql\fR\&. Available only in
++\fIaffile, afprog, afsocket, afuser, basicfuncs, csvparser, dbparser, syslogformat, afsql\fR\&. Available only in
+ syslog\-ng Open Source Edition 3\&.3
+ and later\&.
+ .RE
+diff --git a/doc/man/syslog-ng.8.xml b/doc/man/syslog-ng.8.xml
+index 33ac54c..4aff1cd 100644
+--- a/doc/man/syslog-ng.8.xml
++++ b/doc/man/syslog-ng.8.xml
+@@ -67,7 +67,7 @@
+             <command moreinfo="none">--default-modules</command>
+           </term>
+           <listitem>
+-            <para>A comma-separated list of the modules that are loaded automatically. Modules not loaded automatically can be loaded by including the <parameter moreinfo="none">@module &lt;modulename&gt;</parameter> statement in the syslog-ng OSE configuration file. The following modules are loaded by default: <parameter condition="ose" moreinfo="none">affile,afprog,afsocket,afuser,basicfuncs,csvparser,dbparser,syslogformat,afsql</parameter>. Available only in <phrase condition="ose">syslog-ng Open Source Edition 3.3</phrase> and later.</para>
++            <para>A comma-separated list of the modules that are loaded automatically. Modules not loaded automatically can be loaded by including the <parameter moreinfo="none">@module &lt;modulename&gt;</parameter> statement in the syslog-ng OSE configuration file. The following modules are loaded by default: <parameter condition="ose" moreinfo="none">affile, afprog, afsocket, afuser, basicfuncs, csvparser, dbparser, syslogformat, afsql</parameter>. Available only in <phrase condition="ose">syslog-ng Open Source Edition 3.3</phrase> and later.</para>
+           </listitem>
+         </varlistentry>
+         <varlistentry>

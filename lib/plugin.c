@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -27,6 +27,8 @@
 #include "messages.h"
 #include "cfg-lexer.h"
 #include "plugin-types.h"
+#include "pathutils.h"
+#include "resolved-configurable-paths.h"
 
 #include <gmodule.h>
 #include <string.h>
@@ -126,8 +128,7 @@ plugin_register(GlobalConfig *cfg, Plugin *p, gint number)
         {
           msg_debug("Attempted to register the same plugin multiple times, ignoring",
                     evt_tag_str("context", cfg_lexer_lookup_context_name_by_type(p[i].type)),
-                    evt_tag_str("name", p[i].name),
-                    NULL);
+                    evt_tag_str("name", p[i].name));
           continue;
         }
       cfg->plugins = g_list_prepend(cfg->plugins, &p[i]);
@@ -163,8 +164,7 @@ plugin_find(GlobalConfig *cfg, gint plugin_type, const gchar *plugin_name)
       msg_error("This module claims to support a plugin, which it didn't register after loading",
                 evt_tag_str("module", candidate->module_name),
                 evt_tag_str("context", cfg_lexer_lookup_context_name_by_type(plugin_type)),
-                evt_tag_str("name", plugin_name),
-                NULL);
+                evt_tag_str("name", plugin_name));
     }
   return NULL;
 }
@@ -200,11 +200,11 @@ plugin_parse_config(Plugin *self, GlobalConfig *cfg, YYLTYPE *yylloc, gpointer a
       memset(&token, 0, sizeof(token));
       token.type = LL_TOKEN;
       token.token = self->type;
-      cfg_token_block_add_token(block, &token);
+      cfg_token_block_add_and_consume_token(block, &token);
       cfg_lexer_push_context(cfg->lexer, self->parser->context, self->parser->keywords, self->parser->name);
       cfg_lexer_lookup_keyword(cfg->lexer, &token, yylloc, self->name);
       cfg_lexer_pop_context(cfg->lexer);
-      cfg_token_block_add_token(block, &token);
+      cfg_token_block_add_and_consume_token(block, &token);
 
       cfg_lexer_inject_token_block(cfg->lexer, block);
     }
@@ -255,12 +255,12 @@ plugin_dlopen_module(const gchar *module_name, const gchar *module_path)
   GModule *mod;
   gint i;
 
-  module_path_dirs = g_strsplit(module_path, G_SEARCHPATH_SEPARATOR_S, 0);
+  module_path_dirs = g_strsplit(module_path ? : "", G_SEARCHPATH_SEPARATOR_S, 0);
   i = 0;
   while (module_path_dirs && module_path_dirs[i])
     {
       plugin_module_name = g_module_build_path(module_path_dirs[i], module_name);
-      if (g_file_test(plugin_module_name, G_FILE_TEST_EXISTS))
+      if (is_file_regular(plugin_module_name))
         break;
 
       /* also check if a libtool archive exists (for example in the build directory) */
@@ -273,7 +273,7 @@ plugin_dlopen_module(const gchar *module_name, const gchar *module_path)
           g_free(plugin_module_name);
           plugin_module_name = p;
         }
-      if (g_file_test(plugin_module_name, G_FILE_TEST_EXISTS))
+      if (is_file_regular(plugin_module_name))
         break;
 
       /* On AIX the modules in .a files */
@@ -286,7 +286,7 @@ plugin_dlopen_module(const gchar *module_name, const gchar *module_path)
           g_free(plugin_module_name);
           plugin_module_name = p;
         }
-      if (g_file_test(plugin_module_name, G_FILE_TEST_EXISTS))
+      if (is_file_regular(plugin_module_name))
         break;
 #endif
 
@@ -299,14 +299,12 @@ plugin_dlopen_module(const gchar *module_name, const gchar *module_path)
     {
       msg_error("Plugin module not found in 'module-path'",
                 evt_tag_str("module-path", module_path),
-                evt_tag_str("module", module_name),
-                NULL);
+                evt_tag_str("module", module_name));
       return NULL;
     }
   msg_trace("Trying to open module",
             evt_tag_str("module", module_name),
-            evt_tag_str("filename", plugin_module_name),
-            NULL);
+            evt_tag_str("filename", plugin_module_name));
 
   mod = g_module_open(plugin_module_name, G_MODULE_BIND_LAZY);
   g_free(plugin_module_name);
@@ -314,8 +312,7 @@ plugin_dlopen_module(const gchar *module_name, const gchar *module_path)
     {
       msg_error("Error opening plugin module",
                 evt_tag_str("module", module_name),
-                evt_tag_str("error", g_module_error()),
-                NULL);
+                evt_tag_str("error", g_module_error()));
       return NULL;
     }
   return mod;
@@ -350,7 +347,7 @@ plugin_load_module(const gchar *module_name, GlobalConfig *cfg, CfgArgs *args)
     mp = NULL;
 
   if (!mp)
-    mp = module_path;
+    mp = resolvedConfigurablePaths.initial_module_path;
 
   mod = plugin_dlopen_module(module_name, mp);
   if (!mod)
@@ -372,8 +369,7 @@ plugin_load_module(const gchar *module_name, GlobalConfig *cfg, CfgArgs *args)
       msg_error("Error finding init function in module",
                 evt_tag_str("module", module_name),
                 evt_tag_str("symbol", module_init_func),
-                evt_tag_str("error", g_module_error()),
-                NULL);
+                evt_tag_str("error", g_module_error()));
       g_free(module_init_func);
       return FALSE;
     }
@@ -383,12 +379,10 @@ plugin_load_module(const gchar *module_name, GlobalConfig *cfg, CfgArgs *args)
   result = (*init_func)(cfg, args);
   if (result)
     msg_verbose("Module loaded and initialized successfully",
-               evt_tag_str("module", module_name),
-               NULL);
+               evt_tag_str("module", module_name));
   else
     msg_error("Module initialization failed",
-               evt_tag_str("module", module_name),
-               NULL);
+               evt_tag_str("module", module_name));
   return result;
 }
 
@@ -399,15 +393,14 @@ plugin_load_candidate_modules(GlobalConfig *cfg)
   gchar **mod_paths;
   gint i, j;
 
-  mod_paths = g_strsplit(module_path, ":", 0);
+  mod_paths = g_strsplit(resolvedConfigurablePaths.initial_module_path ? : "", G_SEARCHPATH_SEPARATOR_S, 0);
   for (i = 0; mod_paths[i]; i++)
     {
       GDir *dir;
       const gchar *fname;
 
       msg_debug("Reading path for candidate modules",
-                evt_tag_str("path", mod_paths[i]),
-                NULL);
+                evt_tag_str("path", mod_paths[i]));
       dir = g_dir_open(mod_paths[i], 0, NULL);
       if (!dir)
         continue;
@@ -425,9 +418,8 @@ plugin_load_candidate_modules(GlobalConfig *cfg)
               msg_debug("Reading shared object for a candidate module",
                         evt_tag_str("path", mod_paths[i]),
                         evt_tag_str("fname", fname),
-                        evt_tag_str("module", module_name),
-                        NULL);
-              mod = plugin_dlopen_module(module_name, module_path);
+                        evt_tag_str("module", module_name));
+              mod = plugin_dlopen_module(module_name, resolvedConfigurablePaths.initial_module_path);
               module_info = plugin_get_module_info(mod);
 
               if (module_info)
@@ -443,8 +435,7 @@ plugin_load_candidate_modules(GlobalConfig *cfg)
                                 evt_tag_str("module", module_name),
                                 evt_tag_str("context", cfg_lexer_lookup_context_name_by_type(plugin->type)),
                                 evt_tag_str("name", plugin->name),
-                                evt_tag_int("preference", module_info->preference),
-                                NULL);
+                                evt_tag_int("preference", module_info->preference));
                       if (candidate_plugin)
                         {
                           if (candidate_plugin->preference < module_info->preference)
@@ -487,7 +478,7 @@ plugin_list_modules(FILE *out, gboolean verbose)
   gint i, j, k;
   gboolean first = TRUE;
 
-  mod_paths = g_strsplit(module_path, ":", 0);
+  mod_paths = g_strsplit(resolvedConfigurablePaths.initial_module_path, ":", 0);
   for (i = 0; mod_paths[i]; i++)
     {
       GDir *dir;
@@ -507,7 +498,7 @@ plugin_list_modules(FILE *out, gboolean verbose)
                 fname += 3;
               module_name = g_strndup(fname, (gint) (strlen(fname) - strlen(G_MODULE_SUFFIX) - 1));
 
-              mod = plugin_dlopen_module(module_name, module_path);
+              mod = plugin_dlopen_module(module_name, resolvedConfigurablePaths.initial_module_path);
               module_info = plugin_get_module_info(mod);
               if (verbose)
                 {
@@ -562,4 +553,18 @@ plugin_list_modules(FILE *out, gboolean verbose)
   g_strfreev(mod_paths);
   if (!verbose)
     fprintf(out, "\n");
+}
+
+static void
+_free_plugin(Plugin *plugin, gpointer user_data)
+{
+  if (plugin->free_fn)
+    plugin->free_fn(plugin);
+}
+
+void
+plugin_free_plugins(GlobalConfig *cfg)
+{
+  g_list_foreach(cfg->plugins, (GFunc) _free_plugin, NULL);
+  g_list_free(cfg->plugins);
 }

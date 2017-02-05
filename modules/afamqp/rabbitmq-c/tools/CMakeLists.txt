@@ -1,4 +1,5 @@
-include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${librabbitmq_SOURCE_DIR} ${librabbitmq_BINARY_DIR} ${POPT_INCLUDE_DIRS})
+# vim:set ts=2 sw=2 sts=2 et:
+include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${LIBRABBITMQ_INCLUDE_DIRS} ${POPT_INCLUDE_DIR})
 
 if (WIN32)
     set(PLATFORM_DIR win32)
@@ -18,22 +19,22 @@ set(COMMON_SRCS
     )
 
 add_executable(amqp-publish publish.c ${COMMON_SRCS})
-target_link_libraries(amqp-publish rabbitmq ${POPT_LIBRARY})
+target_link_libraries(amqp-publish ${RMQ_LIBRARY_TARGET} ${POPT_LIBRARY})
 
 add_executable(amqp-get get.c ${COMMON_SRCS})
-target_link_libraries(amqp-get rabbitmq ${POPT_LIBRARY})
+target_link_libraries(amqp-get ${RMQ_LIBRARY_TARGET} ${POPT_LIBRARY})
 
 add_executable(amqp-consume consume.c ${PLATFORM_DIR}/process.c ${COMMON_SRCS})
-target_link_libraries(amqp-consume rabbitmq ${POPT_LIBRARY})
+target_link_libraries(amqp-consume ${RMQ_LIBRARY_TARGET} ${POPT_LIBRARY})
 
 add_executable(amqp-declare-queue declare_queue.c ${COMMON_SRCS})
-target_link_libraries(amqp-declare-queue rabbitmq ${POPT_LIBRARY})
+target_link_libraries(amqp-declare-queue ${RMQ_LIBRARY_TARGET} ${POPT_LIBRARY})
 
 add_executable(amqp-delete-queue delete_queue.c ${COMMON_SRCS})
-target_link_libraries(amqp-delete-queue rabbitmq ${POPT_LIBRARY})
+target_link_libraries(amqp-delete-queue ${RMQ_LIBRARY_TARGET} ${POPT_LIBRARY})
 
 if (BUILD_TOOLS_DOCS)
-  if (XmlTo_FOUND)
+  if (XMLTO_FOUND)
     set(DOCS_SRCS
       doc/amqp-consume.xml
       doc/amqp-declare-queue.xml
@@ -66,9 +67,13 @@ if (BUILD_TOOLS_DOCS)
         )
     endforeach()
 
-  else(XmlTo_FOUND)
+  else(XMLTO_FOUND)
     message(WARNING "xmlto not found, will not build tools documentation")
-  endif(XmlTo_FOUND)
+  endif(XMLTO_FOUND)
+endif()
+
+if (ENABLE_SSL_SUPPORT)
+  add_definitions(-DWITH_SSL=1)
 endif()
 
 install(TARGETS amqp-publish amqp-get amqp-consume amqp-declare-queue amqp-delete-queue

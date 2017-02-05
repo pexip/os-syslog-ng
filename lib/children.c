@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2010 Balabit
  * Copyright (c) 1998-2010 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -53,6 +53,15 @@ child_manager_register(pid_t pid, void (*callback)(pid_t, int, gpointer), gpoint
   ce->callback_data_destroy = callback_data_destroy;
 
   g_hash_table_insert(child_hash, &ce->pid, ce);
+}
+
+void
+child_manager_unregister(pid_t pid)
+{
+  if (g_hash_table_lookup(child_hash, &pid))
+    {
+      g_hash_table_remove(child_hash, &pid);
+    }
 }
 
 void

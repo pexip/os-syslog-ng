@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2013 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -23,7 +23,8 @@
 #include "affile-common.h"
 #include "messages.h"
 #include "gprocess.h"
-#include "misc.h"
+#include "fdhelpers.h"
+#include "pathutils.h"
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -34,25 +35,32 @@
 #include <time.h>
 #include <stdlib.h>
 
-gboolean
-affile_open_file(gchar *name, gint flags,
-                 const FilePermOptions *perm_options,
-                 gboolean create_dirs, gboolean privileged, gboolean is_pipe, gint *fd)
-{
-  cap_t saved_caps;
-  struct stat st;
-  int mode;
+static const gchar* spurious_paths[] = {"../", "/..", NULL};
 
-  if (strstr(name, "../") || strstr(name, "/..")) 
+static inline gboolean
+_string_contains_fragment(const gchar *str, const gchar *fragments[])
+{
+  int i;
+
+  for (i = 0; fragments[i]; i++)
     {
-      msg_error("Spurious path, logfile not created",
-                evt_tag_str("path", name),
-                NULL);
-      return FALSE;
+      if (strstr(str, fragments[i]))
+        return TRUE;
     }
 
-  saved_caps = g_process_cap_save();
-  if (privileged)
+  return FALSE;
+}
+
+static inline gboolean
+_is_path_spurious(const gchar *name)
+{
+  return _string_contains_fragment(name, spurious_paths);
+}
+
+static inline gboolean
+_obtain_capabilities(gchar *name, FileOpenOptions *open_opts, FilePermOptions *perm_opts, cap_t *act_caps)
+{
+  if (open_opts->needs_privileges)
     {
       g_process_cap_modify(CAP_DAC_READ_SEARCH, TRUE);
       g_process_cap_modify(CAP_SYSLOG, TRUE);
@@ -62,51 +70,100 @@ affile_open_file(gchar *name, gint flags,
       g_process_cap_modify(CAP_DAC_OVERRIDE, TRUE);
     }
 
-  if (create_dirs && perm_options && !file_perm_options_create_containing_directory(perm_options, name))
+  if (open_opts->create_dirs && perm_opts &&
+      !file_perm_options_create_containing_directory(perm_opts, name))
+    {
+      return FALSE;
+    }
+
+  return TRUE;
+}
+
+static inline void
+_set_fd_permission(FilePermOptions *perm_opts, int fd)
+{
+  if (fd != -1)
+    {
+      g_fd_set_cloexec(fd, TRUE);
+
+      g_process_cap_modify(CAP_CHOWN, TRUE);
+      g_process_cap_modify(CAP_FOWNER, TRUE);
+
+      if (perm_opts)
+        file_perm_options_apply_fd(perm_opts, fd);
+    }
+}
+
+static inline int
+_open_fd(const gchar *name, FileOpenOptions *open_opts, FilePermOptions *perm_opts)
+{
+  int fd;
+  int mode = (perm_opts && (perm_opts->file_perm >= 0))
+    ? perm_opts->file_perm : 0600;
+
+  fd = open(name, open_opts->open_flags, mode);
+
+  if (open_opts->is_pipe && fd < 0 && errno == ENOENT)
+    {
+      if (mkfifo(name, mode) >= 0)
+        fd = open(name, open_opts->open_flags, mode);
+    }
+
+  return fd;
+}
+
+static inline void
+_validate_file_type(const gchar *name, FileOpenOptions *open_opts)
+{
+  struct stat st;
+
+  if (stat(name, &st) >= 0)
+    {
+      if (open_opts->is_pipe && !S_ISFIFO(st.st_mode))
+        {
+          msg_warning("WARNING: you are using the pipe driver, underlying file is not a FIFO, it should be used by file()",
+                      evt_tag_str("filename", name));
+        }
+      else if (!open_opts->is_pipe && S_ISFIFO(st.st_mode))
+        {
+          msg_warning("WARNING: you are using the file driver, underlying file is a FIFO, it should be used by pipe()",
+                      evt_tag_str("filename", name));
+        }
+    }
+}
+
+gboolean
+affile_open_file(gchar *name, FileOpenOptions *open_opts, FilePermOptions *perm_opts, gint *fd)
+{
+  cap_t saved_caps;
+
+  if (_is_path_spurious(name))
+    {
+      msg_error("Spurious path, logfile not created",
+                evt_tag_str("path", name));
+      return FALSE;
+    }
+
+  saved_caps = g_process_cap_save();
+
+  if (!_obtain_capabilities(name, open_opts, perm_opts, &saved_caps))
     {
       g_process_cap_restore(saved_caps);
       return FALSE;
     }
 
-  *fd = -1;
-  if (stat(name, &st) >= 0)
-    {
-      if (is_pipe && !S_ISFIFO(st.st_mode))
-        {
-          msg_warning("WARNING: you are using the pipe driver, underlying file is not a FIFO, it should be used by file()",
-                    evt_tag_str("filename", name),
-                    NULL);
-        }
-      else if (!is_pipe && S_ISFIFO(st.st_mode))
-        {
-          msg_warning("WARNING: you are using the file driver, underlying file is a FIFO, it should be used by pipe()",
-                      evt_tag_str("filename", name),
-                      NULL);
-        }
-    }
+  _validate_file_type(name, open_opts);
 
-  mode = perm_options->file_perm < 0 ? 0600 : perm_options->file_perm;
-  *fd = open(name, flags, mode);
-  if (is_pipe && *fd < 0 && errno == ENOENT)
-    {
-      if (mkfifo(name, mode) >= 0)
-        *fd = open(name, flags, mode);
-    }
+  *fd = _open_fd(name, open_opts, perm_opts);
 
-  if (*fd != -1)
-    {
-      g_fd_set_cloexec(*fd, TRUE);
-      
-      g_process_cap_modify(CAP_CHOWN, TRUE);
-      g_process_cap_modify(CAP_FOWNER, TRUE);
-      if (perm_options)
-        file_perm_options_apply_fd(perm_options, *fd);
-    }
+  if (!is_file_device(name))
+    _set_fd_permission(perm_opts, *fd);
+
   g_process_cap_restore(saved_caps);
+
   msg_trace("affile_open_file",
             evt_tag_str("path", name),
-            evt_tag_int("fd",*fd),
-            NULL);
+            evt_tag_int("fd", *fd));
 
-  return *fd != -1;
+  return (*fd != -1);
 }

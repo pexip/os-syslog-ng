@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2014 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2014 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -23,15 +23,56 @@
 
 #include "afsocket-dest.h"
 #include "messages.h"
-#include "misc.h"
 #include "logwriter.h"
 #include "gsocket.h"
-#include "stats.h"
+#include "stats/stats-registry.h"
 #include "mainloop.h"
 
 #include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+
+typedef struct _ReloadStoreItem
+{
+  LogProtoClientFactory *proto_factory;
+  LogWriter *writer;
+} ReloadStoreItem;
+
+static ReloadStoreItem*
+_reload_store_item_new(AFSocketDestDriver *afsocket_dd)
+{
+  ReloadStoreItem *item = g_new(ReloadStoreItem, 1);
+  item->proto_factory = afsocket_dd->proto_factory;
+  item->writer = afsocket_dd->writer;
+  return item;
+}
+
+static void
+_reload_store_item_free(ReloadStoreItem *self)
+{
+  if (!self)
+    return;
+
+  if (self->writer)
+    log_pipe_unref((LogPipe *) self->writer);
+
+  g_free(self);
+}
+
+static LogWriter*
+_reload_store_item_release_writer(ReloadStoreItem *self)
+{
+  LogWriter *writer = self->writer;
+  self->writer = NULL;
+
+  return writer;
+}
+
+static inline gboolean
+_is_protocol_type_changed_during_reload(AFSocketDestDriver *self, ReloadStoreItem *item)
+{
+  return (self->proto_factory->construct != item->proto_factory->construct);
+}
 
 void
 afsocket_dd_set_keep_alive(LogDriver *s, gboolean enable)
@@ -41,16 +82,49 @@ afsocket_dd_set_keep_alive(LogDriver *s, gboolean enable)
   self->connections_kept_alive_accross_reloads = enable;
 }
 
+static const gchar *_module_name = "afsocket_dd";
 
-static gchar *
-afsocket_dd_format_persist_name(AFSocketDestDriver *self, gboolean qfile)
+static const gchar *
+_get_module_identifier(const AFSocketDestDriver *self)
 {
-  static gchar persist_name[256];
+  static gchar module_identifier[128];
 
-  g_snprintf(persist_name, sizeof(persist_name),
-             qfile ? "afsocket_dd_qfile(%s,%s)" : "afsocket_dd_connection(%s,%s)",
+  g_snprintf(module_identifier, sizeof(module_identifier), "%s,%s",
              (self->transport_mapper->sock_type == SOCK_STREAM) ? "stream" : "dgram",
              afsocket_dd_get_dest_name(self));
+
+  return self->super.super.super.persist_name ? self->super.super.super.persist_name
+                                              : module_identifier;
+}
+
+static const gchar *
+afsocket_dd_format_name(const LogPipe *s)
+{
+  const AFSocketDestDriver *self = (const AFSocketDestDriver *)s;
+  static gchar persist_name[1024];
+  g_snprintf(persist_name, sizeof(persist_name), "%s.(%s)", _module_name,
+             _get_module_identifier(self));
+
+  return persist_name;
+}
+
+static const gchar *
+afsocket_dd_format_qfile_name(const AFSocketDestDriver *self)
+{
+  static gchar persist_name[1024];
+  g_snprintf(persist_name, sizeof(persist_name), "%s_qfile(%s)", _module_name,
+             _get_module_identifier(self));
+
+  return persist_name;
+}
+
+static const gchar *
+afsocket_dd_format_connections_name(const AFSocketDestDriver *self)
+{
+  static gchar persist_name[1024];
+  g_snprintf(persist_name, sizeof(persist_name), "%s_connections(%s)", _module_name,
+             _get_module_identifier(self));
+
   return persist_name;
 }
 
@@ -65,6 +139,8 @@ afsocket_dd_stats_instance(AFSocketDestDriver *self)
 
 static gboolean afsocket_dd_connected(AFSocketDestDriver *self);
 static void afsocket_dd_reconnect(AFSocketDestDriver *self);
+static void afsocket_dd_try_connect(AFSocketDestDriver *self);
+static gboolean afsocket_dd_setup_connection(AFSocketDestDriver *self);
 
 static void
 afsocket_dd_init_watches(AFSocketDestDriver *self)
@@ -75,7 +151,10 @@ afsocket_dd_init_watches(AFSocketDestDriver *self)
 
   IV_TIMER_INIT(&self->reconnect_timer);
   self->reconnect_timer.cookie = self;
-  self->reconnect_timer.handler = (void (*)(void *)) afsocket_dd_reconnect;
+  /* Using reinit as a handler before establishing the first successful connection.
+   * We'll change this to afsocket_dd_reconnect when the initialization of the
+   * connection succeeds.*/
+  self->reconnect_timer.handler = (void (*)(void *)) afsocket_dd_try_connect;
 }
 
 static void
@@ -98,8 +177,7 @@ afsocket_dd_stop_watches(AFSocketDestDriver *self)
 
       /* need to close the fd in this case as it wasn't established yet */
       msg_verbose("Closing connecting fd",
-                  evt_tag_int("fd", self->fd),
-                  NULL);
+                  evt_tag_int("fd", self->fd));
       close(self->fd);
     }
   if (iv_timer_registered(&self->reconnect_timer))
@@ -118,6 +196,12 @@ afsocket_dd_start_reconnect_timer(AFSocketDestDriver *self)
   self->reconnect_timer.expires = iv_now;
   timespec_add_msec(&self->reconnect_timer.expires, self->time_reopen * 1000);
   iv_timer_register(&self->reconnect_timer);
+}
+
+static LogTransport *
+afsocket_dd_construct_transport(AFSocketDestDriver *self, gint fd)
+{
+  return transport_mapper_construct_log_transport(self->transport_mapper, fd);
 }
 
 static gboolean
@@ -142,8 +226,7 @@ afsocket_dd_connected(AFSocketDestDriver *self)
                     evt_tag_int("fd", self->fd),
                     evt_tag_str("server", g_sockaddr_format(self->dest_addr, buf2, sizeof(buf2), GSA_FULL)),
                     evt_tag_errno(EVT_TAG_OSERROR, errno),
-                    evt_tag_int("time_reopen", self->time_reopen),
-                    NULL);
+                    evt_tag_int("time_reopen", self->time_reopen));
           goto error_reconnect;
         }
       if (error)
@@ -152,16 +235,14 @@ afsocket_dd_connected(AFSocketDestDriver *self)
                     evt_tag_int("fd", self->fd),
                     evt_tag_str("server", g_sockaddr_format(self->dest_addr, buf2, sizeof(buf2), GSA_FULL)),
                     evt_tag_errno(EVT_TAG_OSERROR, error),
-                    evt_tag_int("time_reopen", self->time_reopen),
-                    NULL);
+                    evt_tag_int("time_reopen", self->time_reopen));
           goto error_reconnect;
         }
     }
   msg_notice("Syslog connection established",
               evt_tag_int("fd", self->fd),
               evt_tag_str("server", g_sockaddr_format(self->dest_addr, buf2, sizeof(buf2), GSA_FULL)),
-              evt_tag_str("local", g_sockaddr_format(self->bind_addr, buf1, sizeof(buf1), GSA_FULL)),
-              NULL);
+              evt_tag_str("local", g_sockaddr_format(self->bind_addr, buf1, sizeof(buf1), GSA_FULL)));
 
   transport = afsocket_dd_construct_transport(self, self->fd);
   if (!transport)
@@ -216,8 +297,7 @@ afsocket_dd_start_connect(AFSocketDestDriver *self)
                 evt_tag_int("fd", sock),
                 evt_tag_str("server", g_sockaddr_format(self->dest_addr, buf2, sizeof(buf2), GSA_FULL)),
                 evt_tag_str("local", g_sockaddr_format(self->bind_addr, buf1, sizeof(buf1), GSA_FULL)),
-                evt_tag_errno(EVT_TAG_OSERROR, errno),
-                NULL);
+                evt_tag_errno(EVT_TAG_OSERROR, errno));
       close(sock);
       return FALSE;
     }
@@ -232,10 +312,23 @@ afsocket_dd_reconnect(AFSocketDestDriver *self)
       !afsocket_dd_start_connect(self))
     {
       msg_error("Initiating connection failed, reconnecting",
-                evt_tag_int("time_reopen", self->time_reopen),
-                NULL);
+                evt_tag_int("time_reopen", self->time_reopen));
       afsocket_dd_start_reconnect_timer(self);
     }
+}
+
+static void
+afsocket_dd_try_connect(AFSocketDestDriver *self)
+{
+  if (!afsocket_dd_setup_addresses(self) ||
+      !afsocket_dd_setup_connection(self))
+    {
+      msg_error("Initiating connection failed, reconnecting",
+                evt_tag_int("time_reopen", self->time_reopen));
+      afsocket_dd_start_reconnect_timer(self);
+      return;
+    }
+  self->reconnect_timer.handler = (void (*)(void *)) afsocket_dd_reconnect;
 }
 
 static gboolean
@@ -247,8 +340,7 @@ afsocket_dd_setup_proto_factory(AFSocketDestDriver *self)
   if (!self->proto_factory)
     {
       msg_error("Unknown value specified in the transport() option, no such LogProto plugin found",
-                evt_tag_str("transport", self->transport_mapper->logproto),
-                NULL);
+                evt_tag_str("transport", self->transport_mapper->logproto));
       return FALSE;
     }
   return TRUE;
@@ -286,20 +378,20 @@ afsocket_dd_setup_addresses_method(AFSocketDestDriver *self)
 }
 
 static void
-afsocket_dd_restore_connection(AFSocketDestDriver *self)
+afsocket_dd_restore_writer(AFSocketDestDriver *self)
 {
-  GlobalConfig *cfg = log_pipe_get_config(&self->super.super.super);
+  GlobalConfig *cfg;
+  ReloadStoreItem *item;
 
-  self->writer = cfg_persist_config_fetch(cfg, afsocket_dd_format_persist_name(self, FALSE));
-}
+  g_assert(self->writer == NULL);
 
-LogTransport *
-afsocket_dd_construct_transport_method(AFSocketDestDriver *self, gint fd)
-{
-  if (self->transport_mapper->sock_type == SOCK_DGRAM)
-    return log_transport_dgram_socket_new(fd);
-  else
-    return log_transport_stream_socket_new(fd);
+  cfg = log_pipe_get_config(&self->super.super.super);
+  item = cfg_persist_config_fetch(cfg, afsocket_dd_format_connections_name(self));
+
+  if (item && !_is_protocol_type_changed_during_reload(self, item))
+    self->writer = _reload_store_item_release_writer(item);
+
+  _reload_store_item_free(item);
 }
 
 LogWriter *
@@ -308,15 +400,17 @@ afsocket_dd_construct_writer_method(AFSocketDestDriver *self)
   guint32 writer_flags = 0;
 
   writer_flags |= LW_FORMAT_PROTO;
-  if ((self->transport_mapper->sock_type == SOCK_STREAM))
+  if (self->transport_mapper->sock_type == SOCK_STREAM)
     writer_flags |= LW_DETECT_EOF;
 
-  return log_writer_new(writer_flags);
+  return log_writer_new(writer_flags, self->super.super.super.cfg);
 }
 
-static void
+static gboolean
 afsocket_dd_setup_writer(AFSocketDestDriver *self)
 {
+  afsocket_dd_restore_writer(self);
+
   if (!self->writer)
     {
       /* NOTE: we open our writer with no fd, so we can send messages down there
@@ -330,10 +424,17 @@ afsocket_dd_setup_writer(AFSocketDestDriver *self)
                          self->transport_mapper->stats_source,
                          self->super.super.id,
                          afsocket_dd_stats_instance(self));
-  log_writer_set_queue(self->writer, log_dest_driver_acquire_queue(&self->super, afsocket_dd_format_persist_name(self, TRUE)));
+  log_writer_set_queue(self->writer, log_dest_driver_acquire_queue(
+                                         &self->super, afsocket_dd_format_qfile_name(self)));
 
-  log_pipe_init((LogPipe *) self->writer, NULL);
+  if (!log_pipe_init((LogPipe *) self->writer))
+    {
+      log_pipe_unref((LogPipe *) self->writer);
+      return FALSE;
+    }
+
   log_pipe_append(&self->super.super.super, (LogPipe *) self->writer);
+  return TRUE;
 }
 
 static gboolean
@@ -343,11 +444,10 @@ afsocket_dd_setup_connection(AFSocketDestDriver *self)
 
   self->time_reopen = cfg->time_reopen;
 
-  afsocket_dd_restore_connection(self);
-  afsocket_dd_setup_writer(self);
-
   if (!log_writer_opened(self->writer))
     afsocket_dd_reconnect(self);
+
+  self->connection_initialized = TRUE;
   return TRUE;
 }
 
@@ -356,10 +456,17 @@ afsocket_dd_init(LogPipe *s)
 {
   AFSocketDestDriver *self = (AFSocketDestDriver *) s;
 
-  return log_dest_driver_init_method(s) &&
-         afsocket_dd_setup_transport(self) &&
-         afsocket_dd_setup_addresses(self) &&
-         afsocket_dd_setup_connection(self);
+  if (!log_dest_driver_init_method(s) ||
+      !afsocket_dd_setup_transport(self))
+    {
+      return FALSE;
+    }
+
+  if (!afsocket_dd_setup_writer(self))
+    return FALSE;
+
+  afsocket_dd_try_connect(self);
+  return TRUE;
 }
 
 static void
@@ -376,7 +483,9 @@ afsocket_dd_save_connection(AFSocketDestDriver *self)
 
   if (self->connections_kept_alive_accross_reloads)
     {
-      cfg_persist_config_add(cfg, afsocket_dd_format_persist_name(self, FALSE), self->writer, (GDestroyNotify) log_pipe_unref, FALSE);
+      ReloadStoreItem *item = _reload_store_item_new(self);
+      cfg_persist_config_add(cfg, afsocket_dd_format_connections_name(self), item,
+                             (GDestroyNotify)_reload_store_item_free, FALSE);
       self->writer = NULL;
     }
 }
@@ -388,7 +497,11 @@ afsocket_dd_deinit(LogPipe *s)
 
   afsocket_dd_stop_watches(self);
   afsocket_dd_stop_writer(self);
-  afsocket_dd_save_connection(self);
+
+  if (self->connection_initialized)
+    {
+      afsocket_dd_save_connection(self);
+    }
 
   return log_dest_driver_deinit_method(s);
 }
@@ -408,8 +521,7 @@ afsocket_dd_notify(LogPipe *s, gint notify_code, gpointer user_data)
       msg_notice("Syslog connection broken",
                  evt_tag_int("fd", self->fd),
                  evt_tag_str("server", g_sockaddr_format(self->dest_addr, buf, sizeof(buf), GSA_FULL)),
-                 evt_tag_int("time_reopen", self->time_reopen),
-                 NULL);
+                 evt_tag_int("time_reopen", self->time_reopen));
       afsocket_dd_start_reconnect_timer(self);
       break;
     }
@@ -432,9 +544,10 @@ afsocket_dd_free(LogPipe *s)
 void
 afsocket_dd_init_instance(AFSocketDestDriver *self,
                           SocketOptions *socket_options,
-                          TransportMapper *transport_mapper)
+                          TransportMapper *transport_mapper,
+                          GlobalConfig *cfg)
 {
-  log_dest_driver_init_instance(&self->super);
+  log_dest_driver_init_instance(&self->super, cfg);
 
   log_writer_options_defaults(&self->writer_options);
   self->super.super.super.init = afsocket_dd_init;
@@ -443,12 +556,14 @@ afsocket_dd_init_instance(AFSocketDestDriver *self,
   self->super.super.super.queue = NULL;
   self->super.super.super.free_fn = afsocket_dd_free;
   self->super.super.super.notify = afsocket_dd_notify;
+  self->super.super.super.generate_persist_name = afsocket_dd_format_name;
   self->setup_addresses = afsocket_dd_setup_addresses;
-  self->construct_transport = afsocket_dd_construct_transport_method;
   self->construct_writer = afsocket_dd_construct_writer_method;
   self->transport_mapper = transport_mapper;
   self->socket_options = socket_options;
   self->connections_kept_alive_accross_reloads = TRUE;
+  self->time_reopen = cfg->time_reopen;
+  self->connection_initialized = FALSE;
 
 
   self->writer_options.mark_mode = MM_GLOBAL;

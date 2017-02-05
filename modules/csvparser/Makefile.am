@@ -10,7 +10,9 @@ modules_csvparser_libcsvparser_la_SOURCES	=	\
 modules_csvparser_libcsvparser_la_CPPFLAGS	=	\
 	$(AM_CPPFLAGS)					\
 	-I$(top_srcdir)/modules/csvparser		\
-	-I$(top_builddir)/modules/csvparser
+	-I$(top_builddir)/modules/csvparser		\
+	-I$(top_srcdir)/lib/scanner/csv-scanner	\
+	-I$(top_builddir)/lib/scanner/csv-scanner
 modules_csvparser_libcsvparser_la_LIBADD	=	\
 	$(MODULE_DEPS_LIBS)
 modules_csvparser_libcsvparser_la_LDFLAGS	=	\

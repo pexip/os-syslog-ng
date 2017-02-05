@@ -1,0 +1,374 @@
+From 55f1b97fd699a925db1bd8ea4201432b66484a42 Mon Sep 17 00:00:00 2001
+From: Laszlo Budai <Laszlo.Budai@balabit.com>
+Date: Mon, 12 Dec 2016 16:11:11 +0100
+Subject: [PATCH] openssl: support 1.1
+
+Fixes: #1234
+
+Signed-off-by: Laszlo Budai <Laszlo.Budai@balabit.com>
+---
+ configure.ac                       |  6 +++--
+ lib/compat/Makefile.am             |  6 +++--
+ lib/compat/openssl_support.c       | 46 +++++++++++++++++++++++++++++++++
+ lib/compat/openssl_support.h       | 53 ++++++++++++++++++++++++++++++++++++++
+ lib/tlscontext.c                   | 24 +++++++----------
+ modules/afsocket/afinet-dest.c     |  8 ++++--
+ modules/cryptofuncs/cryptofuncs.c  | 42 ++++++++++++++++++------------
+ modules/dbparser/pdbtool/pdbtool.c |  1 +
+ 9 files changed, 152 insertions(+), 36 deletions(-)
+ create mode 100644 lib/compat/openssl_support.c
+ create mode 100644 lib/compat/openssl_support.h
+
+diff --git a/configure.ac b/configure.ac
+index 8d8e01b..3089c31 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -871,6 +871,10 @@ if test -n "$OPENSSL_LIBS" -a "$linking_
+ 	LIBS=$old_LIBS
+ fi
+ 
++AC_CHECK_DECLS([SSL_CTX_get0_param],[], [], [[#include <openssl/ssl.h>]])
++AC_CHECK_DECLS([X509_STORE_CTX_get0_cert],[], [], [[#include <openssl/ssl.h>]])
++AC_CHECK_DECLS([X509_get_extension_flags], [], [], [[#include <openssl/x509v3.h>]])
++AC_CHECK_DECLS([EVP_MD_CTX_reset], [], [], [[#include <openssl/evp.h>]])
+ 
+ dnl
+ dnl Right now, openssl is never linked statically as it is only used by the
+diff --git a/lib/compat/Makefile.am b/lib/compat/Makefile.am
+index 1658d6e..e7b05c8 100644
+--- a/lib/compat/Makefile.am
++++ b/lib/compat/Makefile.am
+@@ -8,7 +8,8 @@ compatinclude_HEADERS		= 	\
+ 	lib/compat/pio.h		\
+ 	lib/compat/socket.h		\
+ 	lib/compat/string.h		\
+-	lib/compat/time.h
++	lib/compat/time.h		\
++	lib/compat/openssl_support.h
+ 
+ compat_sources			= 	\
+ 	lib/compat/getutent.c		\
+@@ -17,6 +18,7 @@ compat_sources			= 	\
+ 	lib/compat/pio.c		\
+ 	lib/compat/strcasestr.c		\
+ 	lib/compat/strtok_r.c		\
+-	lib/compat/time.c
++	lib/compat/time.c		\
++	lib/compat/openssl_support.c
+ 
+ include lib/compat/tests/Makefile.am
+diff --git a/lib/compat/openssl_support.c b/lib/compat/openssl_support.c
+new file mode 100644
+index 0000000..ee10980
+--- /dev/null
++++ b/lib/compat/openssl_support.c
+@@ -0,0 +1,46 @@
++/*
++ * Copyright (c) 2002-2016 Balabit
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ * As an additional exemption you are allowed to compile & link against the
++ * OpenSSL libraries as published by the OpenSSL project. See the file
++ * COPYING for details.
++ *
++ */
++
++#include "compat/openssl_support.h"
++
++#if !SYSLOG_NG_HAVE_DECL_SSL_CTX_GET0_PARAM
++X509_VERIFY_PARAM *SSL_CTX_get0_param(SSL_CTX *ctx)
++{
++  return ctx->param;
++}
++#endif
++
++#if !SYSLOG_NG_HAVE_DECL_X509_STORE_CTX_GET0_CERT
++X509 *X509_STORE_CTX_get0_cert(X509_STORE_CTX *ctx)
++{
++  return ctx->cert;
++}
++#endif
++
++#if !SYSLOG_NG_HAVE_DECL_X509_GET_EXTENSION_FLAGS
++uint32_t X509_get_extension_flags(X509 *x)
++{
++  return x->ex_flags;
++}
++#endif
++
+diff --git a/lib/compat/openssl_support.h b/lib/compat/openssl_support.h
+new file mode 100644
+index 0000000..97977e5
+--- /dev/null
++++ b/lib/compat/openssl_support.h
+@@ -0,0 +1,53 @@
++/*
++ * Copyright (c) 2002-2016 Balabit
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ * As an additional exemption you are allowed to compile & link against the
++ * OpenSSL libraries as published by the OpenSSL project. See the file
++ * COPYING for details.
++ *
++ */
++
++#ifndef OPENSSL_SUPPORT_H_INCLUDED
++#define OPENSSL_SUPPORT_H_INCLUDED
++
++#include "compat/compat.h"
++#include <openssl/ssl.h>
++
++#if !SYSLOG_NG_HAVE_DECL_SSL_CTX_GET0_PARAM
++X509_VERIFY_PARAM *SSL_CTX_get0_param(SSL_CTX *ctx);
++#endif
++
++#if !SYSLOG_NG_HAVE_DECL_X509_STORE_CTX_GET0_CERT
++X509 *X509_STORE_CTX_get0_cert(X509_STORE_CTX *ctx);
++#endif
++
++#if !SYSLOG_NG_HAVE_DECL_X509_GET_EXTENSION_FLAGS
++#include <stdint.h>
++uint32_t X509_get_extension_flags(X509 *x);
++#endif
++
++#if SYSLOG_NG_HAVE_DECL_EVP_MD_CTX_RESET
++#include <openssl/evp.h>
++#define EVP_MD_CTX_cleanup EVP_MD_CTX_reset
++#define DECLARE_EVP_MD_CTX(md_ctx) EVP_MD_CTX * md_ctx = EVP_MD_CTX_create()
++#else
++#define DECLARE_EVP_MD_CTX(md_ctx) EVP_MD_CTX _##md_ctx; EVP_MD_CTX * md_ctx = & _##md_ctx
++#define EVP_MD_CTX_destroy(md_ctx) EVP_MD_CTX_cleanup(md_ctx) 
++#endif
++
++#endif
++
+diff --git a/lib/tlscontext.c b/lib/tlscontext.c
+index 4b5273c..45ca423 100644
+--- a/lib/tlscontext.c
++++ b/lib/tlscontext.c
+@@ -24,6 +24,7 @@
+ #include "tlscontext.h"
+ #include "str-utils.h"
+ #include "messages.h"
++#include "compat/openssl_support.h"
+ 
+ #include <arpa/inet.h>
+ #include <unistd.h>
+@@ -136,8 +136,9 @@ tls_session_verify(TLSSession *self, int
+   if (self->ctx->verify_mode & TVM_UNTRUSTED)
+     return 1;
+ 
++  int ctx_error_depth = X509_STORE_CTX_get_error_depth(ctx);
+   /* accept certificate if its fingerprint matches, again regardless whether x509 certificate validation was successful */
+-  if (ok && ctx->error_depth == 0 && !tls_session_verify_fingerprint(ctx))
++  if (ok && ctx_error_depth == 0 && !tls_session_verify_fingerprint(ctx))
+     {
+       msg_notice("Certificate valid, but fingerprint constraints were not met, rejecting");
+       return 0;
+@@ -143,10 +144,11 @@ tls_session_verify(TLSSession *self, int
+       return 0;
+     }
+ 
+-  if (ok && ctx->error_depth != 0 && (ctx->current_cert->ex_flags & EXFLAG_CA) == 0)
++  X509 *current_cert = X509_STORE_CTX_get_current_cert(ctx);
++  if (ok && ctx_error_depth != 0 && (X509_get_extension_flags(current_cert) & EXFLAG_CA) == 0)
+     {
+       msg_notice("Invalid certificate found in chain, basicConstraints.ca is unset in non-leaf certificate");
+-      ctx->error = X509_V_ERR_INVALID_CA;
++      X509_STORE_CTX_set_error(ctx, X509_V_ERR_INVALID_CA);
+       return 0;
+     }
+ 
+@@ -151,20 +151,20 @@ tls_session_verify(TLSSession *self, int
+     }
+ 
+   /* reject certificate if it is valid, but its DN is not trusted */
+-  if (ok && ctx->error_depth == 0 && !tls_session_verify_dn(ctx))
++  if (ok && ctx_error_depth == 0 && !tls_session_verify_dn(ctx))
+     {
+       msg_notice("Certificate valid, but DN constraints were not met, rejecting");
+-      ctx->error = X509_V_ERR_CERT_UNTRUSTED;
++      X509_STORE_CTX_set_error(ctx, X509_V_ERR_CERT_UNTRUSTED);
+       return 0;
+     }
+   /* if the crl_dir is set in the configuration file but the directory is empty ignore this error */
+-  if (!ok && ctx->error == X509_V_ERR_UNABLE_TO_GET_CRL)
++  if (!ok && X509_STORE_CTX_get_error(ctx) == X509_V_ERR_UNABLE_TO_GET_CRL)
+     {
+       msg_notice("CRL directory is set but no CRLs found");
+       return 1;
+     }
+ 
+-  if (!ok && ctx->error == X509_V_ERR_INVALID_PURPOSE)
++  if (!ok && X509_STORE_CTX_get_error(ctx) == X509_V_ERR_INVALID_PURPOSE)
+     {
+       msg_warning("Certificate valid, but purpose is invalid");
+       return 1;
+@@ -184,7 +186,8 @@ tls_session_verify_callback(int ok, X509
+    */
+   if (X509_STORE_CTX_get_current_cert(ctx) == NULL)
+     {
+-    switch (ctx->error)
++      int ctx_error = X509_STORE_CTX_get_error(ctx);
++      switch (ctx_error)
+       {
+       case X509_V_ERR_NO_EXPLICIT_POLICY:
+         /* NOTE: Because we set the CHECK_POLICY_FLAG if the
+@@ -196,7 +199,7 @@ tls_session_verify_callback(int ok, X509
+         break;
+       default:
+         msg_notice("Error occured during certificate validation",
+-                    evt_tag_int("error", ctx->error));
++                     evt_tag_int("error", X509_STORE_CTX_get_error(ctx)));
+         break;
+       }
+     }
+@@ -310,7 +311,7 @@ tls_context_setup_session(TLSContext *se
+       if (self->crl_dir)
+         verify_flags |= X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL;
+ 
+-      X509_VERIFY_PARAM_set_flags(self->ssl_ctx->param, verify_flags);
++      X509_VERIFY_PARAM_set_flags(SSL_CTX_get0_param(self->ssl_ctx), verify_flags);
+ 
+       switch (self->verify_mode)
+         {
+diff --git a/modules/afsocket/afinet-dest.c b/modules/afsocket/afinet-dest.c
+index 55fc57d..d153249 100644
+--- a/modules/afsocket/afinet-dest.c
++++ b/modules/afsocket/afinet-dest.c
+@@ -26,6 +26,7 @@
+ #include "socket-options-inet.h"
+ #include "messages.h"
+ #include "gprocess.h"
++#include "compat/openssl_support.h"
+ 
+ #include <sys/types.h>
+ #include <sys/socket.h>
+@@ -97,9 +97,13 @@ afinet_dd_verify_callback(gint ok, X509_
+   AFInetDestDriver *self G_GNUC_UNUSED = (AFInetDestDriver *) user_data;
+   TransportMapperInet *transport_mapper_inet = (TransportMapperInet *) self->super.transport_mapper;
+ 
+-  if (ok && ctx->current_cert == ctx->cert && self->hostname && (transport_mapper_inet->tls_context->verify_mode & TVM_TRUSTED))
++  X509 *current_cert = X509_STORE_CTX_get_current_cert(ctx);
++  X509 *cert = X509_STORE_CTX_get0_cert(ctx);
++
++  if (ok && current_cert == cert && self->hostname
++		  && (transport_mapper_inet->tls_context->verify_mode & TVM_TRUSTED))
+     {
+-      ok = tls_verify_certificate_name(ctx->cert, self->hostname);
++      ok = tls_verify_certificate_name(cert, self->hostname);
+     }
+ 
+   return ok;
+diff --git a/modules/cryptofuncs/cryptofuncs.c b/modules/cryptofuncs/cryptofuncs.c
+index ebf4d01..3ad407c 100644
+--- a/modules/cryptofuncs/cryptofuncs.c
++++ b/modules/cryptofuncs/cryptofuncs.c
+@@ -27,6 +27,7 @@
+ #include "uuid.h"
+ #include "str-format.h"
+ #include "plugin-types.h"
++#include "compat/openssl_support.h"
+ #include <openssl/evp.h>
+ 
+ static void
+@@ -98,36 +99,45 @@ tf_hash_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent, gint
+       return FALSE;
+     }
+   state->md = md;
+-  if ((state->length == 0) || (state->length > md->md_size * 2))
+-    state->length = md->md_size * 2;
++  gint md_size = EVP_MD_size(md);
++  if ((state->length == 0) || (state->length > md_size * 2))
++    state->length = md_size * 2;
+   return TRUE;
+ }
+ 
++static guint
++_hash(const EVP_MD *md, GString **argv, gint argc, guchar *hash, guint hash_size)
++{
++  gint i;
++  guint md_len;
++  DECLARE_EVP_MD_CTX(mdctx);
++  EVP_MD_CTX_init(mdctx);
++  EVP_DigestInit_ex(mdctx, md, NULL);
++
++  for (i = 0; i < argc; i++)
++    {
++      EVP_DigestUpdate(mdctx, argv[i]->str, argv[i]->len);
++    }
++
++  EVP_DigestFinal_ex(mdctx, hash, &md_len);
++  EVP_MD_CTX_cleanup(mdctx);
++  EVP_MD_CTX_destroy(mdctx);
++
++  return md_len;
++}
++
+ static void
+ tf_hash_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *args, GString *result)
+ {
+   TFHashState *state = (TFHashState *) s;
+   GString **argv;
+   gint argc;
+-  gint i;
+-  EVP_MD_CTX mdctx;
+   guchar hash[EVP_MAX_MD_SIZE];
+   gchar hash_str[EVP_MAX_MD_SIZE * 2 + 1];
+   guint md_len;
+-
+   argv = (GString **) args->bufs->pdata;
+   argc = args->bufs->len;
+-
+-  EVP_MD_CTX_init(&mdctx);
+-  EVP_DigestInit_ex(&mdctx, state->md, NULL);
+-
+-  for (i = 0; i < argc; i++)
+-    {
+-      EVP_DigestUpdate(&mdctx, argv[i]->str, argv[i]->len);
+-    }
+-  EVP_DigestFinal_ex(&mdctx, hash, &md_len);
+-  EVP_MD_CTX_cleanup(&mdctx);
+-
++  md_len = _hash(state->md, argv, argc, hash, sizeof(hash));
+   // we fetch the entire hash in a hex format otherwise we cannot truncate at
+   // odd character numbers
+   format_hex_string(hash, md_len, hash_str, sizeof(hash_str));
+diff --git a/modules/dbparser/pdbtool/pdbtool.c b/modules/dbparser/pdbtool/pdbtool.c
+index 929e153..0458178 100644
+--- a/modules/dbparser/pdbtool/pdbtool.c
++++ b/modules/dbparser/pdbtool/pdbtool.c
+@@ -42,6 +42,7 @@
+ #include "pathutils.h"
+ #include "resolved-configurable-paths.h"
+ #include "crypto.h"
++#include "compat/openssl_support.h"
+ 
+ #include <stdio.h>
+ #include <string.h>

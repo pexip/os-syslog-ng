@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2013 Balabit
  * Copyright (c) 1998-2013 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -53,10 +53,12 @@ log_rewrite_set_tag_clone(LogPipe *s)
   LogRewriteSetTag *cloned;
 
   cloned = g_new0(LogRewriteSetTag, 1);
-  log_rewrite_init(&cloned->super);
+  log_rewrite_init_instance(&cloned->super, s->cfg);
   cloned->super.super.clone = log_rewrite_set_tag_clone;
   cloned->super.process = log_rewrite_set_tag_process;
-  cloned->super.condition = self->super.condition;
+
+  if (self->super.condition)
+    cloned->super.condition = filter_expr_ref(self->super.condition);
 
   cloned->tag_id = self->tag_id;
   cloned->value = self->value;
@@ -64,11 +66,11 @@ log_rewrite_set_tag_clone(LogPipe *s)
 }
 
 LogRewrite *
-log_rewrite_set_tag_new(const gchar *tag_name, gboolean value)
+log_rewrite_set_tag_new(const gchar *tag_name, gboolean value, GlobalConfig *cfg)
 {
   LogRewriteSetTag *self = g_new0(LogRewriteSetTag, 1);
 
-  log_rewrite_init(&self->super);
+  log_rewrite_init_instance(&self->super, cfg);
   self->super.super.clone = log_rewrite_set_tag_clone;
   self->super.process = log_rewrite_set_tag_process;
   self->tag_id = log_tags_get_by_name(tag_name);

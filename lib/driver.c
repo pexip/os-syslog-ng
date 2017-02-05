@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -91,6 +91,10 @@ log_driver_free(LogPipe *s)
     {
       log_driver_plugin_free((LogDriverPlugin *) l->data);
     }
+  if (self->plugins)
+    {
+      g_list_free(self->plugins);
+    }
   if (self->group)
     g_free(self->group);
   if (self->id)
@@ -100,9 +104,9 @@ log_driver_free(LogPipe *s)
 
 /* NOTE: intentionally static, as only LogSrcDriver or LogDestDriver will derive from LogDriver */
 static void
-log_driver_init_instance(LogDriver *self)
+log_driver_init_instance(LogDriver *self, GlobalConfig *cfg)
 {
-  log_pipe_init_instance(&self->super);
+  log_pipe_init_instance(&self->super, cfg);
   self->super.free_fn = log_driver_free;
   self->super.init = log_driver_init_method;
   self->super.deinit = log_driver_deinit_method;
@@ -167,9 +171,9 @@ log_src_driver_queue_method(LogPipe *s, LogMessage *msg, const LogPathOptions *p
 }
 
 void
-log_src_driver_init_instance(LogSrcDriver *self)
+log_src_driver_init_instance(LogSrcDriver *self, GlobalConfig *cfg)
 {
-  log_driver_init_instance(&self->super);
+  log_driver_init_instance(&self->super, cfg);
   self->super.super.init = log_src_driver_init_method;
   self->super.super.deinit = log_src_driver_deinit_method;
   self->super.super.queue = log_src_driver_queue_method;
@@ -186,7 +190,8 @@ log_src_driver_free(LogPipe *s)
 
 /* returns a reference */
 static LogQueue *
-log_dest_driver_acquire_queue_method(LogDestDriver *self, gchar *persist_name, gpointer user_data)
+log_dest_driver_acquire_queue_method(LogDestDriver *self, const gchar *persist_name,
+                                     gpointer user_data)
 {
   GlobalConfig *cfg = log_pipe_get_config(&self->super.super);
   LogQueue *queue = NULL;
@@ -212,9 +217,13 @@ log_dest_driver_release_queue_method(LogDestDriver *self, LogQueue *q, gpointer 
 
   /* we only save the LogQueue instance if it contains data */
   if (q->persist_name && log_queue_keep_on_reload(q) > 0)
-    cfg_persist_config_add(cfg, q->persist_name, q, (GDestroyNotify) log_queue_unref, FALSE);
+    {
+      cfg_persist_config_add(cfg, q->persist_name, q, (GDestroyNotify) log_queue_unref, FALSE);
+    }
   else
-    log_queue_unref(q);
+    {
+      log_queue_unref(q);
+    }
 }
 
 void
@@ -280,9 +289,9 @@ log_dest_driver_deinit_method(LogPipe *s)
 }
 
 void
-log_dest_driver_init_instance(LogDestDriver *self)
+log_dest_driver_init_instance(LogDestDriver *self, GlobalConfig *cfg)
 {
-  log_driver_init_instance(&self->super);
+  log_driver_init_instance(&self->super, cfg);
   self->super.super.init = log_dest_driver_init_method;
   self->super.super.deinit = log_dest_driver_deinit_method;
   self->super.super.queue = log_dest_driver_queue_method;

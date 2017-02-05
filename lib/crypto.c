@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2012 Balázs Scheidler
+ * Copyright (c) 2011-2015 Balabit
+ * Copyright (c) 2011-2015 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -28,8 +28,7 @@
 
 #include "crypto.h"
 #include "apphook.h"
-
-#if ENABLE_SSL
+#include "thread-utils.h"
 
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
@@ -40,7 +39,7 @@ static GStaticMutex *ssl_locks;
 static gboolean randfile_loaded;
 
 static void
-ssl_locking_callback(int mode, int type, char *file, int line)
+ssl_locking_callback(int mode, int type, const char *file, int line)
 {
   if (mode & CRYPTO_LOCK)
     {
@@ -55,7 +54,7 @@ ssl_locking_callback(int mode, int type, char *file, int line)
 static unsigned long
 ssl_thread_id(void)
 {
-  return (unsigned long) g_thread_self();
+  return (unsigned long) get_thread_id();
 }
 
 static void
@@ -69,8 +68,8 @@ crypto_init_threading(void)
     {
       g_static_mutex_init(&ssl_locks[i]);
     }
-  CRYPTO_set_id_callback((unsigned long (*)()) ssl_thread_id);
-  CRYPTO_set_locking_callback((void (*)()) ssl_locking_callback);
+  CRYPTO_set_id_callback(ssl_thread_id);
+  CRYPTO_set_locking_callback(ssl_locking_callback);
 }
 
 static void
@@ -99,7 +98,7 @@ crypto_deinit(void)
   crypto_deinit_threading();
 }
 
-static void
+void
 crypto_init(void)
 {
   SSL_library_init();
@@ -123,18 +122,3 @@ crypto_init(void)
     }
 }
 
-static void __attribute__((constructor))
-crypto_load(void)
-{
-  crypto_init();
-}
-
-static void __attribute__((destructor))
-crypto_unload(void)
-{
-  crypto_deinit();
-}
-
-/* the crypto options (seed) are handled in main.c */
-
-#endif

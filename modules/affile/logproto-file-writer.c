@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -25,7 +25,9 @@
 #include "messages.h"
 
 #include <string.h>
+#include <errno.h>
 #include <sys/uio.h>
+#include <unistd.h>
 
 typedef struct _LogProtoFileWriter
 {
@@ -54,8 +56,31 @@ log_proto_file_writer_flush(LogProtoClient *s)
   LogProtoFileWriter *self = (LogProtoFileWriter *)s;
   gint rc, i, i0, sum, ofs, pos;
 
-  /* we might be called from log_writer_deinit() without having a buffer at all */
+  if (self->partial)
+    {
+      /* there is still some data from the previous file writing process */
+      gint len = self->partial_len - self->partial_pos;
 
+      rc = write(self->fd, self->partial + self->partial_pos, len);
+      if (rc > 0 && self->fsync)
+        fsync(self->fd);
+      if (rc < 0)
+        {
+          goto write_error;
+        }
+      else if (rc != len)
+        {
+          self->partial_pos += rc;
+          return LPS_SUCCESS;
+        }
+      else
+        {
+          g_free(self->partial);
+          self->partial = NULL;
+        }
+    }
+
+  /* we might be called from log_writer_deinit() without having a buffer at all */
   if (self->buf_count == 0)
     return LPS_SUCCESS;
 
@@ -65,16 +90,7 @@ log_proto_file_writer_flush(LogProtoClient *s)
 
   if (rc < 0)
     {
-      if (errno != EINTR)
-        {
-          msg_error("I/O error occurred while writing",
-                    evt_tag_int("fd", self->super.transport->fd),
-                    evt_tag_errno(EVT_TAG_OSERROR, errno),
-                    NULL);
-          return LPS_ERROR;
-        }
-
-      return LPS_SUCCESS;
+      goto write_error;
     }
   else if (rc != self->sum_len)
     {
@@ -112,6 +128,18 @@ log_proto_file_writer_flush(LogProtoClient *s)
   self->sum_len = 0;
 
   return LPS_SUCCESS;
+
+ write_error:
+  if (errno != EINTR && errno != EAGAIN)
+    {
+      msg_error("I/O error occurred while writing",
+                evt_tag_int("fd", self->super.transport->fd),
+                evt_tag_errno(EVT_TAG_OSERROR, errno));
+      return LPS_ERROR;
+    }
+
+  return LPS_SUCCESS;
+
 }
 
 /*
@@ -129,42 +157,19 @@ static LogProtoStatus
 log_proto_file_writer_post(LogProtoClient *s, guchar *msg, gsize msg_len, gboolean *consumed)
 {
   LogProtoFileWriter *self = (LogProtoFileWriter *)s;
-  gint rc;
+  LogProtoStatus result;
 
   *consumed = FALSE;
-  if (self->buf_count >= self->buf_size)
+  if (self->buf_count >= self->buf_size || self->partial)
     {
-      rc = log_proto_file_writer_flush(s);
-      if (rc != LPS_SUCCESS || self->buf_count >= self->buf_size)
+      result = log_proto_file_writer_flush(s);
+      if (result != LPS_SUCCESS || self->buf_count >= self->buf_size || self->partial)
         {
-          /* don't consume a new message if flush failed, or even after the flush we don't have any free slots */
-          return rc;
-        }
-    }
-
-  if (self->partial)
-    {
-      /* there is still some data from the previous file writing process */
-      gint len = self->partial_len - self->partial_pos;
-
-      rc = write(self->fd, self->partial + self->partial_pos, len);
-      if (rc > 0 && self->fsync)
-        fsync(self->fd);
-      if (rc < 0)
-        {
-          goto write_error;
-        }
-      else if (rc != len)
-        {
-          self->partial_pos += rc;
-          return LPS_SUCCESS;
-        }
-      else
-        {
-          g_free(self->partial);
-          self->partial = NULL;
-          /* NOTE: we return here to give a chance to the framed protocol to send the frame header. */
-          return LPS_SUCCESS;
+          /* don't consume a new message if flush failed OR if we couldn't
+           * progress in flush() to empty the outgoing buffer (either
+           * buffers or partial)
+           */
+          return result;
         }
     }
 
@@ -173,26 +178,17 @@ log_proto_file_writer_post(LogProtoClient *s, guchar *msg, gsize msg_len, gboole
   self->buffer[self->buf_count].iov_len = msg_len;
   ++self->buf_count;
   self->sum_len += msg_len;
-  *consumed = TRUE;
 
   if (self->buf_count == self->buf_size)
     {
       /* we have reached the max buffer size -> we need to write the messages */
-      return log_proto_file_writer_flush(s);
+      result = log_proto_file_writer_flush(s);
+      if (result != LPS_SUCCESS)
+        return result;
     }
 
-  return LPS_SUCCESS;
-
-write_error:
-  if (errno != EAGAIN && errno != EINTR)
-    {
-      msg_error("I/O error occurred while writing",
-                evt_tag_int("fd", self->super.transport->fd),
-                evt_tag_errno(EVT_TAG_OSERROR, errno),
-                NULL);
-      return LPS_ERROR;
-    }
-
+  *consumed = TRUE;
+  log_proto_client_msg_ack(&self->super, 1);
   return LPS_SUCCESS;
 }
 
@@ -211,7 +207,7 @@ log_proto_file_writer_prepare(LogProtoClient *s, gint *fd, GIOCondition *cond)
 }
 
 LogProtoClient *
-log_proto_file_writer_new(LogTransport *transport, const LogProtoClientOptions *options, gint flush_lines, gint fsync)
+log_proto_file_writer_new(LogTransport *transport, const LogProtoClientOptions *options, gint flush_lines, gint fsync_)
 {
   if (flush_lines == 0)
     /* the flush-lines option has not been specified, use a default value */
@@ -228,7 +224,7 @@ log_proto_file_writer_new(LogTransport *transport, const LogProtoClientOptions *
   log_proto_client_init(&self->super, transport, options);
   self->fd = transport->fd;
   self->buf_size = flush_lines;
-  self->fsync = fsync;
+  self->fsync = fsync_;
   self->super.prepare = log_proto_file_writer_prepare;
   self->super.post = log_proto_file_writer_post;
   self->super.flush = log_proto_file_writer_flush;

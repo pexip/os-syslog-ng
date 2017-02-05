@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -22,26 +22,18 @@
  */
 
 #include "syslog-format.h"
-#include "logmsg.h"
+#include "logmsg/logmsg.h"
 #include "messages.h"
 #include "timeutils.h"
-#include "misc.h"
+#include "find-crlf.h"
 #include "cfg.h"
 #include "str-format.h"
+#include "utf8utils.h"
+#include "str-utils.h"
 
 #include <regex.h>
 #include <ctype.h>
 #include <string.h>
-
-/*
- * Used in log_msg_parse_date(). Need to differentiate because Tru64's strptime
- * works differently than the rest of the supported systems.
- */
-#if defined(__digital__) && defined(__osf__)
-#define STRPTIME_ISOFORMAT "%Y-%m-%dT%H:%M:%S"
-#else
-#define STRPTIME_ISOFORMAT "%Y-%m-%d T%H:%M:%S"
-#endif
 
 static const char aix_fwd_string[] = "Message forwarded from ";
 static const char repeat_msg_string[] = "last message repeated";
@@ -99,7 +91,7 @@ log_msg_parse_skip_chars(LogMessage *self, const guchar **data, gint *length, co
   gint left = *length;
   gint num_skipped = 0;
 
-  while (max_len && left && strchr(chars, *src))
+  while (max_len && left && _strchr_optimized_for_single_char_haystack(chars, *src))
     {
       src++;
       left--;
@@ -140,7 +132,7 @@ log_msg_parse_skip_chars_until(LogMessage *self, const guchar **data, gint *leng
   gint left = *length;
   gint num_skipped = 0;
 
-  while (left && strchr(delims, *src) == 0)
+  while (left && _strchr_optimized_for_single_char_haystack(delims, *src) == 0)
     {
       src++;
       left--;
@@ -211,6 +203,222 @@ log_msg_parse_seq(LogMessage *self, const guchar **data, gint *length)
   return TRUE;
 }
 
+static guint32
+__parse_iso_timezone(const guchar **data, gint *length)
+{
+  gint hours, mins;
+  const guchar *src = *data;
+  guint32 tz = 0;
+  /* timezone offset */
+  gint sign = *src == '-' ? -1 : 1;
+
+  hours = (*(src + 1) - '0') * 10 + *(src + 2) - '0';
+  mins = (*(src + 4) - '0') * 10 + *(src + 5) - '0';
+  tz = sign * (hours * 3600 + mins * 60);
+  src += 6;
+  (*length) -= 6;
+  *data = src;
+  return tz;
+}
+
+static gboolean
+__is_iso_stamp(const gchar *stamp, gint length)
+{
+  return (length >= 19
+          && stamp[4] == '-'
+          && stamp[7] == '-'
+          && stamp[10] == 'T'
+          && stamp[13] == ':'
+          && stamp[16] == ':'
+         );
+}
+
+static guint32
+__parse_usec(const guchar **data, gint *length)
+{
+  guint32 usec = 0;
+  const guchar *src = *data;
+  if (*length > 0 && *src == '.')
+    {
+      gulong frac = 0;
+      gint div = 1;
+      /* process second fractions */
+
+      src++;
+      (*length)--;
+      while (*length > 0 && div < 10e5 && isdigit(*src))
+        {
+          frac = 10 * frac + (*src) - '0';
+          div = div * 10;
+          src++;
+          (*length)--;
+        }
+      while (isdigit(*src))
+        {
+          src++;
+          (*length)--;
+        }
+      usec = frac * (1000000 / div);
+    }
+  *data = src;
+  return usec;
+}
+
+static gboolean
+__has_iso_timezone(const guchar *src, gint length)
+{
+  return (length >= 5) &&
+         (*src == '+' || *src == '-') &&
+         isdigit(*(src+1)) &&
+         isdigit(*(src+2)) &&
+         *(src+3) == ':' &&
+         isdigit(*(src+4)) &&
+         isdigit(*(src+5)) &&
+         !isdigit(*(src+6));
+}
+
+static gboolean
+__parse_iso_stamp(const GTimeVal *now, LogMessage *self, struct tm* tm, const guchar **data, gint *length)
+{
+  /* RFC3339 timestamp, expected format: YYYY-MM-DDTHH:MM:SS[.frac]<+/->ZZ:ZZ */
+  time_t now_tv_sec = (time_t) now->tv_sec;
+  const guchar *src = *data;
+
+  self->timestamps[LM_TS_STAMP].tv_usec = 0;
+
+  /* NOTE: we initialize various unportable fields in tm using a
+   * localtime call, as the value of tm_gmtoff does matter but it does
+   * not exist on all platforms and 0 initializing it causes trouble on
+   * time-zone barriers */
+
+  cached_localtime(&now_tv_sec, tm);
+  if (!scan_iso_timestamp((const gchar **) &src, length, tm))
+    {
+      return FALSE;
+    }
+
+  self->timestamps[LM_TS_STAMP].tv_usec = __parse_usec(&src, length);
+
+  if (*length > 0 && *src == 'Z')
+    {
+      /* Z is special, it means UTC */
+      self->timestamps[LM_TS_STAMP].zone_offset = 0;
+      src++;
+      (*length)--;
+    }
+  else if (__has_iso_timezone(src, *length))
+    {
+
+      self->timestamps[LM_TS_STAMP].zone_offset = __parse_iso_timezone(&src, length);
+    }
+
+  *data = src;
+  return TRUE;
+}
+
+static gboolean
+__is_bsd_pix_or_asa(const guchar *src, guint32 left)
+{
+  return (left >= 21
+          && src[3] == ' '
+          && src[6] == ' '
+          && src[11] == ' '
+          && src[14] == ':'
+          && src[17] == ':'
+          && (src[20] == ':' || src[20] == ' ')
+          && isdigit(src[7])
+          && isdigit(src[8])
+          && isdigit(src[9])
+          && isdigit(src[10])
+         );
+}
+
+static gboolean
+__is_bsd_rfc_3164(const guchar *src, guint32 left)
+{
+  return left >= 15 && src[3] == ' ' && src[6] == ' ' && src[9] == ':' && src[12] == ':';
+}
+
+static gboolean
+__is_bsd_linksys(const guchar *src, guint32 left)
+{
+  return (left >= 21
+          && __is_bsd_rfc_3164(src, left)
+          && src[15] == ' '
+          && isdigit(src[16])
+          && isdigit(src[17])
+          && isdigit(src[18])
+          && isdigit(src[19])
+          && isspace(src[20])
+         );
+}
+
+static gboolean
+__parse_bsd_timestamp(const guchar **data, gint *length, const GTimeVal *now, struct tm* tm, glong *usec)
+{
+  gint left = *length;
+  const guchar *src = *data;
+  time_t now_tv_sec = (time_t) now->tv_sec;
+  struct tm local_time;
+  cached_localtime(&now_tv_sec, tm);
+  cached_localtime(&now_tv_sec, &local_time);
+
+  if (__is_bsd_pix_or_asa(src, left))
+    {
+      if (!scan_pix_timestamp((const gchar **) &src, &left, tm))
+        return FALSE;
+
+      if (*src == ':')
+        {
+          src++;
+          left--;
+        }
+    }
+  else if (__is_bsd_linksys(src, left))
+    {
+      if (!scan_linksys_timestamp((const gchar **) &src, &left, tm))
+        return FALSE;
+    }
+  else if (__is_bsd_rfc_3164(src, left))
+    {
+      if (!scan_bsd_timestamp((const gchar **) &src, &left, tm))
+        return FALSE;
+
+      *usec = __parse_usec(&src, &left);
+
+      tm->tm_year = determine_year_for_month(tm->tm_mon, &local_time);
+    }
+  else
+    {
+      return FALSE;
+    }
+  *data = src;
+  *length = left;
+  return TRUE;
+}
+
+static inline void
+__set_zone_offset(LogStamp * const timestamp, glong const assumed_timezone)
+{
+  if(timestamp->zone_offset == -1)
+    {
+      timestamp->zone_offset = assumed_timezone;
+    }
+  if (timestamp->zone_offset == -1)
+    {
+      timestamp->zone_offset = get_local_timezone_ofs(timestamp->tv_sec);
+    }
+}
+
+static inline time_t
+__get_normalized_time(LogStamp const timestamp, gint const normalized_hour, gint const unnormalized_hour)
+{
+  return timestamp.tv_sec
+         + get_local_timezone_ofs(timestamp.tv_sec)
+         - (normalized_hour - unnormalized_hour) * 3600
+         - timestamp.zone_offset;
+}
+
 /* FIXME: this function should really be exploded to a lot of smaller functions... (Bazsi) */
 static gboolean
 log_msg_parse_date(LogMessage *self, const guchar **data, gint *length, guint parse_flags, glong assume_timezone)
@@ -241,169 +449,18 @@ log_msg_parse_date(LogMessage *self, const guchar **data, gint *length, guint pa
         }
     }
   /* If the next chars look like a date, then read them as a date. */
-  if (left >= 19 && src[4] == '-' && src[7] == '-' && src[10] == 'T' && src[13] == ':' && src[16] == ':')
+  if (__is_iso_stamp((const gchar *)src, left))
     {
-      /* RFC3339 timestamp, expected format: YYYY-MM-DDTHH:MM:SS[.frac]<+/->ZZ:ZZ */
-      gint hours, mins;
-
-      self->timestamps[LM_TS_STAMP].tv_usec = 0;
-
-      /* NOTE: we initialize various unportable fields in tm using a
-       * localtime call, as the value of tm_gmtoff does matter but it does
-       * not exist on all platforms and 0 initializing it causes trouble on
-       * time-zone barriers */
-
-      cached_localtime(&now.tv_sec, &tm);
-      if (!scan_iso_timestamp((const gchar **) &src, &left, &tm))
-        {
-          goto error;
-        }
-
-      self->timestamps[LM_TS_STAMP].tv_usec = 0;
-      if (left > 0 && *src == '.')
-        {
-          gulong frac = 0;
-          gint div = 1;
-          /* process second fractions */
-
-          src++;
-          left--;
-          while (left > 0 && div < 10e5 && isdigit(*src))
-            {
-              frac = 10 * frac + (*src) - '0';
-              div = div * 10;
-              src++;
-              left--;
-            }
-          while (isdigit(*src))
-            {
-              src++;
-              left--;
-            }
-          self->timestamps[LM_TS_STAMP].tv_usec = frac * (1000000 / div);
-        }
-
-      if (left > 0 && *src == 'Z')
-        {
-          /* Z is special, it means UTC */
-          self->timestamps[LM_TS_STAMP].zone_offset = 0;
-          src++;
-          left--;
-        }
-      else if (left >= 5 && (*src == '+' || *src == '-') &&
-          isdigit(*(src+1)) && isdigit(*(src+2)) && *(src+3) == ':' && isdigit(*(src+4)) && isdigit(*(src+5)) && !isdigit(*(src+6)))
-        {
-          /* timezone offset */
-          gint sign = *src == '-' ? -1 : 1;
-
-          hours = (*(src+1) - '0') * 10 + *(src+2) - '0';
-          mins = (*(src+4) - '0') * 10 + *(src+5) - '0';
-          self->timestamps[LM_TS_STAMP].zone_offset = sign * (hours * 3600 + mins * 60);
-          src += 6;
-          left -= 6;
-        }
-      /* we convert it to UTC */
-
+      if (!__parse_iso_stamp(&now, self, &tm, &src, &left))
+        goto error;
       tm.tm_isdst = -1;
-      unnormalized_hour = tm.tm_hour;
-      self->timestamps[LM_TS_STAMP].tv_sec = cached_mktime(&tm);
     }
   else if ((parse_flags & LP_SYSLOG_PROTOCOL) == 0)
     {
-      if (left >= 21 && src[3] == ' ' && src[6] == ' ' && src[11] == ' ' && src[14] == ':' && src[17] == ':' && (src[20] == ':' || src[20] == ' ') &&
-          (isdigit(src[7]) && isdigit(src[8]) && isdigit(src[9]) && isdigit(src[10])))
-        {
-          /* PIX timestamp, expected format: MMM DD YYYY HH:MM:SS: */
-          /* ASA timestamp, expected format: MMM DD YYYY HH:MM:SS */
-
-          cached_localtime(&now.tv_sec, &tm);
-          if (!scan_pix_timestamp((const gchar **) &src, &left, &tm))
-            goto error;
-
-          if (*src == ':')
-            {
-              src++;
-              left--;
-            }
-
-          tm.tm_isdst = -1;
-
-          /* NOTE: no timezone information in the message, assume it is local time */
-          unnormalized_hour = tm.tm_hour;
-          self->timestamps[LM_TS_STAMP].tv_sec = cached_mktime(&tm);
-          self->timestamps[LM_TS_STAMP].tv_usec = 0;
-        }
-      else if (left >= 21 && src[3] == ' ' && src[6] == ' ' && src[9] == ':' && src[12] == ':' && src[15] == ' ' &&
-               isdigit(src[16]) && isdigit(src[17]) && isdigit(src[18]) && isdigit(src[19]) && isspace(src[20]))
-        {
-          /* LinkSys timestamp, expected format: MMM DD HH:MM:SS YYYY */
-
-          cached_localtime(&now.tv_sec, &tm);
-          if (!scan_linksys_timestamp((const gchar **) &src, &left, &tm))
-            goto error;
-          tm.tm_isdst = -1;
-
-          /* NOTE: no timezone information in the message, assume it is local time */
-          unnormalized_hour = tm.tm_hour;
-          self->timestamps[LM_TS_STAMP].tv_sec = cached_mktime(&tm);
-          self->timestamps[LM_TS_STAMP].tv_usec = 0;
-
-        }
-      else if (left >= 15 && src[3] == ' ' && src[6] == ' ' && src[9] == ':' && src[12] == ':')
-        {
-          /* RFC 3164 timestamp, expected format: MMM DD HH:MM:SS ... */
-          struct tm nowtm;
-          glong usec = 0;
-
-          cached_localtime(&now.tv_sec, &nowtm);
-          tm = nowtm;
-          if (!scan_bsd_timestamp((const gchar **) &src, &left, &tm))
-            goto error;
-
-          if (left > 0 && src[0] == '.')
-            {
-              gulong frac = 0;
-              gint div = 1;
-              gint i = 1;
-
-              /* gee, funny Cisco extension, BSD timestamp with fraction of second support */
-
-              while (i < left && div < 10e5 && isdigit(src[i]))
-                {
-                  frac = 10 * frac + (src[i]) - '0';
-                  div = div * 10;
-                  i++;
-                }
-              while (i < left && isdigit(src[i]))
-                i++;
-
-              usec = frac * (1000000 / div);
-              left -= i;
-              src += i;
-            }
-
-          /* detect if the message is coming from last year. If its
-           * month is at least one larger than the current month. This
-           * handles both clocks that are in the future, or in the
-           * past:
-           *   in January we receive a message from December (past) => last year
-           *   in January we receive a message from February (future) => same year
-           *   in December we receive a message from January (future) => next year
-           */
-          if (tm.tm_mon > nowtm.tm_mon + 1)
-            tm.tm_year--;
-          if (tm.tm_mon < nowtm.tm_mon - 1)
-            tm.tm_year++;
-
-          /* NOTE: no timezone information in the message, assume it is local time */
-          unnormalized_hour = tm.tm_hour;
-          self->timestamps[LM_TS_STAMP].tv_sec = cached_mktime(&tm);
-          self->timestamps[LM_TS_STAMP].tv_usec = usec;
-        }
-      else
-        {
-          goto error;
-        }
+      glong usec = 0;
+      if (!__parse_bsd_timestamp(&src, &left, &now, &tm, &usec))
+        goto error;
+      self->timestamps[LM_TS_STAMP].tv_usec = usec;
     }
   else
     {
@@ -419,26 +476,10 @@ log_msg_parse_date(LogMessage *self, const guchar **data, gint *length, guint pa
         return FALSE;
     }
 
-  /* NOTE: mktime() returns the time assuming that the timestamp we
-   * received was in local time. This is not true, as there's a
-   * zone_offset in the timestamp as well. We need to adjust this offset
-   * by adding the local timezone offset at the specific time to get UTC,
-   * which means that tv_sec becomes as if tm was in the 00:00 timezone.
-   * Also we have to take into account that at the zone barriers an hour
-   * might be skipped or played twice this is what the
-   * (tm.tm_hour - * unnormalized_hour) part fixes up. */
-
-  if (self->timestamps[LM_TS_STAMP].zone_offset == -1)
-    {
-      self->timestamps[LM_TS_STAMP].zone_offset = assume_timezone;
-    }
-  if (self->timestamps[LM_TS_STAMP].zone_offset == -1)
-    {
-      self->timestamps[LM_TS_STAMP].zone_offset = get_local_timezone_ofs(self->timestamps[LM_TS_STAMP].tv_sec);
-    }
-  self->timestamps[LM_TS_STAMP].tv_sec = self->timestamps[LM_TS_STAMP].tv_sec +
-                                              get_local_timezone_ofs(self->timestamps[LM_TS_STAMP].tv_sec) -
-                                              (tm.tm_hour - unnormalized_hour) * 3600 - self->timestamps[LM_TS_STAMP].zone_offset;
+  unnormalized_hour = tm.tm_hour;
+  self->timestamps[LM_TS_STAMP].tv_sec = cached_mktime(&tm);
+  __set_zone_offset(&(self->timestamps[LM_TS_STAMP]), assume_timezone);
+  self->timestamps[LM_TS_STAMP].tv_sec = __get_normalized_time(self->timestamps[LM_TS_STAMP], tm.tm_hour, unnormalized_hour);
 
   *data = src;
   *length = left;
@@ -531,21 +572,11 @@ log_msg_parse_legacy_program_name(LogMessage *self, const guchar **data, gint *l
   *length = left;
 }
 
+static guint8 invalid_chars[32];
+
 static void
-log_msg_parse_hostname(LogMessage *self, const guchar **data, gint *length,
-                       const guchar **hostname_start, int *hostname_len,
-                       guint flags, regex_t *bad_hostname)
+_init_parse_hostname_invalid_chars(void)
 {
-  /* FIXME: support nil value support  with new protocol*/
-  const guchar *src, *oldsrc;
-  gint left, oldleft;
-  gchar hostname_buf[256];
-  gint dst = 0;
-  static guint8 invalid_chars[32];
-
-  src = *data;
-  left = *length;
-
   if ((invalid_chars[0] & 0x1) == 0)
     {
       gint i;
@@ -566,6 +597,21 @@ log_msg_parse_hostname(LogMessage *self, const guchar **data, gint *length,
         }
       invalid_chars[0] |= 0x1;
     }
+}
+
+static void
+log_msg_parse_hostname(LogMessage *self, const guchar **data, gint *length,
+                       const guchar **hostname_start, int *hostname_len,
+                       guint flags, regex_t *bad_hostname)
+{
+  /* FIXME: support nil value support  with new protocol*/
+  const guchar *src, *oldsrc;
+  gint left, oldleft;
+  gchar hostname_buf[256];
+  gint dst = 0;
+
+  src = *data;
+  left = *length;
 
   /* If we haven't already found the original hostname,
      look for it now. */
@@ -661,7 +707,6 @@ log_msg_parse_sd(LogMessage *self, const guchar **data, gint *length, const MsgF
   gchar sd_param_value[options->sdata_param_value_max + 1];
   gsize sd_param_value_len;
   gchar sd_value_name[66];
-  NVHandle handle;
 
   guint open_sd = 0;
   gint left = *length, pos;
@@ -714,10 +759,7 @@ log_msg_parse_sd(LogMessage *self, const guchar **data, gint *length, const MsgF
           strncpy(sd_value_name + logmsg_sd_prefix_len, sd_id_name, sizeof(sd_value_name) - logmsg_sd_prefix_len);
           if (*src == ']')
             {
-              /* Standalone sdata */
-              handle = log_msg_get_value_handle(sd_value_name);
-
-              log_msg_set_value(self, handle, "", 0);
+              log_msg_set_value_by_name(self, sd_value_name, "", 0);
             }
           else
             {
@@ -811,9 +853,7 @@ log_msg_parse_sd(LogMessage *self, const guchar **data, gint *length, const MsgF
                   goto error;
                 }
 
-              handle = log_msg_get_value_handle(sd_value_name);
-
-              log_msg_set_value(self, handle, sd_param_value, sd_param_value_len);
+              log_msg_set_value_by_name(self, sd_value_name, sd_param_value, sd_param_value_len);
             }
 
           if (left && *src == ']')
@@ -879,7 +919,7 @@ log_msg_parse_legacy(const MsgFormatOptions *parse_options,
   log_msg_parse_seq(self, &src, &left);
   log_msg_parse_skip_chars(self, &src, &left, " ", -1);
   cached_g_current_time(&now);
-  if (log_msg_parse_date(self, &src, &left, parse_options->flags & ~LP_SYSLOG_PROTOCOL, time_zone_info_get_offset(parse_options->recv_time_zone_info, now.tv_sec)))
+  if (log_msg_parse_date(self, &src, &left, parse_options->flags & ~LP_SYSLOG_PROTOCOL, time_zone_info_get_offset(parse_options->recv_time_zone_info, (time_t)now.tv_sec)))
     {
       /* Expected format: hostname program[pid]: */
       /* Possibly: Message forwarded from hostname: ... */
@@ -947,9 +987,33 @@ log_msg_parse_legacy(const MsgFormatOptions *parse_options,
       self->timestamps[LM_TS_STAMP] = self->timestamps[LM_TS_RECVD];
     }
 
-  log_msg_set_value(self, LM_V_MESSAGE, (gchar *) src, left);
-  if ((parse_options->flags & LP_VALIDATE_UTF8) && g_utf8_validate((gchar *) src, left, NULL))
-    self->flags |= LF_UTF8;
+  if (parse_options->flags & LP_SANITIZE_UTF8 && !g_utf8_validate((gchar *) src, left, NULL))
+    {
+      GString sanitized_message;
+      gchar buf[left * 6 + 1];
+
+      /* avoid GString allocation */
+      sanitized_message.str = buf;
+      sanitized_message.len = 0;
+      sanitized_message.allocated_len = sizeof(buf);
+
+      append_unsafe_utf8_as_escaped_binary(&sanitized_message, (const gchar *) src, left, NULL);
+
+      /* MUST NEVER BE REALLOCATED */
+      g_assert(sanitized_message.str == buf);
+      log_msg_set_value(self, LM_V_MESSAGE, sanitized_message.str, sanitized_message.len);
+      self->flags |= LF_UTF8;
+    }
+  else
+    {
+      log_msg_set_value(self, LM_V_MESSAGE, (gchar *) src, left);
+
+      /* we don't need revalidation if sanitize already said it was valid utf8 */
+      if ((parse_options->flags & LP_VALIDATE_UTF8) &&
+          ((parse_options->flags & LP_SANITIZE_UTF8) == 0) &&
+          g_utf8_validate((gchar *) src, left, NULL))
+        self->flags |= LF_UTF8;
+    }
 
   return TRUE;
 }
@@ -1121,4 +1185,6 @@ syslog_format_init(void)
       cisco_seqid = log_msg_get_value_handle(".SDATA.meta.sequenceId");
       handles_initialized = TRUE;
     }
+
+  _init_parse_hostname_invalid_chars();
 }

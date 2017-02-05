@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -138,7 +138,8 @@ struct _LogSrcDriver
 
 gboolean log_src_driver_init_method(LogPipe *s);
 gboolean log_src_driver_deinit_method(LogPipe *s);
-void log_src_driver_init_instance(LogSrcDriver *self);
+void log_src_driver_queue_method(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options, gpointer user_data);
+void log_src_driver_init_instance(LogSrcDriver *self, GlobalConfig *cfg);
 void log_src_driver_free(LogPipe *s);
 
 /* destination driver class: LogDestDriver */
@@ -150,7 +151,7 @@ struct _LogDestDriver
   LogDriver super;
 
   gpointer acquire_queue_data;
-  LogQueue *(*acquire_queue)(LogDestDriver *s, gchar *persist_name, gpointer user_data);
+  LogQueue *(*acquire_queue)(LogDestDriver *s, const gchar *persist_name, gpointer user_data);
   gpointer release_queue_data;
   void (*release_queue)(LogDestDriver *s, LogQueue *q, gpointer user_data);
 
@@ -165,14 +166,13 @@ struct _LogDestDriver
 
 /* returns a reference */
 static inline LogQueue *
-log_dest_driver_acquire_queue(LogDestDriver *self, gchar *persist_name)
+log_dest_driver_acquire_queue(LogDestDriver *self, const gchar *persist_name)
 {
   LogQueue *q;
 
   q = self->acquire_queue(self, persist_name, self->acquire_queue_data);
   if (q)
     {
-      log_queue_ref(q);
       self->queues = g_list_prepend(self->queues, q);
     }
   return q;
@@ -197,7 +197,7 @@ gboolean log_dest_driver_init_method(LogPipe *s);
 gboolean log_dest_driver_deinit_method(LogPipe *s);
 void log_dest_driver_queue_method(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options, gpointer user_data);
 
-void log_dest_driver_init_instance(LogDestDriver *self);
+void log_dest_driver_init_instance(LogDestDriver *self, GlobalConfig *cfg);
 void log_dest_driver_free(LogPipe *s);
 
 

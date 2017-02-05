@@ -1,3 +1,24 @@
+#############################################################################
+# Copyright (c) 2007-2016 Balabit
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License version 2 as published
+# by the Free Software Foundation, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+#
+# As an additional exemption you are allowed to compile & link against the
+# OpenSSL libraries as published by the OpenSSL project. See the file
+# COPYING for details.
+#
+#############################################################################
 # syslog-ng process control
 
 import os, sys, signal, traceback, time, errno, re
@@ -31,11 +52,8 @@ def start_syslogng(conf, keep_persist=False, verbose=False):
     syslogng_pid = os.fork()
     if syslogng_pid == 0:
         os.putenv("RANDFILE", "rnd")
-        module_path = ''
-        for (root, dirs, files) in os.walk(os.path.abspath(os.path.join(os.environ['top_builddir'], 'modules'))):
-            module_path = ':'.join(map(lambda x: root + '/' + x + '/.libs', dirs))
-            break
-        rc = os.execl('../../syslog-ng/syslog-ng', '../../syslog-ng/syslog-ng', '-f', 'test.conf', '--fd-limit', '1024', '-F', verbose_opt, '-p', 'syslog-ng.pid', '-R', 'syslog-ng.persist', '--no-caps', '--enable-core', '--seed', '--module-path', module_path)
+        module_path = get_module_path()
+        rc = os.execl(get_syslog_ng_binary(), get_syslog_ng_binary(), '-f', 'test.conf', '--fd-limit', '1024', '-F', verbose_opt, '-p', 'syslog-ng.pid', '-R', 'syslog-ng.persist', '--no-caps', '--enable-core', '--seed', '--module-path', module_path)
         sys.exit(rc)
     time.sleep(5)
     print_user("Syslog-ng started")

@@ -1,7 +1,7 @@
 /*
- * Copyright (c) 2012 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 2012 Gergely Nagy <algernon@balabit.hu>,
- *                    Peter Gyongyosi <gyp@balabit.hu>
+ * Copyright (c) 2012 Balabit
+ * Copyright (c) 2012 Gergely Nagy <algernon@balabit.hu>
+ * Copyright (c) 2012 Peter Gyongyosi <gyp@balabit.hu>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published
@@ -22,15 +22,12 @@
  */
 
 #include "plugin.h"
-#include "template/templates.h"
+#include "template/simple-function.h"
 #include "cfg.h"
 #include "uuid.h"
-#include "misc.h"
+#include "str-format.h"
 #include "plugin-types.h"
-
-#if ENABLE_SSL
 #include <openssl/evp.h>
-#endif
 
 static void
 tf_uuid(LogMessage *msg, gint argc, GString *argv[], GString *result)
@@ -43,7 +40,6 @@ tf_uuid(LogMessage *msg, gint argc, GString *argv[], GString *result)
 
 TEMPLATE_FUNCTION_SIMPLE(tf_uuid);
 
-#if ENABLE_SSL
 /*
  * $($hash_method [opts] $arg1 $arg2 $arg3...)
  *
@@ -95,14 +91,14 @@ tf_hash_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent, gint
       return FALSE;
     }
   state->length = length;
-  md = EVP_get_digestbyname(strcmp(argv[0], "hash") == 0 ? "md5" : argv[0]);
+  md = EVP_get_digestbyname(strcmp(argv[0], "hash") == 0 ? "sha256" : argv[0]);
   if (!md)
     {
       g_set_error(error, LOG_TEMPLATE_ERROR, LOG_TEMPLATE_ERROR_COMPILE, "$(hash) parsing failed, unknown digest type");
       return FALSE;
     }
   state->md = md;
-  if (state->length == 0)
+  if ((state->length == 0) || (state->length > md->md_size * 2))
     state->length = md->md_size * 2;
   return TRUE;
 }
@@ -147,19 +143,16 @@ tf_hash_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs 
 
 TEMPLATE_FUNCTION(TFHashState, tf_hash, tf_hash_prepare, tf_simple_func_eval, tf_hash_call, tf_simple_func_free_state, NULL);
 
-#endif
 
 static Plugin cryptofuncs_plugins[] =
 {
   TEMPLATE_FUNCTION_PLUGIN(tf_uuid, "uuid"),
-#if ENABLE_SSL
   TEMPLATE_FUNCTION_PLUGIN(tf_hash, "hash"),
   TEMPLATE_FUNCTION_PLUGIN(tf_hash, "sha1"),
   TEMPLATE_FUNCTION_PLUGIN(tf_hash, "sha256"),
   TEMPLATE_FUNCTION_PLUGIN(tf_hash, "sha512"),
   TEMPLATE_FUNCTION_PLUGIN(tf_hash, "md4"),
   TEMPLATE_FUNCTION_PLUGIN(tf_hash, "md5"),
-#endif
 };
 
 gboolean
@@ -172,9 +165,9 @@ cryptofuncs_module_init(GlobalConfig *cfg, CfgArgs *args)
 const ModuleInfo module_info =
 {
   .canonical_name = "cryptofuncs",
-  .version = VERSION,
+  .version = SYSLOG_NG_VERSION,
   .description = "The cryptofuncs module provides cryptographic template functions.",
-  .core_revision = SOURCE_REVISION,
+  .core_revision = SYSLOG_NG_SOURCE_REVISION,
   .plugins = cryptofuncs_plugins,
   .plugins_len = G_N_ELEMENTS(cryptofuncs_plugins),
 };

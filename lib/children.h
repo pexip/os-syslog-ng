@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2010 Balabit
  * Copyright (c) 1998-2010 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -29,6 +29,7 @@
 #include <sys/types.h>
 
 void child_manager_register(pid_t pid, void (*callback)(pid_t, int, gpointer), gpointer user_data, GDestroyNotify user_data_destroy);
+void child_manager_unregister(pid_t pid);
 void child_manager_sigchild(pid_t pid, int status);
 
 void child_manager_init(void);

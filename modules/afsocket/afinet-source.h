@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -31,9 +31,6 @@
 typedef struct _AFInetSourceDriver
 {
   AFSocketSourceDriver super;
-#if BUILD_WITH_SSL
-  TLSContext *tls_context;
-#endif
   /* character as it can contain a service name from /etc/services */
   gchar *bind_port;
   gchar *bind_ip;
@@ -42,12 +39,12 @@ typedef struct _AFInetSourceDriver
 
 void afinet_sd_set_tls_context(LogDriver *s, TLSContext *tls_context);
 
-AFInetSourceDriver *afinet_sd_new_tcp(void);
-AFInetSourceDriver *afinet_sd_new_tcp6(void);
-AFInetSourceDriver *afinet_sd_new_udp(void);
-AFInetSourceDriver *afinet_sd_new_udp6(void);
-AFInetSourceDriver *afinet_sd_new_syslog(void);
-AFInetSourceDriver *afinet_sd_new_network(void);
+AFInetSourceDriver *afinet_sd_new_tcp(GlobalConfig *cfg);
+AFInetSourceDriver *afinet_sd_new_tcp6(GlobalConfig *cfg);
+AFInetSourceDriver *afinet_sd_new_udp(GlobalConfig *cfg);
+AFInetSourceDriver *afinet_sd_new_udp6(GlobalConfig *cfg);
+AFInetSourceDriver *afinet_sd_new_syslog(GlobalConfig *cfg);
+AFInetSourceDriver *afinet_sd_new_network(GlobalConfig *cfg);
 
 void afinet_sd_set_localport(LogDriver *self, gchar *service);
 void afinet_sd_set_localip(LogDriver *self, gchar *ip);

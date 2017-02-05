@@ -1,8 +1,30 @@
+/*
+ * Copyright (c) 2009-2014 Balabit
+ * Copyright (c) 2009-2014 Viktor Juhasz
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published
+ * by the Free Software Foundation, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
+ * As an additional exemption you are allowed to compile & link against the
+ * OpenSSL libraries as published by the OpenSSL project. See the file
+ * COPYING for details.
+ *
+ */
+
 #include "syslog-ng.h"
 #include "logwriter.h"
-#include "logmsg.h"
+#include "logmsg/logmsg.h"
 #include "template/templates.h"
-#include "misc.h"
 #include "apphook.h"
 #include "cfg.h"
 #include "timeutils.h"
@@ -31,7 +53,7 @@ init_msg(gchar *msg_string, gboolean use_syslog_protocol)
   sa = g_sockaddr_inet_new("10.10.10.10", 1010);
   msg = log_msg_new(msg_string, strlen(msg_string), sa, &parse_options);
   g_sockaddr_unref(sa);
-  log_msg_set_value(msg, log_msg_get_value_handle("APP.VALUE"), "value", 5);
+  log_msg_set_value_by_name(msg, "APP.VALUE", "value", 5);
   log_msg_set_match(msg, 0, "whole-match", 11);
   log_msg_set_match(msg, 1, "first-match", 11);
 
@@ -69,7 +91,7 @@ testcase(gchar *msg_string, gboolean input_is_rfc5424, gchar *template, guint wr
   opt.template = templ;
   msg = init_msg(msg_string, input_is_rfc5424);
   queue = log_queue_fifo_new(1000, NULL);
-  writer = log_writer_new(writer_flags);
+  writer = log_writer_new(writer_flags, configuration);
 
   log_writer_set_options(writer, NULL, &opt, 0, 0, NULL, NULL);
   log_writer_set_queue(writer, queue);
@@ -83,6 +105,7 @@ testcase(gchar *msg_string, gboolean input_is_rfc5424, gchar *template, guint wr
     log_template_unref(templ);
   log_pipe_unref((LogPipe *) writer);
   log_msg_unref(msg);
+  log_queue_unref(queue);
   g_string_free(res, TRUE);
 }
 

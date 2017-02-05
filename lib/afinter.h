@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -39,7 +39,7 @@ typedef struct _AFInterSourceDriver
 } AFInterSourceDriver;
 
 void afinter_postpone_mark(gint mark_freq);
-LogDriver *afinter_sd_new(void);
+LogDriver *afinter_sd_new(GlobalConfig *cfg);
 void afinter_global_init(void);
 
 #endif

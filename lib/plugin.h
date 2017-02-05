@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -47,6 +47,7 @@ struct _Plugin
   CfgParser *parser;
   void (*setup_context)(Plugin *self, GlobalConfig *cfg, gint plugin_type, const gchar *plugin_name);
   gpointer (*construct)(Plugin *self, GlobalConfig *cfg, gint plugin_type, const gchar *plugin_name);
+  void (*free_fn)(Plugin *s);
 };
 
 struct _ModuleInfo
@@ -80,5 +81,6 @@ void plugin_list_modules(FILE *out, gboolean verbose);
 
 void plugin_load_candidate_modules(GlobalConfig *cfg);
 void plugin_free_candidate_modules(GlobalConfig *cfg);
+void plugin_free_plugins(GlobalConfig *cfg);
 
 #endif

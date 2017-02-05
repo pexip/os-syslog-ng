@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2011 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2011 Balabit
  * Copyright (c) 1998-2011 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -23,7 +23,7 @@
  */
 
 #include "logqueue.h"
-#include "stats.h"
+#include "stats/stats-registry.h"
 #include "messages.h"
 
 gint log_queue_max_threads = 0;
@@ -157,8 +157,7 @@ log_queue_check_items(LogQueue *self, gint *timeout, LogQueuePushNotifyFunc para
                * wake up when the rate limits lets us send at least 1 message */
               *timeout = (1000 / self->throttle) + 1;
               msg_debug("Throttling output",
-                        evt_tag_int("wait", *timeout),
-                        NULL);
+                        evt_tag_int("wait", *timeout));
             }
           return FALSE;
         }

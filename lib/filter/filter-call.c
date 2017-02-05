@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2013 Balabit
  * Copyright (c) 1998-2013 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -64,14 +64,16 @@ filter_call_init(FilterExprNode *s, GlobalConfig *cfg)
        * filter rule has a single child, which contains a LogFilterPipe
        * instance as its object. */
 
+      LogFilterPipe *filter_pipe = (LogFilterPipe *) rule->children->object;
 
-      self->filter_expr = ((LogFilterPipe *) rule->children->object)->expr;
+      self->filter_expr = filter_expr_ref(filter_pipe->expr);
+      filter_expr_init(self->filter_expr, cfg);
+      self->super.modify = self->filter_expr->modify;
     }
   else
     {
       msg_error("Referenced filter rule not found in filter() expression",
-                evt_tag_str("rule", self->rule),
-                NULL);
+                evt_tag_str("rule", self->rule));
     }
 }
 
@@ -80,6 +82,7 @@ filter_call_free(FilterExprNode *s)
 {
   FilterCall *self = (FilterCall *) s;
 
+  filter_expr_unref(self->filter_expr);
   g_free((gchar *) self->super.type);
   g_free(self->rule);
 }
@@ -89,7 +92,7 @@ filter_call_new(gchar *rule, GlobalConfig *cfg)
 {
   FilterCall *self = g_new0(FilterCall, 1);
 
-  filter_expr_node_init(&self->super);
+  filter_expr_node_init_instance(&self->super);
   self->super.init = filter_call_init;
   self->super.eval = filter_call_eval;
   self->super.free_fn = filter_call_free;

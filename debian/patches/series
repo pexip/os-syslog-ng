@@ -1,0 +1,5 @@
+0001-compat-fix-time-compat-library-on-Mach-based-distrib.patch
+0002-Fixed-the-name-of-the-libmongoc-pc-file.patch
+0003-Fixed-line-braking-issue.patch
+0004-Fixed-OpenSSL-1.1-build.patch
+0005-fix-segfault-in-X509_STORE_CTX_get_app_data.patch

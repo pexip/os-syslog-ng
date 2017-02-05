@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -24,15 +24,19 @@
 
 #include "afinter.h"
 #include "logreader.h"
-#include "stats.h"
+#include "stats/stats-registry.h"
 #include "messages.h"
 #include "apphook.h"
+#include "mainloop.h"
+
+#include <iv_event.h>
 
 typedef struct _AFInterSource AFInterSource;
 
 static GStaticMutex internal_msg_lock = G_STATIC_MUTEX_INIT;
 static GQueue *internal_msg_queue;
 static AFInterSource *current_internal_source;
+static StatsCounterItem *internal_queue_length;
 
 /* the expiration timer of the next MARK message */
 static struct timespec next_mark_target = { -1, 0 };
@@ -102,7 +106,6 @@ afinter_source_post(gpointer s)
 {
   AFInterSource *self = (AFInterSource *) s;
   LogMessage *msg;
-  LogPathOptions path_options = LOG_PATH_OPTIONS_INIT;
 
   while (log_source_free_to_send(&self->super))
     {
@@ -112,7 +115,8 @@ afinter_source_post(gpointer s)
       if (!msg)
         break;
 
-      log_pipe_queue(&self->super.super, msg, &path_options);
+      stats_counter_dec(internal_queue_length);
+      log_source_post(&self->super, msg);
     }
   afinter_source_update_watches(self);
 }
@@ -150,7 +154,19 @@ afinter_source_wakeup(LogSource *s)
 {
   AFInterSource *self = (AFInterSource *) s;
 
-  iv_event_post(&self->schedule_wakeup);
+  /*
+   * We might get called even after this AFInterSource has been
+   * deinitialized, in which case we must not do anything (since the
+   * iv_event triggered here is not registered).
+   *
+   * This happens when log_writer_deinit() flushes its output queue
+   * after the internal source which produced the message has already been
+   * deinited. Since init/deinit calls are made in the main thread, no
+   * locking is needed.
+   *
+   */
+  if (self->super.super.flags & PIF_INITIALIZED)
+    iv_event_post(&self->schedule_wakeup);
 }
 
 static void
@@ -303,8 +319,8 @@ afinter_source_new(AFInterSourceDriver *owner, LogSourceOptions *options)
 {
   AFInterSource *self = g_new0(AFInterSource, 1);
   
-  log_source_init_instance(&self->super);
-  log_source_set_options(&self->super, options, 0, SCS_INTERNAL, owner->super.super.id, NULL, FALSE);
+  log_source_init_instance(&self->super, owner->super.super.super.cfg);
+  log_source_set_options(&self->super, options, 0, SCS_INTERNAL, owner->super.super.id, NULL, FALSE, FALSE, owner->super.super.super.expr_node);
   afinter_source_init_watches(self);
   self->super.super.init = afinter_source_init;
   self->super.super.deinit = afinter_source_deinit;
@@ -324,14 +340,21 @@ afinter_sd_init(LogPipe *s)
 
   if (current_internal_source != NULL)
     {
-      msg_error("Multiple internal() sources were detected, this is not possible", NULL);
+      msg_error("Multiple internal() sources were detected, this is not possible");
       return FALSE;
     }
 
   log_source_options_init(&self->source_options, cfg, self->super.super.group);
   self->source = afinter_source_new(self, &self->source_options);
   log_pipe_append(&self->source->super, s);
-  log_pipe_init(&self->source->super, cfg);
+
+  if (!log_pipe_init(&self->source->super))
+    {
+      log_pipe_unref(&self->source->super);
+      self->source = NULL;
+      return FALSE;
+    }
+
   return TRUE;
 }
 
@@ -365,11 +388,11 @@ afinter_sd_free(LogPipe *s)
 
 
 LogDriver *
-afinter_sd_new(void)
+afinter_sd_new(GlobalConfig *cfg)
 {
   AFInterSourceDriver *self = g_new0(AFInterSourceDriver, 1);
 
-  log_src_driver_init_instance((LogSrcDriver *)&self->super);
+  log_src_driver_init_instance((LogSrcDriver *)&self->super, cfg);
   self->super.super.super.init = afinter_sd_init;
   self->super.super.super.deinit = afinter_sd_deinit;
   self->super.super.super.free_fn = afinter_sd_free;
@@ -405,8 +428,15 @@ afinter_message_posted(LogMessage *msg)
   if (!internal_msg_queue)
     {
       internal_msg_queue = g_queue_new();
+
+      stats_lock();
+      stats_register_counter(0, SCS_GLOBAL, "internal_queue_length", NULL, SC_TYPE_PROCESSED, &internal_queue_length);
+      stats_unlock();
     }
+
   g_queue_push_tail(internal_msg_queue, msg);
+  stats_counter_inc(internal_queue_length);
+
   if (current_internal_source)
     iv_event_post(&current_internal_source->post);
   g_static_mutex_unlock(&internal_msg_lock);

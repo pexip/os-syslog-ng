@@ -1,77 +1,85 @@
+# vim:set ts=2 sw=2 sts=2 noet:
 ACLOCAL_AMFLAGS = -I m4
 
-AM_CFLAGS = -I$(top_srcdir)/librabbitmq -I$(top_builddir)/librabbitmq
+AM_CFLAGS = -I$(top_srcdir)/librabbitmq
 
 lib_LTLIBRARIES = librabbitmq/librabbitmq.la
+
+librabbitmq_librabbitmq_la_CFLAGS = \
+	$(SSL_CFLAGS) \
+	$(AM_CFLAGS)
+
+librabbitmq_librabbitmq_la_LDFLAGS = \
+	-version-info $(LT_CURRENT):$(LT_REVISION):$(LT_AGE) \
+	$(NO_UNDEFINED) \
+	$(SSL_LIBS)
+
+include_HEADERS = \
+	librabbitmq/amqp.h \
+	librabbitmq/amqp_framing.h \
+	librabbitmq/amqp_tcp_socket.h
+
+if SSL
+include_HEADERS += librabbitmq/amqp_ssl_socket.h
+endif
 
 librabbitmq_librabbitmq_la_SOURCES = \
 	librabbitmq/amqp_api.c \
 	librabbitmq/amqp_connection.c \
+	librabbitmq/amqp_consumer.c \
 	librabbitmq/amqp_framing.c \
 	librabbitmq/amqp_mem.c \
 	librabbitmq/amqp_private.h \
 	librabbitmq/amqp_socket.c \
+	librabbitmq/amqp_socket.h \
 	librabbitmq/amqp_table.c \
+	librabbitmq/amqp_tcp_socket.c \
+	librabbitmq/amqp_tcp_socket.h \
+	librabbitmq/amqp_timer.c \
+	librabbitmq/amqp_timer.h \
 	librabbitmq/amqp_url.c
 
-librabbitmq_librabbitmq_la_LDFLAGS = \
-	-version-info $(LT_CURRENT):$(LT_REVISION):$(LT_AGE) \
-	$(NO_UNDEFINED)
-librabbitmq_librabbitmq_la_CFLAGS = $(AM_CFLAGS)
 
+if SSL_CYASSL
+librabbitmq_librabbitmq_la_SOURCES += librabbitmq/amqp_cyassl.c
+endif
+
+if SSL_GNUTLS
+librabbitmq_librabbitmq_la_SOURCES += librabbitmq/amqp_gnutls.c
+endif
+
+if SSL_OPENSSL
+librabbitmq_librabbitmq_la_SOURCES += \
+  librabbitmq/amqp_hostcheck.c \
+  librabbitmq/amqp_hostcheck.h \
+  librabbitmq/amqp_openssl.c
+if OS_APPLE
+librabbitmq_librabbitmq_la_CFLAGS += -Wno-deprecated-declarations
+endif
+endif
+
+if SSL_POLARSSL
+librabbitmq_librabbitmq_la_SOURCES += librabbitmq/amqp_polarssl.c
+endif
 
 if OS_UNIX
-librabbitmq_librabbitmq_la_SOURCES += librabbitmq/unix/socket.c
-librabbitmq_librabbitmq_la_SOURCES += librabbitmq/unix/socket.h
+librabbitmq_librabbitmq_la_SOURCES += librabbitmq/unix/threads.h
 librabbitmq_librabbitmq_la_CFLAGS += -I$(top_srcdir)/librabbitmq/unix
 endif
 
 if OS_WIN32
-librabbitmq_librabbitmq_la_SOURCES += librabbitmq/win32/socket.c
-librabbitmq_librabbitmq_la_SOURCES += librabbitmq/win32/socket.h
-librabbitmq_librabbitmq_la_CFLAGS += -I$(top_srcdir)/librabbitmq/win32
-librabbitmq_librabbitmq_la_CFLAGS += -I$(top_srcdir)/librabbitmq/win32/msinttypes
+librabbitmq_librabbitmq_la_SOURCES += librabbitmq/win32/threads.h
+librabbitmq_librabbitmq_la_CFLAGS += \
+	-I$(top_srcdir)/librabbitmq/win32 \
+	-I$(top_srcdir)/librabbitmq/win32/msinttypes
 endif
 
-include_HEADERS = \
-	$(top_srcdir)/librabbitmq/amqp.h \
-	$(top_builddir)/librabbitmq/amqp_framing.h
-
-BUILT_SOURCES = \
-	$(top_builddir)/librabbitmq/amqp_framing.h \
-	$(top_builddir)/librabbitmq/amqp_framing.c
-
-if PYTHON3
-codegen_py = $(top_builddir)/librabbitmq/python3/codegen3.py
-codegenlib_py = $(top_builddir)/librabbitmq/python3/amqp_codegen.py
-codegenlib_path = $(top_builddir)/librabbitmq/python3
-
-$(codegenlib_path):
-	$(AM_V_at)$(MKDIR_P) $@
-
-$(codegen_py): $(top_srcdir)/librabbitmq/codegen.py $(codegenlib_path)
-	$(AM_V_GEN)$(PYTHON2TO3) $(top_srcdir)/librabbitmq/codegen.py | patch -p0 -o $(codegen_py)
-
-$(codegenlib_py): $(top_srcdir)/codegen/amqp_codegen.py $(codegenlib_path)
-	$(AM_V_GEN)$(PYTHON2TO3) $(top_srcdir)/codegen/amqp_codegen.py | patch -p0 -o $(codegenlib_py)
-else
-codegen_py = $(top_srcdir)/librabbitmq/codegen.py
-codegenlib_py = $(top_srcdir)/codegen/amqp_codegen.py
-codegenlib_path = $(top_srcdir)/codegen
-endif
-
-
-amqp_codegen_json = $(top_srcdir)/codegen/amqp-rabbitmq-0.9.1.json
-
-librabbitmq/amqp_framing.h: $(amqp_codegen_json) $(codegen_py) $(codegenlib_py)
-	$(AM_V_GEN)PYTHONPATH=$(codegenlib_path) $(PYTHON) $(codegen_py) header $< $@
-
-librabbitmq/amqp_framing.c: $(amqp_codegen_json) $(codegen_py) $(codegenlib_py)
-	$(AM_V_GEN)PYTHONPATH=$(codegenlib_path) $(PYTHON) $(codegen_py) body $< $@
 
 check_PROGRAMS = \
 	tests/test_tables \
-	tests/test_parse_url
+	tests/test_parse_url \
+	tests/test_hostcheck \
+	tests/test_status_enum
 
 TESTS = $(check_PROGRAMS)
 
@@ -81,7 +89,17 @@ tests_test_tables_LDADD = librabbitmq/librabbitmq.la
 tests_test_parse_url_SOURCES = tests/test_parse_url.c
 tests_test_parse_url_LDADD = librabbitmq/librabbitmq.la
 
-noinst_LTLIBRARIES = examples/libutils.la
+tests_test_hostcheck_SOURCES = \
+  tests/test_hostcheck.c \
+	librabbitmq/amqp_hostcheck.c
+
+tests_test_status_enum_SOURCES = tests/test_status_enum.c
+tests_test_status_enum_LDADD = librabbitmq/librabbitmq.la
+
+noinst_LTLIBRARIES =
+
+if EXAMPLES
+noinst_LTLIBRARIES += examples/libutils.la
 
 examples_libutils_la_SOURCES = \
 	examples/utils.c \
@@ -100,6 +118,7 @@ endif
 noinst_PROGRAMS = \
 	examples/amqp_bind \
 	examples/amqp_consumer \
+	examples/amqp_connect_timeout \
 	examples/amqp_exchange_declare \
 	examples/amqp_listen \
 	examples/amqp_listenq \
@@ -133,6 +152,11 @@ examples_amqp_consumer_LDADD = \
 	examples/libutils.la \
 	librabbitmq/librabbitmq.la
 
+examples_amqp_connect_timeout_SOURCES = examples/amqp_connect_timeout.c
+examples_amqp_connect_timeout_LDADD = \
+	examples/libutils.la \
+	librabbitmq/librabbitmq.la
+
 examples_amqp_unbind_SOURCES = examples/amqp_unbind.c
 examples_amqp_unbind_LDADD = \
 	examples/libutils.la \
@@ -148,10 +172,70 @@ examples_amqp_listenq_LDADD = \
 	examples/libutils.la \
 	librabbitmq/librabbitmq.la
 
-examples_amqp_rpc_sendstring_client_SOURCES = examples/amqp_rpc_sendstring_client.c
+examples_amqp_rpc_sendstring_client_SOURCES = \
+	examples/amqp_rpc_sendstring_client.c
 examples_amqp_rpc_sendstring_client_LDADD = \
 	examples/libutils.la \
 	librabbitmq/librabbitmq.la
+
+if SSL
+noinst_PROGRAMS += \
+	examples/amqps_bind \
+	examples/amqps_connect_timeout \
+	examples/amqps_consumer \
+	examples/amqps_exchange_declare \
+	examples/amqps_listen \
+	examples/amqps_listenq \
+	examples/amqps_producer \
+	examples/amqps_sendstring \
+	examples/amqps_unbind
+
+examples_amqps_bind_SOURCES = examples/amqps_bind.c
+examples_amqps_bind_LDADD = \
+	examples/libutils.la \
+	librabbitmq/librabbitmq.la
+
+examples_amqps_connect_timeout_SOURCES = examples/amqps_connect_timeout.c
+examples_amqps_connect_timeout_LDADD = \
+	examples/libutils.la \
+	librabbitmq/librabbitmq.la
+
+examples_amqps_consumer_SOURCES = examples/amqps_consumer.c
+examples_amqps_consumer_LDADD = \
+	examples/libutils.la \
+	librabbitmq/librabbitmq.la
+
+examples_amqps_exchange_declare_SOURCES = examples/amqps_exchange_declare.c
+examples_amqps_exchange_declare_LDADD = \
+	examples/libutils.la \
+	librabbitmq/librabbitmq.la
+
+examples_amqps_listen_SOURCES = examples/amqps_listen.c
+examples_amqps_listen_LDADD = \
+	examples/libutils.la \
+	librabbitmq/librabbitmq.la
+
+examples_amqps_listenq_SOURCES = examples/amqps_listenq.c
+examples_amqps_listenq_LDADD = \
+	examples/libutils.la \
+	librabbitmq/librabbitmq.la
+
+examples_amqps_producer_SOURCES = examples/amqps_producer.c
+examples_amqps_producer_LDADD = \
+	examples/libutils.la \
+	librabbitmq/librabbitmq.la
+
+examples_amqps_sendstring_SOURCES = examples/amqps_sendstring.c
+examples_amqps_sendstring_LDADD = \
+	examples/libutils.la \
+	librabbitmq/librabbitmq.la
+
+examples_amqps_unbind_SOURCES = examples/amqps_unbind.c
+examples_amqps_unbind_LDADD = \
+	examples/libutils.la \
+	librabbitmq/librabbitmq.la
+endif
+endif
 
 if TOOLS
 noinst_LTLIBRARIES += tools/libcommon.la
@@ -166,18 +250,21 @@ tools_libcommon_la_CFLAGS = \
 tools_platform_CFLAGS = $(AM_CFLAGS)
 
 if OS_UNIX
-tools_libcommon_la_SOURCES += tools/unix/process.c
-tools_libcommon_la_SOURCES += tools/unix/process.h
+tools_libcommon_la_SOURCES += \
+	tools/unix/process.c \
+	tools/unix/process.h
 tools_platform_CFLAGS += -I$(top_srcdir)/tools/unix
 endif
 
 if OS_WIN32
-tools_libcommon_la_SOURCES += tools/win32/compat.c
-tools_libcommon_la_SOURCES += tools/win32/compat.h
-tools_libcommon_la_SOURCES += tools/win32/process.c
-tools_libcommon_la_SOURCES += tools/win32/process.h
-tools_platform_CFLAGS += -I$(top_srcdir)/tools/win32
-tools_platform_CFLAGS += -I$(top_srcdir)/tools/win32/msinttypes
+tools_libcommon_la_SOURCES += \
+	tools/win32/compat.c \
+	tools/win32/compat.h \
+	tools/win32/process.c \
+	tools/win32/process.h
+tools_platform_CFLAGS += \
+	-I$(top_srcdir)/tools/win32 \
+	-I$(top_srcdir)/tools/win32/msinttypes
 endif
 
 bin_PROGRAMS = \
@@ -256,7 +343,7 @@ man_MANS = \
 # separation as required by distcheck, debian packaging etc.
 XMLTO_FLAGS = \
 	--skip-validation \
-	--searchpath $(top_builddir)/tools/doc
+	--searchpath $(abs_top_builddir)/tools/doc
 
 %.1: %.xml $(top_builddir)/tools/doc/man-date.ent
 	$(AM_V_GEN)$(XMLTO) $(XMLTO_FLAGS) -o $(top_builddir)/tools/doc man $<
@@ -271,30 +358,39 @@ endif # DOCS
 endif # TOOLS
 
 EXTRA_DIST = \
-	$(man_MANS) \
+	AUTHORS \
+	CMakeLists.txt \
+	CONTRIBUTING.md \
+	ChangeLog.md \
 	LICENSE-MIT \
-	codegen/LICENSE \
-	codegen/LICENSE-MPL-RabbitMQ \
-	codegen/Makefile \
-	codegen/README.extensions.md \
-	codegen/amqp-rabbitmq-0.8.json \
-	codegen/amqp-rabbitmq-0.9.1.json \
-	codegen/amqp_codegen.py \
-	codegen/demo_extension.json \
-	codegen/license_info \
-	debian \
+	README-win32.md \
+	README.md \
+	README.vms \
+	THANKS \
+	TODO \
+	cmake \
+	codegen \
+	descrip.mms \
+	docs \
+	examples/CMakeLists.txt \
+	examples/descrip.mms \
+	librabbitmq/CMakeLists.txt \
 	librabbitmq/codegen.py \
+	librabbitmq/descrip.mms \
+	librabbitmq/win32 \
+	tests/CMakeLists.txt \
 	tests/test_tables.expected \
+	tests/win32 \
+	tools/CMakeLists.txt \
 	tools/doc/amqp-consume.xml \
 	tools/doc/amqp-declare-queue.xml \
 	tools/doc/amqp-delete-queue.xml \
 	tools/doc/amqp-get.xml \
 	tools/doc/amqp-publish.xml \
-	tools/doc/librabbitmq-tools.xml
+	tools/doc/librabbitmq-tools.xml \
+	vms
 
 MOSTLYCLEANFILES = \
-	$(top_builddir)/librabbitmq/amqp_framing.c \
-	$(top_builddir)/librabbitmq/amqp_framing.h \
 	$(man_MANS) \
 	$(top_builddir)/tools/doc/man-date.ent
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2013 Balabit
  * Copyright (c) 1998-2013 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -33,9 +33,18 @@ typedef struct _LogRewriteSubst LogRewriteSubst;
 struct _LogRewriteSubst
 {
   LogRewrite super;
+  LogMatcherOptions matcher_options;
   LogMatcher *matcher;
   LogTemplate *replacement;
 };
+
+LogMatcherOptions *
+log_rewrite_subst_get_matcher_options(LogRewrite *s)
+{
+  LogRewriteSubst *self = (LogRewriteSubst *) s;
+
+  return &self->matcher_options;
+}
 
 void
 log_rewrite_subst_process(LogRewrite *s, LogMessage **pmsg, const LogPathOptions *path_options)
@@ -57,42 +66,22 @@ log_rewrite_subst_process(LogRewrite *s, LogMessage **pmsg, const LogPathOptions
   g_free(new_value);
 }
 
-void
-log_rewrite_subst_set_matcher(LogRewrite *s, LogMatcher *matcher)
-{
-  LogRewriteSubst *self = (LogRewriteSubst*) s;
-  gint flags = 0;
-
-  if(self->matcher)
-    {
-      flags = self->matcher->flags;
-      log_matcher_unref(self->matcher);
-    }
-  self->matcher = matcher;
-
-  log_rewrite_subst_set_flags(s, flags);
-}
-
 gboolean
-log_rewrite_subst_set_regexp(LogRewrite *s, const gchar *regexp)
+log_rewrite_subst_compile_pattern(LogRewrite *s, const gchar *regexp, GError **error)
 {
   LogRewriteSubst *self = (LogRewriteSubst*) s;
+  GlobalConfig *cfg = log_pipe_get_config(&s->super);
 
-  if (!self->matcher)
-    self->matcher = log_matcher_posix_re_new();
+  log_matcher_options_init(&self->matcher_options, cfg);
+  self->matcher = log_matcher_new(&self->matcher_options);
 
-  return log_matcher_compile(self->matcher, regexp);
-}
+  if (!log_matcher_is_replace_supported(self->matcher))
+    {
+      g_set_error(error, LOG_MATCHER_ERROR, 0, "subst() only supports matchers that allow replacement, glob is not one of these");
+      return FALSE;
+    }
 
-void
-log_rewrite_subst_set_flags(LogRewrite *s, gint flags)
-{
-  LogRewriteSubst *self = (LogRewriteSubst*)s;
-
-  if (!self->matcher)
-    self->matcher = log_matcher_posix_re_new();
-
-  log_matcher_set_flags(self->matcher, flags);
+  return log_matcher_compile(self->matcher, regexp, error);
 }
 
 static LogPipe *
@@ -101,13 +90,15 @@ log_rewrite_subst_clone(LogPipe *s)
   LogRewriteSubst *self = (LogRewriteSubst *) s;
   LogRewriteSubst *cloned;
 
-  cloned = (LogRewriteSubst *) log_rewrite_subst_new(log_template_ref(self->replacement));
+  cloned = (LogRewriteSubst *) log_rewrite_subst_new(log_template_ref(self->replacement), s->cfg);
   cloned->matcher = log_matcher_ref(self->matcher);
   cloned->super.value_handle = self->super.value_handle;
-  cloned->super.condition = self->super.condition;
+
+  if (self->super.condition)
+    cloned->super.condition = filter_expr_ref(self->super.condition);
+
   return &cloned->super.super;
 }
-
 
 void
 log_rewrite_subst_free(LogPipe *s)
@@ -116,20 +107,21 @@ log_rewrite_subst_free(LogPipe *s)
 
   log_matcher_unref(self->matcher);
   log_template_unref(self->replacement);
+  log_matcher_options_destroy(&self->matcher_options);
   log_rewrite_free_method(s);
 }
 
 LogRewrite *
-log_rewrite_subst_new(LogTemplate *replacement)
+log_rewrite_subst_new(LogTemplate *replacement, GlobalConfig *cfg)
 {
   LogRewriteSubst *self = g_new0(LogRewriteSubst, 1);
 
-  log_rewrite_init(&self->super);
+  log_rewrite_init_instance(&self->super, cfg);
 
   self->super.super.free_fn = log_rewrite_subst_free;
   self->super.super.clone = log_rewrite_subst_clone;
   self->super.process = log_rewrite_subst_process;
   self->replacement = log_template_ref(replacement);
-
+  log_matcher_options_defaults(&self->matcher_options);
   return &self->super;
 }

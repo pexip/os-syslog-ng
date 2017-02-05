@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -33,9 +33,13 @@ typedef struct _AFUnixSourceDriver
   AFSocketSourceDriver super;
   gchar *filename;
   FilePermOptions file_perm_options;
+  gint pass_unix_credentials;
+  gint create_dirs;
 } AFUnixSourceDriver;
 
-AFUnixSourceDriver *afunix_sd_new_stream(gchar *filename);
-AFUnixSourceDriver *afunix_sd_new_dgram(gchar *filename);
+AFUnixSourceDriver *afunix_sd_new_stream(gchar *filename, GlobalConfig *cfg);
+AFUnixSourceDriver *afunix_sd_new_dgram(gchar *filename, GlobalConfig *cfg);
+void afunix_sd_set_pass_unix_credentials(AFUnixSourceDriver *self, gboolean pass);
+void afunix_sd_set_create_dirs(AFUnixSourceDriver *self, gboolean create_dirs);
 
 #endif

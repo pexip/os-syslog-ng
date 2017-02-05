@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2011 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2011 Balabit
  * Copyright (c) 1998-2011 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -43,7 +43,8 @@ typedef struct _LogStamp
 } LogStamp;
 
 void log_stamp_format(LogStamp *stamp, GString *target, gint ts_format, glong zone_offset, gint frac_digits);
-void log_stamp_append_format(LogStamp *stamp, GString *target, gint ts_format, glong zone_offset, gint frac_digits);
+void log_stamp_append_format(const LogStamp *stamp, GString *target, gint ts_format, glong zone_offset, gint frac_digits);
+gboolean log_stamp_eq(const LogStamp *a, const LogStamp *b);
 
 
 #endif

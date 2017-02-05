@@ -1,9 +1,33 @@
+/*
+ * Copyright (c) 2010, 2015 Balabit
+ * Copyright (c) 2010, 2015 Balázs Scheidler <balazs.scheidler@balabit.com>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published
+ * by the Free Software Foundation, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
+ * As an additional exemption you are allowed to compile & link against the
+ * OpenSSL libraries as published by the OpenSSL project. See the file
+ * COPYING for details.
+ *
+ */
+
 #include "timerwheel.h"
 
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <string.h>
 
 #define NUM_TIMERS 10000
 
@@ -11,23 +35,39 @@ gint num_callbacks;
 guint64 prev_now;
 
 void
-timer_callback(guint64 now, gpointer user_data)
+timer_callback(TimerWheel *self, guint64 now, gpointer user_data)
 {
   guint64 expires = *(guint64 *) user_data;
 
   if (now != expires)
     {
-      fprintf(stderr, "Expected time is not matching current time in callback, now=%" G_GUINT64_FORMAT ", expires=%" G_GUINT64_FORMAT "\n",
-              now, expires);
+      fprintf(stderr, "Expected time is not matching current time in callback, "
+                      "now=%" G_GUINT64_FORMAT ", expires=%" G_GUINT64_FORMAT "\n",
+                      now, expires);
       exit(1);
     }
   if (prev_now > now)
     {
-      fprintf(stderr, "Callback current time is not monotonically increasing, prev_now=%" G_GUINT64_FORMAT ", now=%" G_GUINT64_FORMAT "\n",
-              prev_now, now);
+      fprintf(stderr, "Callback current time is not monotonically increasing, "
+                      "prev_now=%" G_GUINT64_FORMAT ", now=%" G_GUINT64_FORMAT "\n",
+                      prev_now, now);
     }
   prev_now = now;
   num_callbacks++;
+}
+
+#define ASSOC_DATA_STRING "timerwheel associated data, check whether it's freed"
+
+static void
+_test_assoc_data(TimerWheel *wheel)
+{
+  timer_wheel_set_associated_data(wheel, g_strdup(ASSOC_DATA_STRING), (GDestroyNotify) g_free);
+  if (strcmp(timer_wheel_get_associated_data(wheel), ASSOC_DATA_STRING) != 0)
+    {
+      fprintf(stderr, "Associated data mismatch, found=%s, expected=%s",
+                      (gchar *) timer_wheel_get_associated_data(wheel), ASSOC_DATA_STRING);
+      exit(1);
+    }
 }
 
 void
@@ -43,6 +83,7 @@ test_wheel(gint seed)
   expected_callbacks = 0;
   srand(seed);
   wheel = timer_wheel_new();
+  _test_assoc_data(wheel);
   timer_wheel_set_time(wheel, 1);
   for (i = 0; i < NUM_TIMERS; i++)
     {
@@ -86,7 +127,9 @@ test_wheel(gint seed)
   timer_wheel_set_time(wheel, latest + 1);
   if (num_callbacks != expected_callbacks)
     {
-      fprintf(stderr, "Error: not enough callbacks received, num_callbacks=%d, expected=%d\n", num_callbacks, expected_callbacks);
+      fprintf(stderr, "Error: not enough callbacks received, "
+                      "num_callbacks=%d, expected=%d\n",
+                      num_callbacks, expected_callbacks);
       exit(1);
     }
   timer_wheel_free(wheel);

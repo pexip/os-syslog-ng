@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 2013 Gergely Nagy <algernon@balabit.hu>
+ * Copyright (c) 2013, 2014 Balabit
+ * Copyright (c) 2013, 2014 Gergely Nagy <algernon@balabit.hu>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -23,9 +23,10 @@
  */
 
 #include "filter-in-list.h"
-#include "logmsg.h"
-#include "misc.h"
+#include "logmsg/logmsg.h"
+#include "str-utils.h"
 
+#include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -64,30 +65,27 @@ filter_in_list_new(const gchar *list_file, const gchar *property)
 {
   FilterInList *self;
   FILE *stream;
-  size_t n;
-  gchar *line = NULL;
+  gchar line[16384];
 
   stream = fopen(list_file, "r");
   if (!stream)
     {
       msg_error("Error opening in-list filter list file",
                 evt_tag_str("file", list_file),
-                evt_tag_errno("errno", errno),
-                NULL);
+                evt_tag_errno("errno", errno));
       return NULL;
     }
 
   self = g_new0(FilterInList, 1);
-  filter_expr_node_init(&self->super);
+  filter_expr_node_init_instance(&self->super);
   self->value_handle = log_msg_get_value_handle(property);
-  self->tree = g_tree_new((GCompareFunc) strcmp);
+  self->tree = g_tree_new_full((GCompareDataFunc)strcmp, NULL, g_free, NULL);
 
-  while (getline(&line, &n, stream) != -1)
+  while (fgets(line, sizeof(line), stream) != NULL)
     {
       line[strlen(line) - 1] = '\0';
       if (line[0])
-        g_tree_insert(self->tree, line, GINT_TO_POINTER(1));
-      line = NULL;
+        g_tree_insert(self->tree, g_strdup(line), GINT_TO_POINTER(1));
     }
   fclose(stream);
 

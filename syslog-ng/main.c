@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -27,17 +27,18 @@
 #include "messages.h"
 #include "memtrace.h"
 #include "children.h"
-#include "misc.h"
-#include "stats.h"
+#include "stats/stats-registry.h"
 #include "apphook.h"
 #include "alarms.h"
 #include "logqueue.h"
 #include "gprocess.h"
-#include "control.h"
+#include "control/control.h"
 #include "timeutils.h"
 #include "logsource.h"
 #include "mainloop.h"
 #include "plugin.h"
+#include "reloc.h"
+#include "resolved-configurable-paths.h"
 
 #include <sys/types.h>
 #include <stdio.h>
@@ -51,14 +52,13 @@
 
 #include <grp.h>
 
-#if HAVE_GETOPT_H
+#if SYSLOG_NG_HAVE_GETOPT_H
 #include <getopt.h>
 #endif
 
 #include <iv.h>
 #include <iv_signal.h>
 
-static gchar *install_dat_filename = PATH_INSTALL_DAT;
 static gchar *installer_version = NULL;
 static gboolean display_version = FALSE;
 static gboolean display_module_registry = FALSE;
@@ -70,8 +70,8 @@ extern int cfg_parser_debug;
 
 static GOptionEntry syslogng_options[] = 
 {
-  { "version",           'V',         0, G_OPTION_ARG_NONE, &display_version, "Display version number (" PACKAGE " " VERSION ")", NULL },
-  { "module-path",         0,         0, G_OPTION_ARG_STRING, &module_path, "Set the list of colon separated directories to search for modules, default=" MODULE_PATH, "<path>" },
+  { "version",           'V',         0, G_OPTION_ARG_NONE, &display_version, "Display version number (" SYSLOG_NG_PACKAGE_NAME " " SYSLOG_NG_VERSION ")", NULL },
+  { "module-path",         0,         0, G_OPTION_ARG_STRING, &resolvedConfigurablePaths.initial_module_path, "Set the list of colon separated directories to search for modules, default=" SYSLOG_NG_MODULE_PATH, "<path>" },
   { "module-registry",     0,         0, G_OPTION_ARG_NONE, &display_module_registry, "Display module information", NULL },
   { "seed",              'S',         0, G_OPTION_ARG_NONE, &dummy, "Does nothing, the need to seed the random generator is autodetected", NULL},
 #ifdef YYDEBUG
@@ -95,7 +95,7 @@ get_installer_version(gchar **inst_version)
 {
   gchar line[1024];
   gboolean result = FALSE;
-  FILE *f_install = fopen(install_dat_filename, "r");
+  FILE *f_install = fopen(get_installation_path_for(PATH_INSTALL_DAT), "r");
 
   if (!f_install)
     return FALSE;
@@ -125,17 +125,20 @@ version(void)
 {
   if (!get_installer_version(&installer_version) || installer_version == NULL)
     {
-      installer_version = VERSION;
+      installer_version = SYSLOG_NG_VERSION;
     }
-  printf(PACKAGE " " VERSION "\n"
+  printf(SYSLOG_NG_PACKAGE_NAME " " SYSLOG_NG_VERSION "\n"
          "Installer-Version: %s\n"
-         "Revision: " SOURCE_REVISION "\n"
-#if WITH_COMPILE_DATE
-         "Compile-Date: " __DATE__ " " __TIME__ "\n"
-#endif
-         "Available-Modules: ",
+         "Revision: " SYSLOG_NG_SOURCE_REVISION "\n",
          installer_version);
 
+#if WITH_COMPILE_DATE
+  printf("Compile-Date: " __DATE__ " " __TIME__ "\n");
+#endif
+
+  printf("Module-Directory: %s\n", get_installation_path_for(SYSLOG_NG_PATH_MODULEDIR));
+  printf("Module-Path: %s\n", resolvedConfigurablePaths.initial_module_path);
+  printf("Available-Modules: ");
   plugin_list_modules(stdout, FALSE);
 
   printf("Enable-Debug: %s\n"
@@ -144,20 +147,18 @@ version(void)
          "Enable-IPv6: %s\n"
          "Enable-Spoof-Source: %s\n"
          "Enable-TCP-Wrapper: %s\n"
-         "Enable-Linux-Caps: %s\n"
-         "Enable-Pcre: %s\n",
-         ON_OFF_STR(ENABLE_DEBUG),
-         ON_OFF_STR(ENABLE_GPROF),
-         ON_OFF_STR(ENABLE_MEMTRACE),
-         ON_OFF_STR(ENABLE_IPV6),
-         ON_OFF_STR(ENABLE_SPOOF_SOURCE),
-         ON_OFF_STR(ENABLE_TCP_WRAPPER),
-         ON_OFF_STR(ENABLE_LINUX_CAPS),
-         ON_OFF_STR(ENABLE_PCRE));
+         "Enable-Linux-Caps: %s\n",
+         ON_OFF_STR(SYSLOG_NG_ENABLE_DEBUG),
+         ON_OFF_STR(SYSLOG_NG_ENABLE_GPROF),
+         ON_OFF_STR(SYSLOG_NG_ENABLE_MEMTRACE),
+         ON_OFF_STR(SYSLOG_NG_ENABLE_IPV6),
+         ON_OFF_STR(SYSLOG_NG_ENABLE_SPOOF_SOURCE),
+         ON_OFF_STR(SYSLOG_NG_ENABLE_TCP_WRAPPER),
+         ON_OFF_STR(SYSLOG_NG_ENABLE_LINUX_CAPS));
 
 }
 
-#if ENABLE_LINUX_CAPS
+#if SYSLOG_NG_ENABLE_LINUX_CAPS
 #define BASE_CAPS "cap_net_bind_service,cap_net_broadcast,cap_net_raw," \
   "cap_dac_read_search,cap_dac_override,cap_chown,cap_fowner=p "
 
@@ -197,6 +198,8 @@ main(int argc, char *argv[])
 
   setup_caps();
 
+  resolved_configurable_paths_init(&resolvedConfigurablePaths);
+
   ctx = g_option_context_new("syslog-ng");
   g_process_add_option_group(ctx);
   msg_add_option_group(ctx);
@@ -228,6 +231,16 @@ main(int argc, char *argv[])
       return 0;
     }
 
+  if(startup_debug_flag && debug_flag)
+    {
+      startup_debug_flag = FALSE;
+    }
+
+  if(startup_debug_flag)
+    {
+      debug_flag = TRUE;
+    }
+
   if (debug_flag)
     {
       log_stderr = TRUE;
@@ -243,7 +256,9 @@ main(int argc, char *argv[])
    * credentials in order to initialize/reinitialize the configuration.
    */
   g_process_start();
-  rc = main_loop_init();
+  app_startup();
+  main_loop_init();
+  rc = main_loop_read_and_init_config();
   
   if (rc)
     {
@@ -259,12 +274,20 @@ main(int argc, char *argv[])
     }
 
   /* we are running as a non-root user from this point */
-  
+
   app_post_daemonized();
   app_post_config_loaded();
+
+  if(startup_debug_flag)
+    {
+      debug_flag = FALSE;
+      log_stderr = FALSE;
+    }
+
   /* from now on internal messages are written to the system log as well */
   
-  rc = main_loop_run();
+  main_loop_run();
+  main_loop_deinit();
 
   app_shutdown();
   z_mem_trace_dump();

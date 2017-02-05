@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2013 Balabit
  * Copyright (c) 2013 Balazs Scheidler <bazsi@balabit.hu>
  *
  * This library is free software; you can redistribute it and/or
@@ -16,22 +16,21 @@
  * License along with this library; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
+ * As an additional exemption you are allowed to compile & link against the
+ * OpenSSL libraries as published by the OpenSSL project. See the file
+ * COPYING for details.
+ *
  */
 #ifndef LOGPROTO_REGEXP_MULTILINE_SERVER_INCLUDED
 #define LOGPROTO_REGEXP_MULTILINE_SERVER_INCLUDED
 
 #include "logproto-text-server.h"
 
-#include <regex.h>
-
+typedef struct _MultiLineRegexp MultiLineRegexp;
 typedef struct _LogProtoREMultiLineServer LogProtoREMultiLineServer;
-struct _LogProtoREMultiLineServer
-{
-  LogProtoTextServer super;
-  /* these are borrowed */
-  regex_t *prefix;
-  regex_t *garbage;
-};
+
+MultiLineRegexp *multi_line_regexp_compile(const gchar *regexp, GError **error);
+void multi_line_regexp_free(MultiLineRegexp *self);
 
 /* LogProtoREMultiLineServer
  *
@@ -40,14 +39,18 @@ struct _LogProtoREMultiLineServer
  * zero or more lines starting with whitespace. A record is terminated
  * when we reach a line that starts with non-whitespace, or EOF.
  */
-LogProtoServer *log_proto_regexp_multiline_server_new(LogTransport *transport,
+LogProtoServer *log_proto_prefix_garbage_multiline_server_new(LogTransport *transport,
                                                       const LogProtoServerOptions *options,
-                                                      regex_t *prefix,
-                                                      regex_t *garbage);
+                                                      MultiLineRegexp *prefix,
+                                                      MultiLineRegexp *garbage);
 void log_proto_regexp_multiline_server_init(LogProtoREMultiLineServer *self,
                                             LogTransport *transport,
                                             const LogProtoServerOptions *options,
-                                            regex_t *prefix,
-                                            regex_t *garbage);
+                                            MultiLineRegexp *prefix,
+                                            MultiLineRegexp *garbage);
+LogProtoServer *log_proto_prefix_suffix_multiline_server_new(LogTransport *transport,
+                                                      const LogProtoServerOptions *options,
+                                                      MultiLineRegexp *prefix,
+                                                      MultiLineRegexp *suffix);
 
 #endif

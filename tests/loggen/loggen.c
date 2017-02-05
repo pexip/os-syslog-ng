@@ -1,6 +1,29 @@
+/*
+ * Copyright (c) 2007-2015 Balabit
+ * Copyright (c) 2007-2015 Balázs Scheidler
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published
+ * by the Free Software Foundation, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
+ * As an additional exemption you are allowed to compile & link against the
+ * OpenSSL libraries as published by the OpenSSL project. See the file
+ * COPYING for details.
+ *
+ */
+
 #include "syslog-ng.h"
 
-#include <config.h>
+#include <syslog-ng-config.h>
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -16,13 +39,11 @@
 #include <glib.h>
 #include <signal.h>
 
-#if ENABLE_SSL
 #include <openssl/crypto.h>
 #include <openssl/x509.h>
 #include <openssl/pem.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
-#endif
 
 #include <unistd.h>
 
@@ -60,6 +81,7 @@ int loop_reading = 0;
 int dont_parse = 0;
 static gint display_version;
 char *sdata_value = NULL;
+int permanent = 0;
 
 /* results */
 guint64 sum_count;
@@ -102,13 +124,11 @@ send_plain(void *user_data, void *buf, size_t length)
   return (cc);
 }
 
-#if ENABLE_SSL
 static ssize_t
 send_ssl(void *user_data, void *buf, size_t length)
 {
   return SSL_write((SSL *)user_data, buf, length);
 }
-#endif
 
 static unsigned long
 time_val_diff_in_usec(struct timeval *t1, struct timeval *t2)
@@ -324,6 +344,18 @@ connect_server(void)
   return sock;
 }
 
+static void
+format_timezone_offset_with_colon(char *timestamp, int timestamp_size, struct tm *tm) {
+  char offset[7];
+  int len = strftime(offset, sizeof(offset), "%z", tm);
+  offset[len + 1] = '\0';
+  offset[len] = offset[len - 1];
+  offset[len - 1] = offset[len - 2];
+  offset[len - 2] = ':';
+
+  strncat(timestamp, offset, timestamp_size - strlen(timestamp) -1);
+}
+
 static guint64
 gen_messages(send_data_t send_func, void *send_func_ud, int thread_id, FILE *readfrom)
 {
@@ -397,7 +429,7 @@ gen_messages(send_data_t send_func, void *send_func_ud, int thread_id, FILE *rea
 
   /* NOTE: all threads calculate raw_message_length. This code could use some refactorization. */
   raw_message_length = linelen = strlen(linebuf);
-  while (time_val_diff_in_usec(&now, &start) < ((int64_t)interval) * USEC_PER_SEC)
+  while (permanent || time_val_diff_in_usec(&now, &start) < ((int64_t)interval) * USEC_PER_SEC)
     {
       if(number_of_messages != 0 && count >= number_of_messages)
         {
@@ -453,8 +485,14 @@ gen_messages(send_data_t send_func, void *send_func_ud, int thread_id, FILE *rea
 
               localtime_r(&now.tv_sec, &tm);
               len = strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%S", &tm);
-              memcpy(&linebuf[pos_timestamp1], stamp, len);
               memcpy(&linebuf[pos_timestamp2], stamp, len);
+
+              if (syslog_proto)
+                {
+                  format_timezone_offset_with_colon(stamp, sizeof(stamp), &tm);
+                }
+
+              memcpy(&linebuf[pos_timestamp1], stamp, strlen(stamp));
             }
 
           diff_usec = time_val_diff_in_usec(&now, &last_ts_format);
@@ -506,7 +544,6 @@ gen_messages(send_data_t send_func, void *send_func_ud, int thread_id, FILE *rea
   return count;
 }
 
-#if ENABLE_SSL
 static guint64
 gen_messages_ssl(int sock, int id, FILE *readfrom)
 {
@@ -545,9 +582,6 @@ gen_messages_ssl(int sock, int id, FILE *readfrom)
 
   return ret;
 }
-#else
-#define gen_messages_ssl gen_messages_plain
-#endif
 
 static guint64
 gen_messages_plain(int sock, int id, FILE *readfrom)
@@ -674,21 +708,20 @@ static GOptionEntry loggen_options[] = {
   { "dgram", 'D', 0, G_OPTION_ARG_NONE, &sock_type_d, "Use datagram socket (UDP and unix-dgram)", NULL },
   { "size", 's', 0, G_OPTION_ARG_INT, &message_length, "Specify the size of the syslog message", "<size>" },
   { "interval", 'I', 0, G_OPTION_ARG_INT, &interval, "Number of seconds to run the test for", "<sec>" },
+  { "permanent", 'T', 0, G_OPTION_ARG_NONE, &permanent, "Send logs without time limit", NULL},
   { "syslog-proto", 'P', 0, G_OPTION_ARG_NONE, &syslog_proto, "Use the new syslog-protocol message format (see also framing)", NULL },
   { "sdata", 'p', 0, G_OPTION_ARG_STRING, &sdata_value, "Send the given sdata (e.g. \"[test name=\\\"value\\\"]\") in case of syslog-proto", NULL },
   { "no-framing", 'F', G_OPTION_FLAG_REVERSE, G_OPTION_ARG_NONE, &framing, "Don't use syslog-protocol style framing, even if syslog-proto is set", NULL },
   { "active-connections", 0, 0, G_OPTION_ARG_INT, &active_connections, "Number of active connections to the server (default = 1)", "<number>" },
   { "idle-connections", 0, 0, G_OPTION_ARG_INT, &idle_connections, "Number of inactive connections to the server (default = 0)", "<number>" },
-#if ENABLE_SSL
   { "use-ssl", 'U', 0, G_OPTION_ARG_NONE, &usessl, "Use ssl layer", NULL },
-#endif
   { "read-file", 'R', 0, G_OPTION_ARG_STRING, &read_file, "Read log messages from file", "<filename>" },
   { "loop-reading", 'l', 0, G_OPTION_ARG_NONE, &loop_reading, "Read the file specified in read-file option in loop (it will restart the reading if reached the end of the file)", NULL },
   { "skip-tokens", 0, 0, G_OPTION_ARG_INT, &skip_tokens, "Skip the given number of tokens (delimined by a space) at the beginning of each line (default value: 3)", "<number>" },
   { "csv", 'C', 0, G_OPTION_ARG_NONE, &csv, "Produce CSV output", NULL },
   { "number", 'n', 0, G_OPTION_ARG_INT, &number_of_messages, "Number of messages to generate", "<number>" },
   { "quiet", 'Q', 0, G_OPTION_ARG_NONE, &quiet, "Don't print the msg/sec data", NULL },
-  { "version",   'V', 0, G_OPTION_ARG_NONE, &display_version, "Display version number (" PACKAGE " " VERSION ")", NULL },
+  { "version",   'V', 0, G_OPTION_ARG_NONE, &display_version, "Display version number (" SYSLOG_NG_PACKAGE_NAME " " SYSLOG_NG_VERSION ")", NULL },
   { NULL }
 };
 
@@ -704,7 +737,7 @@ static GOptionEntry file_option_entries[] =
 void
 version(void)
 {
-  printf(PACKAGE " " VERSION "\n");
+  printf(SYSLOG_NG_PACKAGE_NAME " " SYSLOG_NG_VERSION "\n");
 }
 
 int
@@ -796,7 +829,7 @@ main(int argc, char *argv[])
 
       if (1)
         {
-#if HAVE_GETADDRINFO
+#if SYSLOG_NG_HAVE_GETADDRINFO
           struct addrinfo hints;
           struct addrinfo *res;
 

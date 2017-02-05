@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -24,10 +24,20 @@
 #include "logproto-buffered-server.h"
 #include "messages.h"
 #include "serialize.h"
+#include "compat/string.h"
 
+#include <errno.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <stdlib.h>
-#include <string.h>
+
+typedef struct _BufferedServerBookmarkData
+{
+  PersistEntryHandle persist_handle;
+  gint32 pending_buffer_pos;
+  gint64 pending_raw_stream_pos;
+  gint32 pending_raw_buffer_size;
+} BufferedServerBookmarkData;
 
 LogProtoBufferedServerState *
 log_proto_buffered_server_get_state(LogProtoBufferedServer *self)
@@ -85,8 +95,7 @@ log_proto_buffered_server_convert_from_raw(LogProtoBufferedServer *self, const g
                           msg_error("Invalid byte sequence, the remaining raw buffer is larger than the supported leftover size",
                                     evt_tag_str("encoding", self->super.options->encoding),
                                     evt_tag_int("avail_in", avail_in),
-                                    evt_tag_int("leftover_size", sizeof(state->raw_buffer_leftover)),
-                                    NULL);
+                                    evt_tag_int("leftover_size", sizeof(state->raw_buffer_leftover)));
                           goto error;
                         }
                       memcpy(state->raw_buffer_leftover, raw_buffer, avail_in);
@@ -94,8 +103,7 @@ log_proto_buffered_server_convert_from_raw(LogProtoBufferedServer *self, const g
                       state->raw_buffer_size -= avail_in;
                       msg_trace("Leftover characters remained after conversion, delaying message until another chunk arrives",
                                 evt_tag_str("encoding", self->super.options->encoding),
-                                evt_tag_int("avail_in", avail_in),
-                                NULL);
+                                evt_tag_int("avail_in", avail_in));
                       goto success;
                     }
                 }
@@ -103,8 +111,7 @@ log_proto_buffered_server_convert_from_raw(LogProtoBufferedServer *self, const g
                 {
                   msg_error("Byte sequence too short, cannot convert an individual frame in its entirety",
                             evt_tag_str("encoding", self->super.options->encoding),
-                            evt_tag_int("avail_in", avail_in),
-                            NULL);
+                            evt_tag_int("avail_in", avail_in));
                   goto error;
                 }
               break;
@@ -127,8 +134,7 @@ log_proto_buffered_server_convert_from_raw(LogProtoBufferedServer *self, const g
                 {
                   msg_error("Incoming byte stream requires a too large conversion buffer, probably invalid character sequence",
                             evt_tag_str("encoding", self->super.options->encoding),
-                            evt_tag_printf("buffer", "%.*s", (gint) state->pending_buffer_end, self->buffer),
-                            NULL);
+                            evt_tag_printf("buffer", "%.*s", (gint) state->pending_buffer_end, self->buffer));
                   goto error;
                 }
               break;
@@ -136,8 +142,7 @@ log_proto_buffered_server_convert_from_raw(LogProtoBufferedServer *self, const g
             default:
               msg_notice("Invalid byte sequence or other error while converting input, skipping character",
                          evt_tag_str("encoding", self->super.options->encoding),
-                         evt_tag_printf("char", "0x%02x", *(guchar *) raw_buffer),
-                         NULL);
+                         evt_tag_printf("char", "0x%02x", *(guchar *) raw_buffer));
               goto error;
             }
         }
@@ -197,8 +202,7 @@ log_proto_buffered_server_apply_state(LogProtoBufferedServer *self, PersistEntry
                      evt_tag_int("cur_file_inode", st.st_ino),
                      evt_tag_int("stored_size", state->file_size),
                      evt_tag_int("cur_file_size", st.st_size),
-                     evt_tag_int("raw_stream_pos", state->raw_stream_pos),
-                     NULL);
+                     evt_tag_int("raw_stream_pos", state->raw_stream_pos));
         }
       goto error;
     }
@@ -216,8 +220,7 @@ log_proto_buffered_server_apply_state(LogProtoBufferedServer *self, PersistEntry
                          evt_tag_str("state", persist_name),
                          evt_tag_int("raw_buffer_size", state->raw_buffer_size),
                          evt_tag_int("buffer_size", state->buffer_size),
-                         evt_tag_int("init_buffer_size", self->super.options->init_buffer_size),
-                         NULL);
+                         evt_tag_int("init_buffer_size", self->super.options->init_buffer_size));
               goto error;
             }
           raw_buffer = self->buffer;
@@ -230,8 +233,7 @@ log_proto_buffered_server_apply_state(LogProtoBufferedServer *self, PersistEntry
                          evt_tag_str("state", persist_name),
                          evt_tag_int("raw_buffer_size", state->raw_buffer_size),
                          evt_tag_int("init_buffer_size", self->super.options->init_buffer_size),
-                         evt_tag_int("max_buffer_size", self->super.options->max_buffer_size),
-                         NULL);
+                         evt_tag_int("max_buffer_size", self->super.options->max_buffer_size));
               goto error;
             }
           raw_buffer = g_alloca(state->raw_buffer_size);
@@ -241,8 +243,7 @@ log_proto_buffered_server_apply_state(LogProtoBufferedServer *self, PersistEntry
       if (rc != state->raw_buffer_size)
         {
           msg_notice("Error re-reading buffer contents of the file to be continued, restarting from the beginning",
-                     evt_tag_str("state", persist_name),
-                     NULL);
+                     evt_tag_str("state", persist_name));
           goto error;
         }
 
@@ -252,8 +253,7 @@ log_proto_buffered_server_apply_state(LogProtoBufferedServer *self, PersistEntry
           if (!log_proto_buffered_server_convert_from_raw(self, raw_buffer, rc))
             {
               msg_notice("Error re-converting buffer contents of the file to be continued, restarting from the beginning",
-                         evt_tag_str("state", persist_name),
-                         NULL);
+                         evt_tag_str("state", persist_name));
               goto error;
             }
         }
@@ -265,8 +265,7 @@ log_proto_buffered_server_apply_state(LogProtoBufferedServer *self, PersistEntry
       if (state->buffer_pos > state->pending_buffer_end)
         {
           msg_notice("Converted buffer contents is smaller than the current buffer position, starting from the beginning of the buffer, some lines may be duplicated",
-                     evt_tag_str("state", persist_name),
-                     NULL);
+                     evt_tag_str("state", persist_name));
           state->buffer_pos = state->pending_buffer_pos = 0;
         }
     }
@@ -320,8 +319,8 @@ log_proto_buffered_server_alloc_state(LogProtoBufferedServer *self, PersistState
     {
       state = persist_state_map_entry(persist_state, handle);
 
-      state->version = 0;
-      state->big_endian = (G_BYTE_ORDER == G_BIG_ENDIAN);
+      state->header.version = 0;
+      state->header.big_endian = (G_BYTE_ORDER == G_BIG_ENDIAN);
 
       persist_state_unmap_entry(persist_state, handle);
 
@@ -334,7 +333,7 @@ log_proto_buffered_server_convert_state(LogProtoBufferedServer *self, guint8 per
 {
   if (persist_version <= 2)
     {
-      state->version = 0;
+      state->header.version = 0;
       state->file_inode = 0;
       state->raw_stream_pos = strtoll((gchar *) old_state, NULL, 10);
       state->file_size = 0;
@@ -373,24 +372,21 @@ log_proto_buffered_server_convert_state(LogProtoBufferedServer *self, guint8 per
           !serialize_read_uint64(archive, (guint64 *) &cur_inode) ||
           !serialize_read_uint64(archive, (guint64 *) &cur_size))
         {
-          msg_error("Internal error restoring information about the current file position, restarting from the beginning",
-                    NULL);
+          msg_error("Internal error restoring information about the current file position, restarting from the beginning");
           goto error_converting_v3;
         }
 
       if (!serialize_read_uint16(archive, &version) || version != 0)
         {
           msg_error("Internal error, protocol state has incorrect version",
-                    evt_tag_int("version", version),
-                    NULL);
+                    evt_tag_int("version", version));
           goto error_converting_v3;
         }
 
       if (!serialize_read_cstring(archive, &buffer, &buffer_len))
         {
           msg_error("Internal error, error reading buffer contents",
-                    evt_tag_int("version", version),
-                    NULL);
+                    evt_tag_int("version", version));
           goto error_converting_v3;
         }
 
@@ -406,7 +402,7 @@ log_proto_buffered_server_convert_state(LogProtoBufferedServer *self, guint8 per
       state->pending_buffer_end = buffer_len;
       g_free(buffer);
 
-      state->version = 0;
+      state->header.version = 0;
       state->file_inode = cur_inode;
       state->raw_stream_pos = cur_pos;
       state->file_size = cur_size;
@@ -468,14 +464,14 @@ log_proto_buffered_server_restart_with_state(LogProtoServer *s, PersistState *pe
 
       old_state = persist_state_map_entry(persist_state, old_state_handle);
       state = old_state;
-      if ((state->big_endian && G_BYTE_ORDER == G_LITTLE_ENDIAN) ||
-          (!state->big_endian && G_BYTE_ORDER == G_BIG_ENDIAN))
+      if ((state->header.big_endian && G_BYTE_ORDER == G_LITTLE_ENDIAN) ||
+          (!state->header.big_endian && G_BYTE_ORDER == G_BIG_ENDIAN))
         {
 
           /* byte order conversion in order to avoid the hassle with
              scattered byte order conversions in the code */
 
-          state->big_endian = !state->big_endian;
+          state->header.big_endian = !state->header.big_endian;
           state->buffer_pos = GUINT32_SWAP_LE_BE(state->buffer_pos);
           state->pending_buffer_pos = GUINT32_SWAP_LE_BE(state->pending_buffer_pos);
           state->pending_buffer_end = GUINT32_SWAP_LE_BE(state->pending_buffer_end);
@@ -488,10 +484,10 @@ log_proto_buffered_server_restart_with_state(LogProtoServer *s, PersistState *pe
           state->file_inode = GUINT64_SWAP_LE_BE(state->file_inode);
         }
 
-      if (state->version > 0)
+      if (state->header.version > 0)
         {
           msg_error("Internal error restoring log reader state, stored data is too new",
-                    evt_tag_int("version", state->version));
+                    evt_tag_int("version", state->header.version));
           goto error;
         }
       persist_state_unmap_entry(persist_state, old_state_handle);
@@ -550,13 +546,13 @@ log_proto_buffered_server_prepare(LogProtoServer *s, GIOCondition *cond)
 }
 
 static gint
-log_proto_buffered_server_read_data_method(LogProtoBufferedServer *self, guchar *buf, gsize len, GSockAddr **sa)
+log_proto_buffered_server_read_data_method(LogProtoBufferedServer *self, guchar *buf, gsize len, LogTransportAuxData *aux)
 {
-  return log_transport_read(self->super.transport, buf, len, sa);
+  return log_transport_read(self->super.transport, buf, len, aux);
 }
 
 static gboolean
-log_proto_buffered_server_fetch_from_buffer(LogProtoBufferedServer *self, const guchar **msg, gsize *msg_len, GSockAddr **sa)
+log_proto_buffered_server_fetch_from_buffer(LogProtoBufferedServer *self, const guchar **msg, gsize *msg_len, LogTransportAuxData *aux)
 {
   gsize buffer_bytes;
   const guchar *buffer_start;
@@ -586,8 +582,8 @@ log_proto_buffered_server_fetch_from_buffer(LogProtoBufferedServer *self, const 
     }
 
   success = self->fetch_from_buffer(self, buffer_start, buffer_bytes, msg, msg_len);
-  if (sa)
-    *sa = g_sockaddr_ref(self->prev_saddr);
+  if (aux)
+    log_transport_aux_data_copy(aux, &self->buffer_aux);
  exit:
   log_proto_buffered_server_put_state(self);
   return success;
@@ -603,16 +599,10 @@ log_proto_buffered_server_allocate_buffer(LogProtoBufferedServer *self, LogProto
 static inline gint
 log_proto_buffered_server_read_data(LogProtoBufferedServer *self, gpointer buffer, gsize count)
 {
-  GSockAddr *sa = NULL;
   gint rc;
 
-  rc = self->read_data(self, buffer, count, &sa);
-  if (sa)
-    {
-      /* new chunk of data, potentially new sockaddr, forget the previous value */
-      g_sockaddr_unref(self->prev_saddr);
-      self->prev_saddr = sa;
-    }
+  log_transport_aux_data_reinit(&self->buffer_aux);
+  rc = self->read_data(self, buffer, count, &self->buffer_aux);
   return rc;
 }
 
@@ -660,8 +650,7 @@ log_proto_buffered_server_fetch_into_buffer(LogProtoBufferedServer *self)
           /* an error occurred while reading */
           msg_error("I/O error occurred while reading",
                     evt_tag_int(EVT_TAG_FD, self->super.transport->fd),
-                    evt_tag_errno(EVT_TAG_OSERROR, errno),
-                    NULL);
+                    evt_tag_errno(EVT_TAG_OSERROR, errno));
           result = G_IO_STATUS_ERROR;
         }
     }
@@ -669,12 +658,10 @@ log_proto_buffered_server_fetch_into_buffer(LogProtoBufferedServer *self)
     {
       /* EOF read */
       msg_verbose("EOF occurred while reading",
-                  evt_tag_int(EVT_TAG_FD, self->super.transport->fd),
-                  NULL);
+                  evt_tag_int(EVT_TAG_FD, self->super.transport->fd));
       if (state->raw_buffer_leftover_size > 0)
         {
-          msg_error("EOF read on a channel with leftovers from previous character conversion, dropping input",
-                    NULL);
+          msg_error("EOF read on a channel with leftovers from previous character conversion, dropping input");
           state->pending_buffer_pos = state->pending_buffer_end = 0;
         }
       result = G_IO_STATUS_EOF;
@@ -709,12 +696,66 @@ _convert_io_status_to_log_proto_status(GIOStatus io_status)
   g_assert_not_reached();
 }
 
+
+static void
+_buffered_server_update_pos(LogProtoServer *s)
+{
+  LogProtoBufferedServer *self = (LogProtoBufferedServer *) s;
+  LogProtoBufferedServerState *state = log_proto_buffered_server_get_state(self);
+
+  if (state->pending_buffer_pos == state->pending_buffer_end)
+    {
+      state->pending_buffer_end = 0;
+      state->pending_buffer_pos = 0;
+      if (self->pos_tracking)
+        {
+          state->pending_raw_stream_pos += state->pending_raw_buffer_size;
+          state->pending_raw_buffer_size = 0;
+        }
+    }
+
+  log_proto_buffered_server_put_state(self);
+}
+
+static void
+_buffered_server_bookmark_save(Bookmark *bookmark)
+{
+  BufferedServerBookmarkData *bookmark_data = (BufferedServerBookmarkData *)(&bookmark->container);
+  LogProtoBufferedServerState *state = persist_state_map_entry(bookmark->persist_state, bookmark_data->persist_handle);
+
+  state->buffer_pos = bookmark_data->pending_buffer_pos;
+  state->raw_stream_pos = bookmark_data->pending_raw_stream_pos;
+  state->raw_buffer_size = bookmark_data->pending_raw_buffer_size;
+
+  msg_trace("Last message got confirmed",
+            evt_tag_int("raw_stream_pos", state->raw_stream_pos),
+            evt_tag_int("raw_buffer_len", state->raw_buffer_size),
+            evt_tag_int("buffer_pos", state->buffer_pos),
+            evt_tag_int("buffer_end", state->pending_buffer_end));
+  persist_state_unmap_entry(bookmark->persist_state, bookmark_data->persist_handle);
+}
+
+static void
+_buffered_server_bookmark_fill(LogProtoBufferedServer *self, Bookmark *bookmark)
+{
+  LogProtoBufferedServerState *state = log_proto_buffered_server_get_state(self);
+  BufferedServerBookmarkData *data = (BufferedServerBookmarkData *)(&bookmark->container);
+
+  data->pending_buffer_pos = state->pending_buffer_pos;
+  data->pending_raw_stream_pos = state->pending_raw_stream_pos;
+  data->pending_raw_buffer_size = state->pending_raw_buffer_size;
+  data->persist_handle = self->persist_handle;
+  bookmark->save = _buffered_server_bookmark_save;
+
+  log_proto_buffered_server_put_state(self);
+}
+
 /**
  * Returns: TRUE to indicate success, FALSE otherwise. The returned
  * msg can be NULL even if no failure occurred.
  **/
 static LogProtoStatus
-log_proto_buffered_server_fetch(LogProtoServer *s, const guchar **msg, gsize *msg_len, GSockAddr **sa, gboolean *may_read)
+log_proto_buffered_server_fetch(LogProtoServer *s, const guchar **msg, gsize *msg_len, gboolean *may_read, LogTransportAuxData *aux, Bookmark *bookmark)
 {
   LogProtoBufferedServer *self = (LogProtoBufferedServer *) s;
   LogProtoStatus result = LPS_SUCCESS;
@@ -723,7 +764,7 @@ log_proto_buffered_server_fetch(LogProtoServer *s, const guchar **msg, gsize *ms
     {
       if (self->fetch_state == LPBSF_FETCHING_FROM_BUFFER)
         {
-          if (log_proto_buffered_server_fetch_from_buffer(self, msg, msg_len, sa))
+          if (log_proto_buffered_server_fetch_from_buffer(self, msg, msg_len, aux))
             goto exit;
 
           if (log_proto_buffered_server_is_input_closed(self))
@@ -770,43 +811,37 @@ log_proto_buffered_server_fetch(LogProtoServer *s, const guchar **msg, gsize *ms
   /* result contains our result, but once an error happens, the error condition remains persistent */
   if (result != LPS_SUCCESS)
     self->super.status = result;
+  else
+    {
+      if (bookmark && *msg)
+        {
+          _buffered_server_bookmark_fill(self, bookmark);
+          _buffered_server_update_pos(&self->super);
+        }
+    }
   return result;
 }
 
-void
-log_proto_buffered_server_queued(LogProtoServer *s)
+static gboolean
+log_proto_buffered_server_is_position_tracked(LogProtoServer *s)
 {
   LogProtoBufferedServer *self = (LogProtoBufferedServer *) s;
-  LogProtoBufferedServerState *state = log_proto_buffered_server_get_state(self);
 
-  /* NOTE: we modify the current file position _after_ updating
-     buffer_pos, since if we crash right here, at least we
-     won't lose data on the next restart, but rather we
-     duplicate some data */
+  return self->pos_tracking;
+}
 
-  state->buffer_pos = state->pending_buffer_pos;
-  state->raw_stream_pos = state->pending_raw_stream_pos;
-  state->raw_buffer_size = state->pending_raw_buffer_size;
-  if (state->pending_buffer_pos == state->pending_buffer_end)
+gboolean
+log_proto_buffered_server_validate_options_method(LogProtoServer *s)
+{
+  LogProtoBufferedServer *self = (LogProtoBufferedServer *) s;
+
+  if (self->super.options->encoding && self->convert == (GIConv) -1)
     {
-      state->pending_buffer_end = 0;
-      state->buffer_pos = state->pending_buffer_pos = 0;
+      msg_error("Unknown character set name specified",
+                evt_tag_str("encoding", self->super.options->encoding));
+      return FALSE;
     }
-  if (self->pos_tracking)
-    {
-      if (state->buffer_pos == state->pending_buffer_end)
-        {
-          state->raw_stream_pos += state->raw_buffer_size;
-          state->raw_buffer_size = 0;
-        }
-    }
-  msg_trace("Last message got confirmed",
-            evt_tag_int("raw_stream_pos", state->raw_stream_pos),
-            evt_tag_int("raw_buffer_len", state->raw_buffer_size),
-            evt_tag_int("buffer_pos", state->buffer_pos),
-            evt_tag_int("buffer_end", state->pending_buffer_end),
-            NULL);
-  log_proto_buffered_server_put_state(self);
+  return log_proto_server_validate_options_method(s);
 }
 
 void
@@ -814,13 +849,15 @@ log_proto_buffered_server_free_method(LogProtoServer *s)
 {
   LogProtoBufferedServer *self = (LogProtoBufferedServer *) s;
 
-  g_sockaddr_unref(self->prev_saddr);
+  log_transport_aux_data_destroy(&self->buffer_aux);
 
   g_free(self->buffer);
   if (self->state1)
     {
       g_free(self->state1);
     }
+  if (self->convert != (GIConv) -1)
+    g_iconv_close(self->convert);
   log_proto_server_free_method(s);
 }
 
@@ -830,14 +867,17 @@ log_proto_buffered_server_init(LogProtoBufferedServer *self, LogTransport *trans
   log_proto_server_init(&self->super, transport, options);
   self->super.prepare = log_proto_buffered_server_prepare;
   self->super.fetch = log_proto_buffered_server_fetch;
-  self->super.queued = log_proto_buffered_server_queued;
   self->super.free_fn = log_proto_buffered_server_free_method;
   self->super.transport = transport;
   self->super.restart_with_state = log_proto_buffered_server_restart_with_state;
+  self->super.is_position_tracked = log_proto_buffered_server_is_position_tracked;
+  self->super.validate_options = log_proto_buffered_server_validate_options_method;
   self->convert = (GIConv) -1;
   self->read_data = log_proto_buffered_server_read_data_method;
   self->io_status = G_IO_STATUS_NORMAL;
   if (options->encoding)
     self->convert = g_iconv_open("utf-8", options->encoding);
+  else
+    self->convert = (GIConv) -1;
   self->stream_based = TRUE;
 }

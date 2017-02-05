@@ -1,6 +1,10 @@
+/* vim:set ft=c ts=2 sw=2 sts=2 et cindent: */
 /*
  * ***** BEGIN LICENSE BLOCK *****
  * Version: MIT
+ *
+ * Portions created by Alan Antonuk are Copyright (c) 2012-2013
+ * Alan Antonuk. All Rights Reserved.
  *
  * Portions created by VMware are Copyright (c) 2007-2012 VMware, Inc.
  * All Rights Reserved.
@@ -35,6 +39,7 @@
 #include <string.h>
 
 #include <stdint.h>
+#include <amqp_tcp_socket.h>
 #include <amqp.h>
 #include <amqp_framing.h>
 
@@ -43,9 +48,9 @@
 #define SUMMARY_EVERY_US 1000000
 
 static void send_batch(amqp_connection_state_t conn,
-		       char const *queue_name,
-		       int rate_limit,
-		       int message_count)
+                       char const *queue_name,
+                       int rate_limit,
+                       int message_count)
 {
   uint64_t start_time = now_microseconds();
   int i;
@@ -68,20 +73,20 @@ static void send_batch(amqp_connection_state_t conn,
     uint64_t now = now_microseconds();
 
     die_on_error(amqp_basic_publish(conn,
-				    1,
-				    amqp_cstring_bytes("amq.direct"),
-				    amqp_cstring_bytes(queue_name),
-				    0,
-				    0,
-				    NULL,
-				    message_bytes),
-		 "Publishing");
+                                    1,
+                                    amqp_cstring_bytes("amq.direct"),
+                                    amqp_cstring_bytes(queue_name),
+                                    0,
+                                    0,
+                                    NULL,
+                                    message_bytes),
+                 "Publishing");
     sent++;
     if (now > next_summary_time) {
       int countOverInterval = sent - previous_sent;
       double intervalRate = countOverInterval / ((now - previous_report_time) / 1000000.0);
       printf("%d ms: Sent %d - %d since last report (%d Hz)\n",
-	     (int)(now - start_time) / 1000, sent, countOverInterval, (int) intervalRate);
+             (int)(now - start_time) / 1000, sent, countOverInterval, (int) intervalRate);
 
       previous_sent = sent;
       previous_report_time = now;
@@ -104,13 +109,13 @@ static void send_batch(amqp_connection_state_t conn,
   }
 }
 
-int main(int argc, char const * const *argv) {
+int main(int argc, char const *const *argv)
+{
   char const *hostname;
-  int port;
+  int port, status;
   int rate_limit;
   int message_count;
-
-  int sockfd;
+  amqp_socket_t *socket = NULL;
   amqp_connection_state_t conn;
 
   if (argc < 5) {
@@ -125,10 +130,18 @@ int main(int argc, char const * const *argv) {
 
   conn = amqp_new_connection();
 
-  die_on_error(sockfd = amqp_open_socket(hostname, port), "Opening socket");
-  amqp_set_sockfd(conn, sockfd);
+  socket = amqp_tcp_socket_new(conn);
+  if (!socket) {
+    die("creating TCP socket");
+  }
+
+  status = amqp_socket_open(socket, hostname, port);
+  if (status) {
+    die("opening TCP socket");
+  }
+
   die_on_amqp_error(amqp_login(conn, "/", 0, 131072, 0, AMQP_SASL_METHOD_PLAIN, "guest", "guest"),
-		    "Logging in");
+                    "Logging in");
   amqp_channel_open(conn, 1);
   die_on_amqp_error(amqp_get_rpc_reply(conn), "Opening channel");
 

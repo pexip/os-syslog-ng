@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -28,12 +28,33 @@
 
 #include "syslog-ng.h"
 
-gboolean dns_cache_lookup(gint family, void *addr, const gchar **hostname, gboolean *positive);
-void dns_cache_store(gboolean persistent, gint family, void *addr, const gchar *hostname, gboolean positive);
+typedef struct
+{
+  gint cache_size;
+  gint expire;
+  gint expire_failed;
+  gchar *hosts;
+} DNSCacheOptions;
 
-void dns_cache_set_params(gint cache_size, gint expire, gint expire_failed, const gchar *hosts);
-void dns_cache_init(void);
-void dns_cache_destroy(void);
-void dns_cache_deinit(void);
+typedef struct _DNSCache DNSCache;
+
+void dns_cache_store_persistent(DNSCache *self, gint family, void *addr, const gchar *hostname);
+void dns_cache_store_dynamic(DNSCache *self, gint family, void *addr, const gchar *hostname, gboolean positive);
+gboolean dns_cache_lookup(DNSCache *self, gint family, void *addr, const gchar **hostname, gsize *hostname_len, gboolean *positive);
+DNSCache *dns_cache_new(const DNSCacheOptions *options);
+void dns_cache_free(DNSCache *self);
+
+void dns_cache_options_defaults(DNSCacheOptions *options);
+void dns_cache_options_destroy(DNSCacheOptions *options);
+
+gboolean dns_caching_lookup(gint family, void *addr, const gchar **hostname, gsize *hostname_len, gboolean *positive);
+void dns_caching_store(gint family, void *addr, const gchar *hostname, gboolean positive);
+void dns_caching_update_options(const DNSCacheOptions *dns_cache_options);
+
+void dns_caching_thread_init(void);
+void dns_caching_thread_deinit(void);
+void dns_caching_global_init(void);
+void dns_caching_global_deinit(void);
+
 
 #endif

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2011 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2011 Balabit
  * Copyright (c) 1998-2011 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -59,7 +59,7 @@ g_sockaddr_new(struct sockaddr *sa, int salen)
   
   switch (sa->sa_family)
     {
-#if ENABLE_IPV6
+#if SYSLOG_NG_ENABLE_IPV6
     case AF_INET6:
       if (salen >= sizeof(struct sockaddr_in6))
         addr = g_sockaddr_inet6_new2((struct sockaddr_in6 *) sa);
@@ -193,15 +193,15 @@ g_sockaddr_inet_bind_prepare(int sock, GSockAddr *addr)
 gchar *
 g_sockaddr_inet_format(GSockAddr *addr, gchar *text, gulong n, gint format)
 {
-  GSockAddrInet *inet_addr = (GSockAddrInet *) addr;
+  GSockAddrInet *self = (GSockAddrInet *) addr;
   char buf[32];
   
   if (format == GSA_FULL)
     g_snprintf(text, n, "AF_INET(%s:%d)", 
-	       g_inet_ntoa(buf, sizeof(buf), inet_addr->sin.sin_addr), 
-               htons(inet_addr->sin.sin_port));
+	       g_inet_ntoa(buf, sizeof(buf), self->sin.sin_addr),
+               htons(self->sin.sin_port));
   else if (format == GSA_ADDRESS_ONLY)
-    g_inet_ntoa(text, n, inet_addr->sin.sin_addr);
+    g_inet_ntoa(text, n, self->sin.sin_addr);
   else
     g_assert_not_reached();
   return text;
@@ -264,24 +264,24 @@ g_sockaddr_inet_check(GSockAddr *a)
 
   +*/
 GSockAddr *
-g_sockaddr_inet_new(gchar *ip, guint16 port)
+g_sockaddr_inet_new(const gchar *ip, guint16 port)
 {
-  GSockAddrInet *addr = NULL;
+  GSockAddrInet *self = NULL;
   struct in_addr ina;
 
   if (inet_aton(ip, &ina))
     {
-      addr = g_slice_new0(GSockAddrInet);
+      self = g_slice_new0(GSockAddrInet);
   
-      g_atomic_counter_set(&addr->refcnt, 1);
-      addr->flags = 0;
-      addr->salen = sizeof(struct sockaddr_in);
-      addr->sin.sin_family = AF_INET;
-      addr->sin.sin_port = htons(port);
-      addr->sin.sin_addr = ina;
-      addr->sa_funcs = &inet_sockaddr_funcs;
+      g_atomic_counter_set(&self->refcnt, 1);
+      self->flags = 0;
+      self->salen = sizeof(struct sockaddr_in);
+      self->sin.sin_family = AF_INET;
+      self->sin.sin_port = htons(port);
+      self->sin.sin_addr = ina;
+      self->sa_funcs = &inet_sockaddr_funcs;
     }
-  return (GSockAddr *) addr;
+  return (GSockAddr *) self;
 }
 
 /*+
@@ -299,18 +299,18 @@ g_sockaddr_inet_new(gchar *ip, guint16 port)
 GSockAddr *
 g_sockaddr_inet_new2(struct sockaddr_in *sin)
 {
-  GSockAddrInet *addr = g_slice_new0(GSockAddrInet);
+  GSockAddrInet *self = g_slice_new0(GSockAddrInet);
   
-  g_atomic_counter_set(&addr->refcnt, 1);
-  addr->flags = 0;
-  addr->salen = sizeof(struct sockaddr_in);
-  addr->sin = *sin;
-  addr->sa_funcs = &inet_sockaddr_funcs;
+  g_atomic_counter_set(&self->refcnt, 1);
+  self->flags = 0;
+  self->salen = sizeof(struct sockaddr_in);
+  self->sin = *sin;
+  self->sa_funcs = &inet_sockaddr_funcs;
   
-  return (GSockAddr *) addr;
+  return (GSockAddr *) self;
 }
 
-#if ENABLE_IPV6
+#if SYSLOG_NG_ENABLE_IPV6
 /* AF_INET6 socket address */
 /*+
 
@@ -329,9 +329,9 @@ typedef struct _GSockAddrInet6
 
 /*+ format an IPv6 address into human readable form */
 static gchar *
-g_sockaddr_inet6_format(GSockAddr *addr, gchar *text, gulong n, gint format)
+g_sockaddr_inet6_format(GSockAddr *s, gchar *text, gulong n, gint format)
 {
-  GSockAddrInet6 *self = (GSockAddrInet6 *) addr;
+  GSockAddrInet6 *self = (GSockAddrInet6 *) s;
   char buf[64];
   
   if (format == GSA_FULL)
@@ -407,7 +407,7 @@ g_sockaddr_inet6_check(GSockAddr *a)
 
   +*/
 GSockAddr *
-g_sockaddr_inet6_new(gchar *ip, guint16 port)
+g_sockaddr_inet6_new(const gchar *ip, guint16 port)
 {
   GSockAddrInet6 *addr = g_slice_new0(GSockAddrInet6);
   
@@ -606,7 +606,7 @@ g_sockaddr_len(GSockAddr *a)
 
   if (a->sa_funcs == &inet_sockaddr_funcs)
     len = sizeof(GSockAddrInet);
-#if ENABLE_IPV6
+#if SYSLOG_NG_ENABLE_IPV6
   else if (a->sa_funcs == &inet6_sockaddr_funcs)
     len = sizeof(GSockAddrInet6);
 #endif

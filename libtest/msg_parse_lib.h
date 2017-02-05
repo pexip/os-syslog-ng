@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2012 Balabit
  * Copyright (c) 2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -28,7 +28,7 @@
 #include "testutils.h"
 
 #include "cfg.h"
-#include "logmsg.h"
+#include "logmsg/logmsg.h"
 
 MsgFormatOptions parse_options;
 
@@ -55,7 +55,9 @@ void deinit_syslogformat_module();
 void assert_log_messages_equal(LogMessage *log_message_a, LogMessage *log_message_b);
 
 void assert_log_message_value(LogMessage *self, NVHandle handle, const gchar *expected_value);
+void assert_log_message_value_by_name(LogMessage *self, const gchar *name, const gchar *expected_value);
 void assert_log_message_has_tag(LogMessage *log_message, const gchar *tag_name);
+void assert_log_message_doesnt_have_tag(LogMessage *log_message, const gchar *tag_name);
 void assert_log_messages_saddr(LogMessage *log_message_a, LogMessage *log_message_b);
 void assert_structured_data_of_messages(LogMessage *log_message_a, LogMessage *log_message_b);
 void assert_log_message_values_equal(LogMessage *log_message_a, LogMessage *log_message_b, NVHandle handle);

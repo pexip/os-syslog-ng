@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -23,7 +23,7 @@
  */
 
 #include "ml-batched-timer.h"
-#include "mainloop.h"
+#include "mainloop-call.h"
 
 /* callback to be invoked when the timeout triggers */
 static void
@@ -141,8 +141,12 @@ ml_batched_timer_cancel(MlBatchedTimer *self)
 void
 ml_batched_timer_unregister(MlBatchedTimer *self)
 {
+  main_loop_assert_main_thread();
+
   if (iv_timer_registered(&self->timer))
     iv_timer_unregister(&self->timer);
+  self->expires.tv_sec = 0;
+  self->expires.tv_nsec = 0;
 }
 
 /* one-time initialization of the MlBatchedTimer structure */

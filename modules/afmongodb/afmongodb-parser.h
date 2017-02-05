@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2010-2012 Balabit
  * Copyright (c) 2010-2012 Gergely Nagy <algernon@balabit.hu>
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -24,9 +24,14 @@
 #ifndef AFMONGODB_PARSER_H_INCLUDED
 #define AFMONGODB_PARSER_H_INCLUDED
 
+#include "syslog-ng.h"
 #include "cfg-parser.h"
 #include "cfg-lexer.h"
 #include "afmongodb.h"
+
+#if SYSLOG_NG_ENABLE_LEGACY_MONGODB_OPTIONS
+#include "afmongodb-legacy-grammar.h"
+#endif
 
 extern CfgParser afmongodb_parser;
 

@@ -1,8 +1,31 @@
+/*
+ * Copyright (c) 2007-2015 Balabit
+ * Copyright (c) 2007-2015 Balázs Scheidler
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published
+ * by the Free Software Foundation, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
+ * As an additional exemption you are allowed to compile & link against the
+ * OpenSSL libraries as published by the OpenSSL project. See the file
+ * COPYING for details.
+ *
+ */
+
 #include "testutils.h"
 #include "msg_parse_lib.h"
 
 #include "syslog-ng.h"
-#include "logmsg.h"
+#include "logmsg/logmsg.h"
 #include "serialize.h"
 #include "apphook.h"
 #include "gsockaddr.h"
@@ -39,8 +62,7 @@ get_bsd_year_utc(int ts_month)
   time(&t);
   tm = localtime(&t);
 
-  if (tm->tm_mon > ts_month + 1)
-    tm->tm_year++;
+  tm->tm_year = determine_year_for_month(ts_month, tm);
 
   tm->tm_hour = 0;
   tm->tm_min = 0;
@@ -57,7 +79,7 @@ assert_log_message_sdata_pairs(LogMessage *message, const gchar *expected_sd_pai
   gint i;
   for (i = 0; expected_sd_pairs && expected_sd_pairs[i][0] != NULL;i++)
     {
-      const gchar *actual_value = log_msg_get_value(message, log_msg_get_value_handle(expected_sd_pairs[i][0]), NULL);
+      const gchar *actual_value = log_msg_get_value_by_name(message, expected_sd_pairs[i][0], NULL);
       assert_string(actual_value, expected_sd_pairs[i][1], NULL);
     }
 }

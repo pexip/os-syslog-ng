@@ -1,6 +1,7 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2014 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
+ * Copyright (c) 2014 Viktor Tusa <tusavik@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published
@@ -70,7 +71,7 @@ tf_substr(LogMessage *msg, gint argc, GString *argv[], GString *result)
    * would be to return original string and perhaps print an error...)
    */
   if (argv[0]->len >= G_MAXLONG) {
-    msg_error("$(substr) error: string is too long", NULL);
+    msg_error("$(substr) error: string is too long");
     return;
   }
 
@@ -80,14 +81,14 @@ tf_substr(LogMessage *msg, gint argc, GString *argv[], GString *result)
 
   /* get offset position from second argument */
   if (!parse_number(argv[1]->str, &start)) {
-    msg_error("$(substr) parsing failed, start could not be parsed", evt_tag_str("start", argv[1]->str), NULL);
+    msg_error("$(substr) parsing failed, start could not be parsed", evt_tag_str("start", argv[1]->str));
     return;
   }
 
   /* if we were called with >2 arguments, third was desired length */
   if (argc > 2) {
     if (!parse_number(argv[2]->str, &len)) {
-      msg_error("$(substr) parsing failed, length could not be parsed", evt_tag_str("length", argv[2]->str), NULL);
+      msg_error("$(substr) parsing failed, length could not be parsed", evt_tag_str("length", argv[2]->str));
       return;
     }
   } else
@@ -215,8 +216,8 @@ tf_sanitize_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent, 
 {
   TFSanitizeState *state = (TFSanitizeState *) s;
   gboolean ctrl_chars = TRUE;
-  gchar *invalid_chars = "/";
-  gchar *replacement = "_";
+  gchar *invalid_chars = NULL;
+  gchar *replacement = NULL;
   GOptionContext *ctx;
   GOptionEntry stize_options[] = {
     { "ctrl-chars", 'c', 0, G_OPTION_ARG_NONE, &ctrl_chars, NULL, NULL },
@@ -225,6 +226,7 @@ tf_sanitize_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent, 
     { "replacement", 'r', 0, G_OPTION_ARG_STRING, &replacement, NULL, NULL },
     { NULL }
   };
+  gboolean result = FALSE;
 
   ctx = g_option_context_new("sanitize-file");
   g_option_context_add_main_entries(ctx, stize_options, NULL);
@@ -232,20 +234,28 @@ tf_sanitize_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent, 
   if (!g_option_context_parse(ctx, &argc, &argv, error))
     {
       g_option_context_free(ctx);
-      g_free(argv);
-      return FALSE;
+      goto exit;
     }
   g_option_context_free(ctx);
+
+  invalid_chars = invalid_chars ? : g_strdup("/");
+  replacement = replacement ? : g_strdup("_");
 
   if (!tf_simple_func_prepare(self, state, parent, argc, argv, error))
     {
       g_free(state);
-      return FALSE;
+      goto exit;
     }
   state->ctrl_chars = ctrl_chars;
   state->invalid_chars = g_strdup(invalid_chars);
   state->replacement = replacement[0];
-  return TRUE;
+  result = TRUE;
+
+ exit:
+  /* glib supplies us with duplicated strings that we are responsible for! */
+  g_free(invalid_chars);
+  g_free(replacement);
+  return result;
 }
 
 static void
@@ -368,8 +378,7 @@ tf_replace_delimiter(LogMessage *msg, gint argc, GString *argv[], GString *resul
 
   if (argc != 3)
     {
-      msg_error("$(replace-delimiter) parsing failed, wrong number of arguments",
-                NULL);
+      msg_error("$(replace-delimiter) parsing failed, wrong number of arguments");
       return;
     }
 
@@ -383,3 +392,45 @@ tf_replace_delimiter(LogMessage *msg, gint argc, GString *argv[], GString *resul
 }
 
 TEMPLATE_FUNCTION_SIMPLE(tf_replace_delimiter);
+
+static void
+tf_string_padding(LogMessage *msg, gint argc, GString *argv[], GString *result)
+{
+  GString *text = argv[0];
+  GString *padding;
+  gint64 width, i;
+
+  if (argc <= 1)
+    {
+      msg_debug("Not enough arguments for padding template function!");
+      return;
+    }
+
+  if (!parse_number_with_suffix(argv[1]->str, &width))
+    {
+      msg_debug("Padding template function requires a number as second argument!");
+      return;
+    }
+
+  if (argc <= 2)
+    padding = g_string_new(" ");
+  else
+    padding = argv[2];
+
+  if (text->len < width)
+    {
+      for (i = 0; i < width - text->len; i++)
+        {
+          g_string_append_c(result, *(padding->str + (i % padding->len)));
+        }
+    }
+
+  g_string_append_len(result, text->str, text->len);
+
+  if (argc <= 2)
+    {
+      g_string_free(padding, TRUE);
+    }
+}
+
+TEMPLATE_FUNCTION_SIMPLE(tf_string_padding);

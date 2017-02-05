@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2011-2012 Balabit
  * Copyright (c) 2011-2012 Gergely Nagy <algernon@balabit.hu>
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -19,20 +19,20 @@
  * OpenSSL libraries as published by the OpenSSL project. See the file
  * COPYING for details.
  */
-#include "jsonparser.h"
+#include "json-parser.h"
 #include "format-json.h"
-#include "jsonparser-parser.h"
+#include "json-parser-parser.h"
 #include "plugin.h"
 #include "plugin-types.h"
 
-extern CfgParser jsonparser_parser;
+extern CfgParser json_parser_parser;
 
 static Plugin json_plugins[] =
 {
   {
     .type = LL_CONTEXT_PARSER,
     .name = "json-parser",
-    .parser = &jsonparser_parser,
+    .parser = &json_parser_parser,
   },
   TEMPLATE_FUNCTION_PLUGIN(tf_json, "format_json"),
 };
@@ -47,9 +47,9 @@ json_plugin_module_init(GlobalConfig *cfg, CfgArgs *args)
 const ModuleInfo module_info =
 {
   .canonical_name = "json-plugin",
-  .version = VERSION,
+  .version = SYSLOG_NG_VERSION,
   .description = "The json module provides JSON parsing & formatting support for syslog-ng.",
-  .core_revision = SOURCE_REVISION,
+  .core_revision = SYSLOG_NG_SOURCE_REVISION,
   .plugins = json_plugins,
   .plugins_len = G_N_ELEMENTS(json_plugins),
 };

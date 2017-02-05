@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -172,8 +172,7 @@ log_proto_text_server_get_raw_size_of_buffer(LogProtoTextServer *self, const guc
       /* oops, we cannot reverse that we ourselves converted to UTF-8,
        * this is simply impossible, but never say never */
       msg_error("Internal error, couldn't reverse the internal UTF8 string to the original encoding",
-                evt_tag_printf("buffer", "%.*s", (gint) buffer_len, buffer),
-                NULL);
+                evt_tag_printf("buffer", "%.*s", (gint) buffer_len, buffer));
       return 0;
     }
   else
@@ -219,8 +218,7 @@ log_proto_text_server_split_buffer(LogProtoTextServer *self, LogProtoBufferedSer
 
       msg_trace("Buffer split",
                 evt_tag_int("raw_split_size", raw_split_size),
-                evt_tag_int("buffer_bytes", buffer_bytes),
-                NULL);
+                evt_tag_int("buffer_bytes", buffer_bytes));
     }
 
 }
@@ -428,6 +426,7 @@ log_proto_text_server_init(LogProtoTextServer *self, LogTransport *transport, co
   self->super.stream_based = TRUE;
   self->reverse_convert = (GIConv) -1;
   self->consumed_len = -1;
+  self->super.pos_tracking = TRUE;
 }
 
 LogProtoServer *

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -24,10 +24,12 @@
   
 #include "logsource.h"
 #include "messages.h"
-#include "misc.h"
+#include "host-resolve.h"
 #include "timeutils.h"
-#include "stats.h"
-#include "tags.h"
+#include "stats/stats-registry.h"
+#include "stats/stats-syslog.h"
+#include "logmsg/tags.h"
+#include "ack_tracker.h"
 
 #include <string.h>
 
@@ -40,31 +42,28 @@ log_source_wakeup(LogSource *self)
     self->wakeup(self);
 }
 
-/**
- * log_source_msg_ack:
- *
- * This is running in the same thread as the _destination_, thus care must
- * be taken when manipulating the LogSource data structure.
- **/
-static void
-log_source_msg_ack(LogMessage *msg, gpointer user_data)
+static inline void
+_flow_control_window_size_adjust(LogSource *self, guint32 window_size_increment)
 {
-  LogSource *self = (LogSource *) user_data;
   guint32 old_window_size;
-  guint32 cur_ack_count, last_ack_count;
-  
-  old_window_size = g_atomic_counter_exchange_and_add(&self->window_size, 1);
-  if (old_window_size == 0)
-    {
-      log_source_wakeup(self);
-    }
-  log_msg_unref(msg);
 
+  window_size_increment += g_atomic_counter_get(&self->suspended_window_size);
+  old_window_size = g_atomic_counter_exchange_and_add(&self->window_size, window_size_increment);
+  g_atomic_counter_set(&self->suspended_window_size, 0);
+
+  if (old_window_size == 0)
+    log_source_wakeup(self);
+}
+
+static void
+_flow_control_rate_adjust(LogSource *self)
+{
+  guint32 cur_ack_count, last_ack_count;
   /* NOTE: this is racy. msg_ack may be executing in different writer
    * threads. I don't want to lock, all we need is an approximate value of
    * the ACK rate of the last couple of seconds.  */
 
-#ifdef HAVE_CLOCK_GETTIME
+#ifdef SYSLOG_NG_HAVE_CLOCK_GETTIME
   if (accurate_nanosleep && self->threaded)
     {
       cur_ack_count = ++self->ack_count;
@@ -117,17 +116,44 @@ log_source_msg_ack(LogMessage *msg, gpointer user_data)
         }
     }
 #endif
-  log_pipe_unref(&self->super);
+}
+
+void
+log_source_flow_control_adjust(LogSource *self, guint32 window_size_increment)
+{
+  _flow_control_window_size_adjust(self, window_size_increment);
+  _flow_control_rate_adjust(self);
+}
+
+/**
+ * log_source_msg_ack:
+ *
+ * This is running in the same thread as the _destination_, thus care must
+ * be taken when manipulating the LogSource data structure.
+ **/
+static void
+log_source_msg_ack(LogMessage *msg, AckType ack_type)
+{
+  AckTracker *ack_tracker = msg->ack_record->tracker;
+  ack_tracker_manage_msg_ack(ack_tracker, msg, ack_type);
+}
+
+void
+log_source_flow_control_suspend(LogSource *self)
+{
+  g_atomic_counter_set(&self->suspended_window_size, g_atomic_counter_get(&self->window_size));
+  g_atomic_counter_set(&self->window_size, 0);
+  _flow_control_rate_adjust(self);
 }
 
 void
 log_source_mangle_hostname(LogSource *self, LogMessage *msg)
 {
-  gchar resolved_name[256];
-  gsize resolved_name_len = sizeof(resolved_name);
+  const gchar *resolved_name;
+  gsize resolved_name_len;
   const gchar *orig_host;
   
-  resolve_sockaddr(resolved_name, &resolved_name_len, msg->saddr, self->options->use_dns, self->options->use_fqdn, self->options->use_dns_cache, self->options->normalize_hostnames);
+  resolved_name = resolve_sockaddr_to_hostname(&resolved_name_len, msg->saddr, &self->options->host_resolve_options);
   log_msg_set_value(msg, LM_V_HOST_FROM, resolved_name, resolved_name_len);
 
   orig_host = log_msg_get_value(msg, LM_V_HOST, NULL);
@@ -160,6 +186,8 @@ log_source_mangle_hostname(LogSource *self, LogMessage *msg)
                   host[255] = 0;
                 }
 	    }
+          if (host_len >= sizeof(host))
+            host_len = sizeof(host) - 1;
           log_msg_set_value(msg, LM_V_HOST, host, host_len);
 	}
       else
@@ -193,16 +221,38 @@ log_source_deinit(LogPipe *s)
   return TRUE;
 }
 
+void
+log_source_post(LogSource *self, LogMessage *msg)
+{
+  LogPathOptions path_options = LOG_PATH_OPTIONS_INIT;
+  gint old_window_size;
+
+  ack_tracker_track_msg(self->ack_tracker, msg);
+
+  /* NOTE: we start by enabling flow-control, thus we need an acknowledgement */
+  path_options.ack_needed = TRUE;
+  log_msg_ref(msg);
+  log_msg_add_ack(msg, &path_options);
+  msg->ack_func = log_source_msg_ack;
+
+  old_window_size = g_atomic_counter_exchange_and_add(&self->window_size, -1);
+
+  /*
+   * NOTE: this assertion validates that the source is not overflowing its
+   * own flow-control window size, decreased above, by the atomic statement.
+   *
+   * If the _old_ value is zero, that means that the decrement operation
+   * above has decreased the value to -1.
+   */
+
+  g_assert(old_window_size > 0);
+  log_pipe_queue(&self->super, msg, &path_options);
+}
 
 static void
 log_source_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options, gpointer user_data)
 {
   LogSource *self = (LogSource *) s;
-  LogPathOptions local_options = *path_options;
-  StatsCounterItem *processed_counter, *stamp;
-  gboolean new;
-  StatsCounter *handle;
-  gint old_window_size;
   gint i;
   
   msg_set_context(msg);
@@ -247,47 +297,23 @@ log_source_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options
     {
       stats_lock();
 
-      handle = stats_register_dynamic_counter(2, SCS_HOST | SCS_SOURCE, NULL, log_msg_get_value(msg, LM_V_HOST, NULL), SC_TYPE_PROCESSED, &processed_counter, &new);
-      stats_register_associated_counter(handle, SC_TYPE_STAMP, &stamp);
-      stats_counter_inc(processed_counter);
-      stats_counter_set(stamp, msg->timestamps[LM_TS_RECVD].tv_sec);
-      stats_unregister_dynamic_counter(handle, SC_TYPE_PROCESSED, &processed_counter);
-      stats_unregister_dynamic_counter(handle, SC_TYPE_STAMP, &stamp);
-
+      stats_register_and_increment_dynamic_counter(2, SCS_HOST | SCS_SOURCE, NULL, log_msg_get_value(msg, LM_V_HOST, NULL), msg->timestamps[LM_TS_RECVD].tv_sec);
       if (stats_check_level(3))
         {
-          stats_instant_inc_dynamic_counter(3, SCS_SENDER | SCS_SOURCE, NULL, log_msg_get_value(msg, LM_V_HOST_FROM, NULL), msg->timestamps[LM_TS_RECVD].tv_sec);
-          stats_instant_inc_dynamic_counter(3, SCS_PROGRAM | SCS_SOURCE, NULL, log_msg_get_value(msg, LM_V_PROGRAM, NULL), -1);
+          stats_register_and_increment_dynamic_counter(3, SCS_SENDER | SCS_SOURCE, NULL, log_msg_get_value(msg, LM_V_HOST_FROM, NULL), msg->timestamps[LM_TS_RECVD].tv_sec);
+          stats_register_and_increment_dynamic_counter(3, SCS_PROGRAM | SCS_SOURCE, NULL, log_msg_get_value(msg, LM_V_PROGRAM, NULL), msg->timestamps[LM_TS_RECVD].tv_sec);
         }
 
       stats_unlock();
     }
-  stats_counter_inc_pri(msg->pri);
+  stats_syslog_process_message_pri(msg->pri);
 
   /* message setup finished, send it out */
 
-  /* NOTE: we start by enabling flow-control, thus we need an acknowledgement */
-  local_options.ack_needed = TRUE;
-  log_msg_ref(msg);
-  log_msg_add_ack(msg, &local_options);
-  msg->ack_func = log_source_msg_ack;
-  msg->ack_userdata = log_pipe_ref(s);
-    
-  old_window_size = g_atomic_counter_exchange_and_add(&self->window_size, -1);
-
-  /*
-   * NOTE: this assertion validates that the source is not overflowing its
-   * own flow-control window size, decreased above, by the atomic statement.
-   *
-   * If the _old_ value is zero, that means that the decrement operation
-   * above has decreased the value to -1.
-   */
-
-  g_assert(old_window_size > 0);
 
   stats_counter_inc(self->recvd_messages);
   stats_counter_set(self->last_message_seen, msg->timestamps[LM_TS_RECVD].tv_sec);
-  log_pipe_forward_msg(s, msg, &local_options);
+  log_pipe_forward_msg(s, msg, path_options);
 
   msg_set_context(NULL);
 
@@ -303,8 +329,20 @@ log_source_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options
 
 }
 
+static inline void
+_create_ack_tracker_if_not_exists(LogSource *self, gboolean pos_tracked)
+{
+  if (!self->ack_tracker)
+    {
+      if (pos_tracked)
+        self->ack_tracker = late_ack_tracker_new(self);
+      else
+        self->ack_tracker = early_ack_tracker_new(self);
+    }
+}
+
 void
-log_source_set_options(LogSource *self, LogSourceOptions *options, gint stats_level, gint stats_source, const gchar *stats_id, const gchar *stats_instance, gboolean threaded)
+log_source_set_options(LogSource *self, LogSourceOptions *options, gint stats_level, gint stats_source, const gchar *stats_id, const gchar *stats_instance, gboolean threaded, gboolean pos_tracked, LogExprNode *expr_node)
 {
   /* NOTE: we don't adjust window_size even in case it was changed in the
    * configuration and we received a SIGHUP.  This means that opened
@@ -322,17 +360,21 @@ log_source_set_options(LogSource *self, LogSourceOptions *options, gint stats_le
     g_free(self->stats_instance);
   self->stats_instance = stats_instance ? g_strdup(stats_instance): NULL;
   self->threaded = threaded;
+  self->pos_tracked = pos_tracked;
+  self->super.expr_node = expr_node;
+  _create_ack_tracker_if_not_exists(self, pos_tracked);
 }
 
 void
-log_source_init_instance(LogSource *self)
+log_source_init_instance(LogSource *self, GlobalConfig *cfg)
 {
-  log_pipe_init_instance(&self->super);
+  log_pipe_init_instance(&self->super, cfg);
   self->super.queue = log_source_queue;
   self->super.free_fn = log_source_free;
   self->super.init = log_source_init;
   self->super.deinit = log_source_deinit;
   g_atomic_counter_set(&self->window_size, -1);
+  self->ack_tracker = NULL;
 }
 
 void
@@ -343,6 +385,8 @@ log_source_free(LogPipe *s)
   g_free(self->stats_id);
   g_free(self->stats_instance);
   log_pipe_free_method(s);
+
+  ack_tracker_free(self->ack_tracker);
 }
 
 void
@@ -351,14 +395,11 @@ log_source_options_defaults(LogSourceOptions *options)
   options->init_window_size = 100;
   options->keep_hostname = -1;
   options->chain_hostnames = -1;
-  options->use_dns = -1;
-  options->use_fqdn = -1;
-  options->use_dns_cache = -1;
-  options->normalize_hostnames = -1;
   options->keep_timestamp = -1;
   options->program_override_len = -1;
   options->host_override_len = -1;
   options->tags = NULL;
+  host_resolve_options_defaults(&options->host_resolve_options);
 }
 
 /* NOTE: _init needs to be idempotent when called multiple times w/o invoking _destroy */
@@ -371,14 +412,6 @@ log_source_options_init(LogSourceOptions *options, GlobalConfig *cfg, const gcha
     options->keep_hostname = cfg->keep_hostname;
   if (options->chain_hostnames == -1)
     options->chain_hostnames = cfg->chain_hostnames;
-  if (options->use_dns == -1)
-    options->use_dns = cfg->use_dns;
-  if (options->use_fqdn == -1)
-    options->use_fqdn = cfg->use_fqdn;
-  if (options->use_dns_cache == -1)
-    options->use_dns_cache = cfg->use_dns_cache;
-  if (options->normalize_hostnames == -1)
-    options->normalize_hostnames = cfg->normalize_hostnames;
   if (options->keep_timestamp == -1)
     options->keep_timestamp = cfg->keep_timestamp;
   options->group_name = group_name;
@@ -386,11 +419,13 @@ log_source_options_init(LogSourceOptions *options, GlobalConfig *cfg, const gcha
   source_group_name = g_strdup_printf(".source.%s", group_name);
   options->source_group_tag = log_tags_get_by_name(source_group_name);
   g_free(source_group_name);
+  host_resolve_options_init(&options->host_resolve_options, cfg);
 }
 
 void
 log_source_options_destroy(LogSourceOptions *options)
 {
+  host_resolve_options_destroy(&options->host_resolve_options);
   if (options->program_override)
     g_free(options->program_override);
   if (options->host_override)
@@ -426,6 +461,6 @@ log_source_global_init(void)
   accurate_nanosleep = check_nanosleep();
   if (!accurate_nanosleep)
     {
-      msg_debug("nanosleep() is not accurate enough to introduce minor stalls on the reader side, multi-threaded performance may be affected", NULL);
+      msg_debug("nanosleep() is not accurate enough to introduce minor stalls on the reader side, multi-threaded performance may be affected");
     }
 }

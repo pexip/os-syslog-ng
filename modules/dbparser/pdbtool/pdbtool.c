@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2013 Balabit
  * Copyright (c) 1998-2013 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -24,25 +24,31 @@
 #include "syslog-ng.h"
 #include "messages.h"
 #include "template/templates.h"
-#include "misc.h"
 #include "patterndb.h"
 #include "dbparser.h"
 #include "radix.h"
-#include "tags.h"
-#include "stats.h"
+#include "stats/stats-registry.h"
 #include "plugin.h"
 #include "filter/filter-expr-parser.h"
 #include "patternize.h"
-#include "patterndb-int.h"
+#include "pdb-example.h"
+#include "pdb-program.h"
+#include "pdb-load.h"
+#include "pdb-file.h"
 #include "apphook.h"
+#include "transport/transport-file.h"
 #include "logproto/logproto-text-server.h"
+#include "reloc.h"
+#include "pathutils.h"
+#include "resolved-configurable-paths.h"
+#include "crypto.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
-
+#include <errno.h>
 #include <locale.h>
 
 #define BOOL(x) ((x) ? "TRUE" : "FALSE")
@@ -71,44 +77,6 @@ static gchar **colors = empty_colors;
 
 static gchar *patterndb_file = PATH_PATTERNDB_FILE;
 static gboolean color_out = FALSE;
-
-static gint
-pdbfile_detect_version(const gchar *pdbfile)
-{
-  FILE *pdb;
-  gchar line[1024];
-  gint result = 0;
-
-  pdb = fopen(pdbfile, "r");
-  if (!pdb)
-    return 0;
-
-  while (fgets(line, sizeof(line), pdb))
-    {
-      if (strstr(line, "<patterndb"))
-        {
-          gchar *version, *start_quote, *end_quote;
-
-          /* ok, we do have the patterndb tag, look for the version attribute */
-          version = strstr(line, "version=");
-
-          if (!version)
-            goto exit;
-          start_quote = version + 8;
-          end_quote = strchr(start_quote + 1, *start_quote);
-          if (!end_quote)
-            {
-              goto exit;
-            }
-          *end_quote = 0;
-          result = strtoll(start_quote + 1, NULL, 0);
-          break;
-        }
-    }
- exit:
-  fclose(pdb);
-  return result;
-}
 
 typedef struct _PdbToolMergeState
 {
@@ -269,11 +237,11 @@ pdbtool_merge_dir(const gchar *dir, gboolean recursive, GString *merged)
     {
       gchar *full_name = g_build_filename(dir, filename, NULL);
 
-      if (recursive && g_file_test(full_name, G_FILE_TEST_IS_DIR))
+      if (recursive && is_file_directory(full_name))
         {
           ok = pdbtool_merge_dir(full_name, recursive, merged);
         }
-      else if (g_file_test(full_name, G_FILE_TEST_IS_REGULAR) && (!merge_glob || g_pattern_match_simple(merge_glob, filename)))
+      else if (is_file_regular(full_name) && (!merge_glob || g_pattern_match_simple(merge_glob, filename)))
         {
           ok = pdbtool_merge_file(full_name, merged);
         }
@@ -492,7 +460,7 @@ pdbtool_match(int argc, char *argv[])
         }
       transport = log_transport_file_new(fd);
       proto = log_proto_text_server_new(transport, &proto_options);
-      eof = log_proto_server_fetch(proto, &buf, &buflen, NULL, &may_read) != LPS_SUCCESS;
+      eof = log_proto_server_fetch(proto, &buf, &buflen, &may_read, NULL, NULL) != LPS_SUCCESS;
     }
 
   if (!debug_pattern)
@@ -520,14 +488,8 @@ pdbtool_match(int argc, char *argv[])
       if (G_UNLIKELY(debug_pattern))
         {
           const gchar *msg_string;
-          PDBRule *rule;
-          PDBInput input;
 
-          rule = pdb_rule_set_lookup(patterndb->ruleset,
-                                     PDB_INPUT_WRAP_MESSAGE(&input, msg),
-                                     dbg_list);
-          if (rule)
-            pdb_rule_unref(rule);
+          pattern_db_debug_ruleset(patterndb, msg, dbg_list);
 
           msg_string = log_msg_get_value(msg, LM_V_MESSAGE, NULL);
           pos = 0;
@@ -607,15 +569,13 @@ pdbtool_match(int argc, char *argv[])
         }
       else
         {
-          PDBInput input;
-
-          pattern_db_process(patterndb, PDB_INPUT_WRAP_MESSAGE(&input, msg));
+          pattern_db_process(patterndb, msg);
         }
 
       if (G_LIKELY(proto))
         {
           buf = NULL;
-          eof = log_proto_server_fetch(proto, &buf, &buflen, NULL, &may_read) != LPS_SUCCESS;
+          eof = log_proto_server_fetch(proto, &buf, &buflen, &may_read, NULL, NULL) != LPS_SUCCESS;
         }
       else
         {
@@ -671,7 +631,7 @@ pdbtool_test_value(LogMessage *msg, const gchar *name, const gchar *test_value)
   gssize value_len;
   gboolean ret = TRUE;
 
-  value = log_msg_get_value(msg, log_msg_get_value_handle(name), &value_len);
+  value = log_msg_get_value_by_name(msg, name, &value_len);
   if (!(value && strncmp(value, test_value, value_len) == 0 && value_len == strlen(test_value)))
     {
       if (value)
@@ -685,6 +645,42 @@ pdbtool_test_value(LogMessage *msg, const gchar *name, const gchar *test_value)
     printf(" Match name='%s', value='%.*s', expected='%s'\n", name, (gint) value_len, value, test_value);
 
   return ret;
+}
+
+static void
+pdbtool_test_find_conflicts(PatternDB *patterndb, LogMessage *msg)
+{
+  const gchar *program;
+  const gchar *message;
+  RNode *node;
+
+  program = log_msg_get_value(msg, LM_V_PROGRAM, NULL);
+  message = log_msg_get_value(msg, LM_V_MESSAGE, NULL);
+
+  node = r_find_node(pattern_db_get_ruleset(patterndb)->programs, (gchar *) program, strlen(program), NULL);
+  if (node)
+    {
+      PDBProgram *program_rules = (PDBProgram *) node->value;
+      gchar **matching_ids;
+      gint matching_ids_len;
+
+      matching_ids = r_find_all_applicable_nodes(program_rules->rules, (guint8 *) message, strlen(message), (RNodeGetValueFunc) pdb_rule_get_name);
+      matching_ids_len = g_strv_length(matching_ids);
+
+      if (matching_ids_len > 1)
+        {
+          gint i;
+
+          printf(" Rule conflict! Multiple rules match this message, list of IDs follow\n");
+          for (i = 0; matching_ids[i]; i++)
+            {
+              printf("  %s\n", matching_ids[i]);
+            }
+        }
+
+
+      g_strfreev(matching_ids);
+    }
 }
 
 static gint
@@ -711,27 +707,19 @@ pdbtool_test(int argc, char *argv[])
 
       if (test_validate)
         {
-          gchar cmd[1024];
-          gint version;
+          GError *error = NULL;
 
-          version = pdbfile_detect_version(argv[arg_pos]);
-          if (!version)
+          if (!pdb_file_validate(argv[arg_pos], &error))
             {
-              fprintf(stderr, "%s: Unable to detect patterndb version, please write the <patterndb> tag on a single line\n", argv[arg_pos]);
-              failed_to_validate = TRUE;
-	      continue;
-            }
-          g_snprintf(cmd, sizeof(cmd), "xmllint --noout --nonet --schema %s/patterndb-%d.xsd %s", PATH_XSDDIR, version, argv[arg_pos]);
-          if (system(cmd) != 0)
-            {
-              fprintf(stderr, "%s: xmllint returned an error, the executed command was: %s", argv[arg_pos], cmd);
+              fprintf(stderr, "%s: error validating pdb file: %s\n", argv[arg_pos], error->message);
+              g_clear_error(&error);
               failed_to_validate = TRUE;
 	      continue;
             }
         }
 
       patterndb = pattern_db_new();
-      if (!pdb_rule_set_load(patterndb->ruleset, configuration, argv[arg_pos], &examples))
+      if (!pdb_rule_set_load(pattern_db_get_ruleset(patterndb), configuration, argv[arg_pos], &examples))
         {
           failed_to_load = TRUE;
           continue;
@@ -743,12 +731,11 @@ pdbtool_test(int argc, char *argv[])
 
           if (example->message && example->program)
             {
-              PDBInput input;
-
               if (test_ruleid)
                 {
                   if (strcmp(example->rule->rule_id, test_ruleid) != 0)
                     {
+                      pdb_example_free(example);
                       examples = g_list_delete_link(examples, examples);
                       continue;
                     }
@@ -763,7 +750,8 @@ pdbtool_test(int argc, char *argv[])
 
               printf("Testing message: program='%s' message='%s'\n", example->program, example->message);
 
-              pattern_db_process(patterndb, PDB_INPUT_WRAP_MESSAGE(&input, msg));
+              pdbtool_test_find_conflicts(patterndb, msg);
+              pattern_db_process(patterndb, msg);
 
               if (!pdbtool_test_value(msg, ".classifier.rule_id", example->rule->rule_id))
                 {
@@ -795,6 +783,7 @@ pdbtool_test(int argc, char *argv[])
               printf("NOT Testing message as message is unset: program='%s'\n", example->program);
             }
 
+          pdb_example_free(example);
           examples = g_list_delete_link(examples, examples);
         }
 
@@ -866,10 +855,10 @@ pdbtool_dump(int argc, char *argv[])
     return 1;
 
   if (dump_program_tree)
-    pdbtool_walk_tree(patterndb->ruleset->programs, 0, TRUE);
+    pdbtool_walk_tree(pattern_db_get_ruleset(patterndb)->programs, 0, TRUE);
   else if (match_program)
     {
-      RNode *ruleset = r_find_node(patterndb->ruleset->programs, g_strdup(match_program), g_strdup(match_program), strlen(match_program), NULL);
+      RNode *ruleset = r_find_node(pattern_db_get_ruleset(patterndb)->programs, match_program, strlen(match_program), NULL);
       if (ruleset && ruleset->value)
         {
           RNode *root = ((PDBProgram *) ruleset->value)->rules;
@@ -970,7 +959,7 @@ pdbtool_dictionary(int argc, char *argv[])
 
   if (match_program)
     {
-      RNode *ruleset = r_find_node(rule_set.programs, g_strdup(match_program), g_strdup(match_program), strlen(match_program), NULL);
+      RNode *ruleset = r_find_node(rule_set.programs, match_program, strlen(match_program), NULL);
       if (ruleset && ruleset->value)
         pdbtool_dictionary_walk(((PDBProgram *)ruleset->value)->rules, (gchar *)ruleset->key);
     }
@@ -1089,8 +1078,8 @@ static GOptionEntry pdbtool_options[] =
     "Enable verbose messages on stderr", NULL },
   { "module", 0, 0, G_OPTION_ARG_CALLBACK, pdbtool_load_module,
     "Load the module specified as parameter", "<module>" },
-  { "module-path",         0,         0, G_OPTION_ARG_STRING, &module_path,
-    "Set the list of colon separated directories to search for modules, default=" MODULE_PATH, "<path>" },
+  { "module-path",         0,         0, G_OPTION_ARG_STRING, &resolvedConfigurablePaths.initial_module_path,
+    "Set the list of colon separated directories to search for modules, default=" SYSLOG_NG_MODULE_PATH, "<path>" },
   { NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL }
 };
 
@@ -1160,11 +1149,13 @@ main(int argc, char *argv[])
   setlocale(LC_ALL, "");
 
   msg_init(TRUE);
+  resolved_configurable_paths_init(&resolvedConfigurablePaths);
   stats_init();
   log_msg_global_init();
   log_template_global_init();
-  log_tags_init();
+  log_tags_global_init();
   pattern_db_global_init();
+  crypto_init();
 
   configuration = cfg_new(VERSION_VALUE);
 
@@ -1185,11 +1176,12 @@ main(int argc, char *argv[])
 
   ret = modes[mode].main(argc, argv);
   stats_destroy();
-  log_tags_deinit();
+  log_tags_global_deinit();
   log_msg_global_deinit();
 
   cfg_free(configuration);
   configuration = NULL;
+  crypto_deinit();
   msg_deinit();
   return ret;
 }

@@ -1,6 +1,7 @@
 lib_filter_tests_TESTS		 = \
 	lib/filter/tests/test_filters				\
-	lib/filter/tests/test_filters_in_list
+    lib/filter/tests/test_filters_in_list       \
+	lib/filter/tests/test_filters_netmask6
 
 check_PROGRAMS				+= ${lib_filter_tests_TESTS}
 
@@ -16,5 +17,9 @@ lib_filter_tests_test_filters_in_list_CFLAGS	= $(TEST_CFLAGS) \
 lib_filter_tests_test_filters_in_list_LDADD	= $(TEST_LDADD)  \
 	$(PREOPEN_SYSLOGFORMAT)
 
-EXTRA_DIST				+=	\
-	lib/filter/tests/test.list
+lib_filter_tests_test_filters_netmask6_CFLAGS    = $(TEST_CFLAGS) \
+    -I${top_srcdir}/lib/filter/tests
+lib_filter_tests_test_filters_netmask6_LDADD = $(TEST_LDADD)  \
+    $(PREOPEN_SYSLOGFORMAT)
+
+include lib/filter/tests/filters-in-list/Makefile.am
