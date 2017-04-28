@@ -1,6 +1,8 @@
 syslog-ng (3.5.6-2pexip5) pexip; urgency=low
 
   * Sync Build-Depends with Debian
+  * debian/syslog-ng-core.preinst: Prepare transition of /etc/init.d/syslog-ng
+    from symlink to conffile
 
  -- John-Mark Bell <jmb@pexip.com>  Tue, 18 Apr 2017 09:43:07 +0100
 

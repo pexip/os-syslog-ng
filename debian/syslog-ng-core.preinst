@@ -2,6 +2,12 @@
 
 set -e
 
+if [ "$1" = "install" ] || [ "$1" = "upgrade" ]; then
+    if [ -e "/etc/init.d/syslog-ng" ] && [ -L "/etc/init.d/syslog-ng" ] && [ $(readlink -f "/etc/init.d/syslog-ng") = "/lib/init/upstart-job" ]; then
+        rm -f "/etc/init.d/syslog-ng"
+    fi
+fi
+
 if [ "$1" = "install" ]; then
         if [ -f /etc/logrotate.d/syslog-ng.disabled ]; then
                 if [ -n "$2" ]; then
