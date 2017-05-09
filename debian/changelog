@@ -1,3 +1,9 @@
+syslog-ng (3.5.6-2pexip6) pexip; urgency=low
+
+  * debian/syslog-ng-core.syslog-ng.upstart: Stop on sendsigs
+
+ -- John-Mark Bell <jmb@pexip.com>  Tue, 09 May 2017 01:38:18 +0100
+
 syslog-ng (3.5.6-2pexip5) pexip; urgency=low
 
   * Sync Build-Depends with Debian

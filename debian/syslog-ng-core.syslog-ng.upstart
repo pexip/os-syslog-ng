@@ -5,10 +5,7 @@
 description "system logging daemon"
 
 start on filesystem
-
-# Remove stop on trigger which will delay shutdown until S20sendsigs. This
-# allows more logging to be recorded for other services during shutdown.
-# stop on runlevel [06]
+stop on sendsigs
 
 expect fork
 respawn
