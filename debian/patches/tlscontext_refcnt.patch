@@ -1,0 +1,107 @@
+diff --git a/lib/tlscontext.c b/lib/tlscontext.c
+index dc34f2c..2bc48a3 100644
+--- a/lib/tlscontext.c
++++ b/lib/tlscontext.c
+@@ -239,7 +239,7 @@ tls_session_new(SSL *ssl, TLSContext *ctx)
+   TLSSession *self = g_new0(TLSSession, 1);
+ 
+   self->ssl = ssl;
+-  self->ctx = ctx;
++  self->ctx = tls_context_ref(ctx);
+ 
+   /* to set verify callback */
+   tls_session_set_verify(self, NULL, NULL, NULL);
+@@ -252,6 +252,7 @@ tls_session_free(TLSSession *self)
+   if (self->verify_data && self->verify_data_destroy)
+     self->verify_data_destroy(self->verify_data);
+   SSL_free(self->ssl);
++  tls_context_unref(self->ctx);
+   g_free(self);
+ }
+ 
+@@ -371,10 +372,11 @@ tls_context_new(TLSMode mode)
+ 
+   self->mode = mode;
+   self->verify_mode = TVM_REQUIRED | TVM_TRUSTED;
++  g_atomic_counter_set(&self->ref_cnt, 1);
+   return self;
+ }
+ 
+-void
++static void
+ tls_context_free(TLSContext *self)
+ {
+   SSL_CTX_free(self->ssl_ctx);
+@@ -388,6 +390,29 @@ tls_context_free(TLSContext *self)
+   g_free(self);
+ }
+ 
++TLSContext *
++tls_context_ref(TLSContext *self)
++{
++  g_assert(!self || g_atomic_counter_get(&self->ref_cnt) > 0);
++
++  if (self)
++    {
++      g_atomic_counter_inc(&self->ref_cnt);
++    }
++  return self;
++}
++
++void
++tls_context_unref(TLSContext *self)
++{
++  g_assert(!self || g_atomic_counter_get(&self->ref_cnt));
++
++  if (self && (g_atomic_counter_dec_and_test(&self->ref_cnt)))
++    {
++      tls_context_free(self);
++    }
++}
++
+ TLSVerifyMode
+ tls_lookup_verify_mode(const gchar *mode_str)
+ {
+diff --git a/lib/tlscontext.h b/lib/tlscontext.h
+index 98a2f85..adfd9ba 100644
+--- a/lib/tlscontext.h
++++ b/lib/tlscontext.h
+@@ -25,6 +25,7 @@
+ #define TLSCONTEXT_H_INCLUDED
+ 
+ #include "syslog-ng.h"
++#include "atomic.h"
+ 
+ #if ENABLE_SSL
+ 
+@@ -73,6 +74,7 @@ struct _TLSContext
+   SSL_CTX *ssl_ctx;
+   GList *trusted_fingerpint_list;
+   GList *trusted_dn_list;
++  GAtomicCounter ref_cnt;
+ };
+ 
+ 
+@@ -80,7 +82,8 @@ TLSSession *tls_context_setup_session(TLSContext *self);
+ void tls_session_set_trusted_fingerprints(TLSContext *self, GList *fingerprints);
+ void tls_session_set_trusted_dn(TLSContext *self, GList *dns);
+ TLSContext *tls_context_new(TLSMode mode);
+-void tls_context_free(TLSContext *s);
++TLSContext *tls_context_ref(TLSContext *s);
++void tls_context_unref(TLSContext *s);
+ 
+ TLSVerifyMode tls_lookup_verify_mode(const gchar *mode_str);
+ 
+diff --git a/modules/afsocket/afinet-dest.c b/modules/afsocket/afinet-dest.c
+index 2ac76c8..1aeefe4 100644
+--- a/modules/afsocket/afinet-dest.c
++++ b/modules/afsocket/afinet-dest.c
+@@ -493,7 +493,7 @@ afinet_dd_free(LogPipe *s)
+ #if BUILD_WITH_SSL
+   if(self->tls_context)
+     {
+-      tls_context_free(self->tls_context);
++      tls_context_unref(self->tls_context);
+     }
+ #endif
+   afsocket_dd_free(s);
