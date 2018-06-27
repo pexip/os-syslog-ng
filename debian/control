@@ -22,6 +22,7 @@ Build-Depends: debhelper (>= 9~),
                libwrap0-dev,
                libpcre3-dev,
                libcap-dev [linux-any],
+               libsystemd-daemon-dev [linux-any], dh-systemd (>= 1.3),
                libgeoip-dev,
                libhiredis-dev,
                python
