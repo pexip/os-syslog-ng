@@ -216,7 +216,7 @@ override_dh_installchangelogs:
 # triggered by dpkg triggers, so the maintainer scripts should not
 # stop, start or reload syslog-ng anymore.
 override_dh_installinit:
-	dh_installinit --name syslog-ng --restart-after-upgrade
+	dh_installinit --name syslog-ng --no-start
 
 # Logrotate and Logcheck files were moved from syslog-ng to
 # syslog-ng-core too, and like in init's case, we want to keep the old

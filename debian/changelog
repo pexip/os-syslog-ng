@@ -1,3 +1,9 @@
+syslog-ng (3.5.6-2pexip9) pexip; urgency=low
+
+  * Don't (re)start on upgrade
+
+ -- John-Mark Bell <jmb@pexip.com>  Mon, 02 Jul 2018 16:38:17 +0100
+
 syslog-ng (3.5.6-2pexip8) pexip; urgency=low
 
   * Re-enable systemd support
