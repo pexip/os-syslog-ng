@@ -31,7 +31,7 @@ Standards-Version: 3.9.5
 Homepage: http://www.balabit.com/network-security/syslog-ng/opensource-logging-system
 Vcs-Git: git://anonscm.debian.org/syslog-ng/syslog-ng.git
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=syslog-ng/syslog-ng.git
-XS-Pexip-Upstream: http://ftp.debian.org/debian/ jessie
+XS-Pexip-Upstream: http://ftp.debian.org/debian/ stretch
 
 Package: syslog-ng
 Architecture: all
