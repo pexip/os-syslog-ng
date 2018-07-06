@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2010-2013 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 2010-2013 Gergely Nagy <algernon@balabit.hu>
+ * Copyright (c) 2010-2015 Balabit
+ * Copyright (c) 2010-2014 Gergely Nagy <algernon@balabit.hu>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published
@@ -29,20 +29,27 @@ extern int afmongodb_debug;
 int afmongodb_parse(CfgLexer *lexer, LogDriver **instance, gpointer arg);
 
 static CfgLexerKeyword afmongodb_keywords[] = {
-  { "mongodb",			KW_MONGODB },
-  { "servers",                  KW_SERVERS },
-  { "database",			KW_DATABASE },
-  { "collection",		KW_COLLECTION },
-  { "safe_mode",		KW_SAFE_MODE },
-  { "host",                     KW_HOST, 0, KWS_OBSOLETE, "Use the servers() option instead of host() and port()" },
-  { "port",                     KW_PORT, 0, KWS_OBSOLETE, "Use the servers() option instead of host() and port()" },
-  { "path",                     KW_PATH },
-  { NULL }
+  { "mongodb", KW_MONGODB },
+  { "uri", KW_URI },
+  { "collection", KW_COLLECTION },
+#if SYSLOG_NG_ENABLE_LEGACY_MONGODB_OPTIONS
+  { "servers", KW_SERVERS, KWS_OBSOLETE, "Use the uri() option instead of servers()" },
+  { "database", KW_DATABASE, KWS_OBSOLETE, "Use the uri() option instead of database()" },
+  { "username", KW_USERNAME, KWS_OBSOLETE,
+    "Use the uri() option instead of username() and password()" },
+  { "password", KW_PASSWORD, KWS_OBSOLETE,
+    "Use the uri() option instead of username() and password()" },
+  { "safe_mode", KW_SAFE_MODE, KWS_OBSOLETE, "Use the uri() option instead of safe_mode()" },
+  { "host", KW_HOST, KWS_OBSOLETE, "Use the uri() option instead of host() and port()" },
+  { "port", KW_PORT, KWS_OBSOLETE, "Use the uri() option instead of host() and port()" },
+  { "path", KW_PATH, KWS_OBSOLETE, "Use the uri() option instead of path()" },
+#endif
+  { }
 };
 
 CfgParser afmongodb_parser =
 {
-#if ENABLE_DEBUG
+#if SYSLOG_NG_ENABLE_DEBUG
   .debug_flag = &afmongodb_debug,
 #endif
   .name = "afmongodb",

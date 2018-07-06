@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2012 Balabit
  * Copyright (c) 2012 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -31,6 +31,6 @@ typedef struct _SyslogParser
   MsgFormatOptions parse_options;
 } SyslogParser;
 
-LogParser *syslog_parser_new(void);
+LogParser *syslog_parser_new(GlobalConfig *cfg);
 
 #endif

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2013 Balabit
  * Copyright (c) 1998-2011 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -32,43 +32,67 @@
 #include <string.h>
 #include <strings.h>
 
+static gint
+yy_input_run_backtick_substitution(CfgLexer *self, gchar *buf, gsize buf_size)
+{
+  gchar *res;
+  gsize len;
+  GError *error = NULL;
+  YYLTYPE *cur_lloc = &self->include_stack[self->include_depth].lloc;
 
-#define YY_INPUT(buf, result, max_size)                               \
-  do {                                                                \
-    buf[0] = 0;                                                       \
-    if (fgets(buf, max_size, yyin))                                   \
-      {                                                                 \
-        gchar *res;                                                     \
-        gsize len = strlen(buf);                                        \
-        GError *error = NULL;						\
-                                                                        \
-        if (YY_START < block)                                           \
-          res = cfg_lexer_subst_args(yyextra->globals, NULL, NULL, buf, &len, &error); \
-        else                                                            \
-          res = FALSE;                                                  \
-        if (!res)                                                       \
-          {                                                             \
-            g_clear_error(&error);					\
-            result = strlen(buf);                                       \
-          }                                                             \
-        else                                                            \
-          {                                                             \
-            result = strlen(res);                                       \
-            if (max_size < result)                                      \
-              {                                                         \
-                YY_FATAL_ERROR("Not enough buffer space in lexer");     \
-                result = YY_NULL;                                       \
-              }                                                         \
-            else                                                        \
-              {                                                         \
-                memcpy(buf, res, result);                               \
-              }                                                         \
-            g_free(res);                                                \
-          }                                                             \
-      }                                                                 \
-    else                                                                \
-      result = YY_NULL;                                                 \
-  } while(0)
+  res = cfg_lexer_subst_args(self->globals, NULL, NULL, buf, -1, &len, &error);
+  if (!res)
+    {
+      msg_error("Error performing backtick substitution in configuration file",
+                evt_tag_str("error", error->message),
+                evt_tag_str("filename", cur_lloc->level->name),
+                evt_tag_printf("line", "%d:%d", cur_lloc->first_line, cur_lloc->first_column));
+      g_clear_error(&error);
+      goto error;
+    }
+  else
+    {
+      if (len > buf_size)
+        {
+          msg_error("Error performing backtick substitution in configuration file",
+                    evt_tag_str("error", "lexer buffer is too small to hold substituted result"),
+                    evt_tag_str("filename", cur_lloc->level->name),
+                    evt_tag_printf("line", "%d:%d", cur_lloc->first_line, cur_lloc->first_column));
+          goto error;
+        }
+      else
+        {
+          memcpy(buf, res, len);
+        }
+      g_free(res);
+      return len;
+    }
+ error:
+  return -1;
+}
+
+#define YY_INPUT(buf, result, max_size)                                 \
+  do                                                                    \
+    {                                                                   \
+      if (!fgets(buf, max_size, yyin))                                  \
+        result = YY_NULL;                                               \
+      else if (YY_START >= block)                                       \
+        result = strlen(buf);                                           \
+      else                                                              \
+        {                                                               \
+          gint rc;                                                      \
+          rc = yy_input_run_backtick_substitution(yyextra, buf, max_size); \
+          if (rc < 0)                                                   \
+            {                                                           \
+              YY_FATAL_ERROR("backtick substitution failure");          \
+              result = YY_NULL;                                         \
+            }                                                           \
+          else                                                          \
+            {                                                           \
+              result = rc;                                              \
+            }                                                           \
+        }                                                               \
+    } while(0)
 
 #define YY_USER_ACTION                                                  \
   do {                                                                  \
@@ -92,6 +116,17 @@
       }                                                                 \
   } while (0);                                                          \
   break;
+  
+#define YY_FATAL_ERROR(msg)						\
+  do {									\
+    struct yyguts_t * __yyg = (struct yyguts_t*) yyscanner;		\
+                                                                        \
+    msg_error("Fatal error in configuration lexer, giving up",		\
+              evt_tag_str("error", msg),				\
+              NULL);							\
+    longjmp(__yyg->yyextra_r->fatal_error, 1);				\
+  } while(0)
+
 
 static void
 _cfg_lex_new_line(CfgLexer *lexer)
@@ -118,7 +153,7 @@ xdigit	[0-9a-fA-F]
 odigit  [0-7]
 alpha		[a-zA-Z]
 alphanum	[a-zA-Z0-9]
-word	[^ \#'"\(\)\{\}\\;\n\t,|\.@:]
+word	[^ \#'"\(\)\{\}\\;\r\n\t,|\.@:]
 
 /* block related states must be last, as we use this fact in YY_INPUT */
 %x string
@@ -163,7 +198,7 @@ word	[^ \#'"\(\)\{\}\\;\n\t,|\.@:]
 (-|\+)?{digit}+(M|m|G|g|k|K)?(i|I)?(b|B)? {
                              if (!parse_number_with_suffix(yytext, &yylval->num))
                                {
-                                 YY_FATAL_ERROR("Invalid number specification");
+                                 return LL_ERROR;
                                }
                              return LL_NUMBER;
                            }
@@ -193,14 +228,14 @@ word	[^ \#'"\(\)\{\}\\;\n\t,|\.@:]
 <string>\\x{xdigit}{1,2}   { g_string_append_c(yyextra->string_buffer, strtol(yytext+2, NULL, 16)); }
 <string>\\o{odigit}{1,3}   { g_string_append_c(yyextra->string_buffer, strtol(yytext+2, NULL, 8)); }
 <string>\\[^anrtv]	   { g_string_append_c(yyextra->string_buffer, yytext[1]); }
-<string>\"		   { 
+<string>\"		   {
 			     yy_pop_state(yyscanner);
 			     yylval->cptr = strdup(yyextra->string_buffer->str);
 			     return LL_STRING;
 		           }
 <string>[^"\\]+		   { g_string_append(yyextra->string_buffer, yytext); }
 <qstring>[^']+		   { g_string_append(yyextra->string_buffer, yytext); }
-<qstring>\'		   { 
+<qstring>\'		   {
 			     yy_pop_state(yyscanner);
 			     yylval->cptr = strdup(yyextra->string_buffer->str);
 			     return LL_STRING;
@@ -268,7 +303,13 @@ word	[^ \#'"\(\)\{\}\\;\n\t,|\.@:]
 
 <block_content>[^{}()\"\'\n\r]+   { g_string_append(yyextra->string_buffer, yytext); }
 
-<INITIAL><<EOF>>           { if (!cfg_lexer_start_next_include(yyextra)) yyterminate(); }
+<INITIAL><<EOF>>           {
+                             if (!cfg_lexer_start_next_include(yyextra))
+                               {
+                                 *yylloc = yyextra->include_stack[0].lloc;
+                                 yyterminate();
+                               }
+                           }
 
 %%
 
@@ -278,7 +319,7 @@ cfg_lexer_unput_string(CfgLexer *self, const char *str)
 {
   int len = strlen(str);
   int i;
-  
+
   for (i = len - 1; i >= 0; i--)
     {
       yyunput(str[i], _cfg_lexer_get_text(self->state), self->state);
@@ -290,9 +331,9 @@ cfg_lexer_unput_string(CfgLexer *self, const char *str)
 void
 cfg_lexer_start_block_state(CfgLexer *self, gchar block_boundary[2])
 {
-  memcpy(&self->block_boundary, block_boundary, sizeof(gchar[2]));
+  memcpy(&self->block_boundary, block_boundary, sizeof(self->block_boundary));
   yy_push_state(block, self->state);
 }
 
 /* avoid warnings of unused symbols */
-gpointer __dummy[] = { yy_top_state };
+gpointer __dummy[] = { yy_top_state, yy_fatal_error };

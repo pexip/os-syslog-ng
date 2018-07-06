@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -24,7 +24,7 @@
 #ifndef RADIX_H_INCLUDED
 #define RADIX_H_INCLUDED
 
-#include "logmsg.h"
+#include "logmsg/logmsg.h"
 #include "messages.h"
 
 /* parser types, these are saved in the serialized log message along with
@@ -47,6 +47,7 @@ enum
   RPT_EMAIL,
   RPT_HOSTNAME,
   RPT_LLADDR,
+  RPT_NLSTRING,
 };
 
 typedef struct _RParserMatch
@@ -147,9 +148,10 @@ r_parser_type_name(guint8 type)
 
 RNode *r_new_node(guint8 *key, gpointer value);
 void r_free_node(RNode *node, void (*free_fn)(gpointer data));
-void r_insert_node(RNode *root, guint8 *key, gpointer value, gboolean parser, RNodeGetValueFunc value_func);
-RNode *r_find_node(RNode *root, guint8 *whole_key, guint8 *key, gint keylen, GArray *matches);
-RNode *r_find_node_dbg(RNode *root, guint8 *whole_key, guint8 *key, gint keylen, GArray *matches, GArray *dbg_list);
+void r_insert_node(RNode *root, guint8 *key, gpointer value, RNodeGetValueFunc value_func);
+RNode *r_find_node(RNode *root, guint8 *key, gint keylen, GArray *matches);
+RNode *r_find_node_dbg(RNode *root, guint8 *key, gint keylen, GArray *matches, GArray *dbg_list);
+gchar **r_find_all_applicable_nodes(RNode *root, guint8 *key, gint keylen, RNodeGetValueFunc value_func);
 
 #endif
 

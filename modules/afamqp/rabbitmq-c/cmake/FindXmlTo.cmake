@@ -1,24 +1,20 @@
+# vim:set ts=2 sw=2 sts=2 et:
 # - Convert XML docBook files to various formats
 # This will convert XML docBook files to various formats like:
 # man html txt dvi ps pdf
 #  macro XMLTO(outfiles infiles... MODES modes...)
-
-set ( XmlTo_FOUND false )
 
 find_program ( XMLTO_EXECUTABLE
   NAMES xmlto
   DOC   "path to the xmlto docbook xslt frontend"  
 )
 
-if ( XMLTO_EXECUTABLE )
-  set ( XmlTo_FOUND true )
-endif ( XMLTO_EXECUTABLE )
 
-if ( NOT XmlTo_FIND_QUIETLY )
-  if ( XmlTo_FIND_REQUIRED )
-    FATAL_ERROR ( "xmlto not found" )
-  endif ( XmlTo_FIND_REQUIRED )
-endif ( NOT XmlTo_FIND_QUIETLY )
+include(FindPackageHandleStandardArgs)
+FIND_PACKAGE_HANDLE_STANDARD_ARGS(XMLTO
+  REQUIRED_VARS XMLTO_EXECUTABLE)
+
+mark_as_advanced( XMLTO_EXECUTABLE )
 
 macro ( _XMLTO_FILE outfiles mode)
   #special settings

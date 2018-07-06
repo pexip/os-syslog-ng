@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2011 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2011 Balabit
  * Copyright (c) 1998-2011 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -53,6 +53,8 @@
 /* INCLUDE_DECLS */
 
 %token KW_PROGRAM
+%token KW_KEEP_ALIVE
+%token KW_INHERIT_ENVIRONMENT
 
 %type   <ptr> source_afprogram
 %type   <ptr> source_afprogram_params
@@ -74,11 +76,10 @@ source_afprogram
 source_afprogram_params
 	: string
 	  {
-	    last_driver = *instance = afprogram_sd_new($1);
-	    free($1);
+	    last_driver = *instance = afprogram_sd_new($1, configuration);
 	    last_reader_options = &((AFProgramSourceDriver *) last_driver)->reader_options;
 	  }
-	  source_afprogram_options			{ $$ = last_driver; }
+	  source_afprogram_options			{ $$ = last_driver; free($1); }
 	;
 
 source_afprogram_options
@@ -88,6 +89,7 @@ source_afprogram_options
 
 source_afprogram_option
 	: source_reader_option
+	| KW_INHERIT_ENVIRONMENT '(' yesno ')' { afprogram_set_inherit_environment(&((AFProgramSourceDriver *)last_driver)->process_info, $3); }
 	;
 
 dest_afprogram
@@ -97,11 +99,10 @@ dest_afprogram
 dest_afprogram_params
 	: string
 	  {
-	    last_driver = *instance = afprogram_dd_new($1);
-	    free($1);
+	    last_driver = *instance = afprogram_dd_new($1, configuration);
 	    last_writer_options = &((AFProgramDestDriver *) last_driver)->writer_options;
 	  }
-	  dest_afprogram_options			{ $$ = last_driver; }
+	  dest_afprogram_options			{ $$ = last_driver; free($1); }
 	;
 
 dest_afprogram_options
@@ -112,6 +113,8 @@ dest_afprogram_options
 dest_afprogram_option
 	: dest_writer_option
 	| dest_driver_option
+	| KW_KEEP_ALIVE '(' yesno ')' { afprogram_dd_set_keep_alive((AFProgramDestDriver *)last_driver, $3); }
+	| KW_INHERIT_ENVIRONMENT '(' yesno ')' { afprogram_set_inherit_environment(&((AFProgramDestDriver *)last_driver)->process_info, $3); }
 	;
 
 /* INCLUDE_RULES */

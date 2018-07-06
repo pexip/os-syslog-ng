@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -48,23 +48,16 @@ struct _AFSocketDestDriver
   GSockAddr *bind_addr;
   GSockAddr *dest_addr;
   gint time_reopen;
+  gboolean connection_initialized;
   struct iv_fd connect_fd;
   struct iv_timer reconnect_timer;
   SocketOptions *socket_options;
   TransportMapper *transport_mapper;
 
-  LogTransport *(*construct_transport)(AFSocketDestDriver *self, gint fd);
   LogWriter *(*construct_writer)(AFSocketDestDriver *self);
   gboolean (*setup_addresses)(AFSocketDestDriver *s);
-  const gchar *(*get_dest_name)(AFSocketDestDriver *s);
+  const gchar *(*get_dest_name)(const AFSocketDestDriver *s);
 };
-
-
-static inline LogTransport *
-afsocket_dd_construct_transport(AFSocketDestDriver *self, gint fd)
-{
-  return self->construct_transport(self, fd);
-}
 
 static inline LogWriter *
 afsocket_dd_construct_writer(AFSocketDestDriver *self)
@@ -79,7 +72,7 @@ afsocket_dd_setup_addresses(AFSocketDestDriver *s)
 }
 
 static inline const gchar *
-afsocket_dd_get_dest_name(AFSocketDestDriver *s)
+afsocket_dd_get_dest_name(const AFSocketDestDriver *s)
 {
   return s->get_dest_name(s);
 }
@@ -87,7 +80,7 @@ afsocket_dd_get_dest_name(AFSocketDestDriver *s)
 LogWriter *afsocket_dd_construct_writer_method(AFSocketDestDriver *self);
 gboolean afsocket_dd_setup_addresses_method(AFSocketDestDriver *self);
 void afsocket_dd_set_keep_alive(LogDriver *self, gint enable);
-void afsocket_dd_init_instance(AFSocketDestDriver *self, SocketOptions *socket_options, TransportMapper *transport_mapper);
+void afsocket_dd_init_instance(AFSocketDestDriver *self, SocketOptions *socket_options, TransportMapper *transport_mapper, GlobalConfig *cfg);
 LogTransport *afsocket_dd_construct_transport_method(AFSocketDestDriver *self, gint fd);
 
 gboolean afsocket_dd_init(LogPipe *s);

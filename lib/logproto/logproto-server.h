@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -27,6 +27,8 @@
 
 #include "logproto.h"
 #include "persist-state.h"
+#include "transport/transport-aux-data.h"
+#include "bookmark.h"
 
 typedef struct _LogProtoServer LogProtoServer;
 typedef struct _LogProtoServerOptions LogProtoServerOptions;
@@ -38,7 +40,6 @@ struct _LogProtoServerOptions
   void (*destroy)(LogProtoServerOptions *self);
   gboolean initialized;
   gchar *encoding;
-  GIConv convert;
   /* maximum message length in bytes */
   gint max_msg_size;
   gint max_buffer_size;
@@ -52,11 +53,10 @@ typedef union LogProtoServerOptionsStorage
 } LogProtoServerOptionsStorage;
 
 gboolean log_proto_server_options_validate(const LogProtoServerOptions *options);
-void log_proto_server_options_set_encoding(LogProtoServerOptions *s, const gchar *encoding);
+gboolean log_proto_server_options_set_encoding(LogProtoServerOptions *s, const gchar *encoding);
 void log_proto_server_options_defaults(LogProtoServerOptions *options);
 void log_proto_server_options_init(LogProtoServerOptions *options, GlobalConfig *cfg);
 void log_proto_server_options_destroy(LogProtoServerOptions *options);
-
 
 struct _LogProtoServer
 {
@@ -64,11 +64,11 @@ struct _LogProtoServer
   const LogProtoServerOptions *options;
   LogTransport *transport;
   /* FIXME: rename to something else */
+  gboolean (*is_position_tracked)(LogProtoServer *s);
   gboolean (*prepare)(LogProtoServer *s, GIOCondition *cond);
   gboolean (*is_preemptable)(LogProtoServer *s);
   gboolean (*restart_with_state)(LogProtoServer *s, PersistState *state, const gchar *persist_name);
-  LogProtoStatus (*fetch)(LogProtoServer *s, const guchar **msg, gsize *msg_len, GSockAddr **sa, gboolean *may_read);
-  void (*queued)(LogProtoServer *s);
+  LogProtoStatus (*fetch)(LogProtoServer *s, const guchar **msg, gsize *msg_len, gboolean *may_read, LogTransportAuxData *aux, Bookmark *bookmark);
   gboolean (*validate_options)(LogProtoServer *s);
   void (*free_fn)(LogProtoServer *s);
 };
@@ -76,10 +76,7 @@ struct _LogProtoServer
 static inline gboolean
 log_proto_server_validate_options(LogProtoServer *self)
 {
-  if (self->validate_options)
-    return self->validate_options(self);
-  else
-    return log_proto_server_options_validate(self->options);
+  return self->validate_options(self);
 }
 
 static inline void
@@ -111,18 +108,11 @@ log_proto_server_restart_with_state(LogProtoServer *s, PersistState *state, cons
 }
 
 static inline LogProtoStatus
-log_proto_server_fetch(LogProtoServer *s, const guchar **msg, gsize *msg_len, GSockAddr **sa, gboolean *may_read)
+log_proto_server_fetch(LogProtoServer *s, const guchar **msg, gsize *msg_len, gboolean *may_read, LogTransportAuxData *aux, Bookmark *bookmark)
 {
   if (s->status == LPS_SUCCESS)
-    return s->fetch(s, msg, msg_len, sa, may_read);
+    return s->fetch(s, msg, msg_len, may_read, aux, bookmark);
   return s->status;
-}
-
-static inline void
-log_proto_server_queued(LogProtoServer *s)
-{
-  if (s->queued)
-    s->queued(s);
 }
 
 static inline gint
@@ -138,7 +128,16 @@ log_proto_server_reset_error(LogProtoServer *s)
   s->status = LPS_SUCCESS;
 }
 
-gboolean log_proto_server_validate_options(LogProtoServer *self);
+static inline gboolean
+log_proto_server_is_position_tracked(LogProtoServer *s)
+{
+  if (s->is_position_tracked)
+    return s->is_position_tracked(s);
+
+  return FALSE;
+}
+
+gboolean log_proto_server_validate_options_method(LogProtoServer *s);
 void log_proto_server_init(LogProtoServer *s, LogTransport *transport, const LogProtoServerOptions *options);
 void log_proto_server_free_method(LogProtoServer *s);
 void log_proto_server_free(LogProtoServer *s);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2013 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -31,7 +31,11 @@
 #include "cfg-parser.h"
 #include "persist-state.h"
 #include "template/templates.h"
+#include "host-resolve.h"
 #include "type-hinting.h"
+#include "stats/stats.h"
+#include "dnscache.h"
+#include "file-perms.h"
 
 #include <sys/types.h>
 #include <regex.h>
@@ -60,31 +64,27 @@ struct _GlobalConfig
   /* version number as parsed from the configuration file, it can be set
    * multiple times if the user uses @version multiple times */
   gint parsed_version;
-  gchar *filename;
+  const gchar *filename;
   GList *plugins;
   GList *candidate_plugins;
   gboolean autoload_compiled_modules;
   CfgLexer *lexer;
 
-  gint stats_freq;
-  gint stats_level;
+  StatsOptions stats_options;
   gint mark_freq;
   gint flush_lines;
   gint mark_mode;
   gint flush_timeout;
   gboolean threaded;
+  gboolean pass_unix_credentials;
   gboolean chain_hostnames;
-  gboolean normalize_hostnames;
   gboolean keep_hostname;
   gboolean check_hostname;
   gboolean bad_hostname_compiled;
   regex_t bad_hostname;
   gchar *bad_hostname_re;
-  gboolean use_fqdn;
-  gboolean use_dns;
-  gboolean use_dns_cache;
-  gint dns_cache_size, dns_cache_expire, dns_cache_expire_failed;
-  gchar *dns_cache_hosts;
+  gchar *custom_domain;
+  DNSCacheOptions dns_cache_options;
   gint time_reopen;
   gint time_reap;
   gint suppress;
@@ -94,18 +94,14 @@ struct _GlobalConfig
   gint log_msg_size;
 
   gboolean create_dirs;
-  gint file_uid;
-  gint file_gid;
-  gint file_perm;
-  
-  gint dir_uid;
-  gint dir_gid;
-  gint dir_perm;
+  FilePermOptions file_perm_options;
+  gboolean use_uniqid;
 
   gboolean keep_timestamp;  
 
   gchar *recv_time_zone;
   LogTemplateOptions template_options;
+  HostResolveOptions host_resolve_options;
   
   gchar *file_template_name;
   gchar *proto_template_name;
@@ -115,6 +111,7 @@ struct _GlobalConfig
   
   PersistConfig *persist;
   PersistState *state;
+  GHashTable *module_config;
   
   CfgTree tree;
 
@@ -122,25 +119,22 @@ struct _GlobalConfig
 
 gboolean cfg_allow_config_dups(GlobalConfig *self);
 
-void cfg_file_owner_set(GlobalConfig *self, gchar *owner);
-void cfg_file_group_set(GlobalConfig *self, gchar *group);
-void cfg_file_perm_set(GlobalConfig *self, gint perm);
 void cfg_bad_hostname_set(GlobalConfig *self, gchar *bad_hostname_re);
 gint cfg_lookup_mark_mode(gchar *mark_mode);
 void cfg_set_mark_mode(GlobalConfig *self, gchar *mark_mode);
 
-void cfg_dir_owner_set(GlobalConfig *self, gchar *owner);
-void cfg_dir_group_set(GlobalConfig *self, gchar *group);
-void cfg_dir_perm_set(GlobalConfig *self, gint perm);
 gint cfg_tz_convert_value(gchar *convert);
 gint cfg_ts_format_value(gchar *format);
 
 void cfg_set_version(GlobalConfig *self, gint version);
 void cfg_load_candidate_modules(GlobalConfig *self);
 
+void cfg_set_global_paths(GlobalConfig *self);
+
 GlobalConfig *cfg_new(gint version);
 gboolean cfg_run_parser(GlobalConfig *self, CfgLexer *lexer, CfgParser *parser, gpointer *result, gpointer arg);
-gboolean cfg_read_config(GlobalConfig *cfg, gchar *fname, gboolean syntax_only, gchar *preprocess_into);
+gboolean cfg_read_config(GlobalConfig *cfg, const gchar *fname, gboolean syntax_only, gchar *preprocess_into);
+gboolean cfg_load_config(GlobalConfig *self, gchar *config_string, gboolean syntax_only, gchar *preprocess_into);
 void cfg_free(GlobalConfig *self);
 gboolean cfg_init(GlobalConfig *cfg);
 gboolean cfg_deinit(GlobalConfig *cfg);
@@ -149,8 +143,8 @@ gboolean cfg_deinit(GlobalConfig *cfg);
 PersistConfig *persist_config_new(void);
 void persist_config_free(PersistConfig *self);
 void cfg_persist_config_move(GlobalConfig *src, GlobalConfig *dest);
-void cfg_persist_config_add(GlobalConfig *cfg, gchar *name, gpointer value, GDestroyNotify destroy, gboolean force);
-gpointer cfg_persist_config_fetch(GlobalConfig *cfg, gchar *name);
+void cfg_persist_config_add(GlobalConfig *cfg, const gchar *name, gpointer value, GDestroyNotify destroy, gboolean force);
+gpointer cfg_persist_config_fetch(GlobalConfig *cfg, const gchar *name);
 
 static inline gboolean
 cfg_is_config_version_older(GlobalConfig *cfg, gint req)
@@ -161,5 +155,15 @@ cfg_is_config_version_older(GlobalConfig *cfg, gint req)
     return FALSE;
   return TRUE;
 }
+
+static inline void
+cfg_set_use_uniqid(gboolean flag)
+{
+  configuration->use_uniqid = !!flag;
+}
+
+gint cfg_get_user_version(const GlobalConfig *cfg);
+gint cfg_get_parsed_version(const GlobalConfig *cfg);
+const gchar* cfg_get_filename(const GlobalConfig *cfg);
 
 #endif

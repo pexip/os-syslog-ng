@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -40,11 +40,12 @@ enum
 typedef void (*ApplicationHookFunc)(gint type, gpointer user_data);
 
 void register_application_hook(gint type, ApplicationHookFunc func, gpointer user_data);
-void unregister_application_hook(gint type, ApplicationHookFunc func, gpointer user_data);
 void app_startup();
 void app_post_daemonized();
 void app_pre_config_loaded();
 void app_post_config_loaded();
+void app_thread_start(void);
+void app_thread_stop(void);
 void app_shutdown();
 
 #endif

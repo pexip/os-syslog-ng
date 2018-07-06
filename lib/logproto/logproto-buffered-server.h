@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -25,6 +25,7 @@
 #define LOGPROTO_BUFFERED_SERVER_H_INCLUDED
 
 #include "logproto-server.h"
+#include "persistable-state-header.h"
 
 enum
 {
@@ -38,14 +39,7 @@ typedef struct _LogProtoBufferedServerState
    * the byte order swap code in LogProtoFileReader for mulit-byte
    * members. */
 
-  guint8 version;
-
-  /* this indicates that the members in the struct are stored in
-   * big-endian byte order. if the byte ordering of the struct doesn't
-   * match the current CPU byte ordering, then the members are
-   * byte-swapped when the state is loaded.
-   */
-  guint8 big_endian:1;
+  PersistableStateHeader header;
   guint8 raw_buffer_leftover_size;
   guint8 __padding1[1];
   guint32 buffer_pos;
@@ -71,7 +65,7 @@ struct _LogProtoBufferedServer
 {
   LogProtoServer super;
   gboolean (*fetch_from_buffer)(LogProtoBufferedServer *self, const guchar *buffer_start, gsize buffer_bytes, const guchar **msg, gsize *msg_len);
-  gint (*read_data)(LogProtoBufferedServer *self, guchar *buf, gsize len, GSockAddr **sa);
+  gint (*read_data)(LogProtoBufferedServer *self, guchar *buf, gsize len, LogTransportAuxData *aux);
 
   gboolean
     /* track & record the position in the input, to be used for file
@@ -94,7 +88,10 @@ struct _LogProtoBufferedServer
   PersistEntryHandle persist_handle;
   GIConv convert;
   guchar *buffer;
-  GSockAddr *prev_saddr;
+
+  /* auxiliary data (e.g. GSockAddr, other transport related meta
+   * data) associated with the already buffered data */
+  LogTransportAuxData buffer_aux;
 };
 
 static inline gboolean
@@ -108,6 +105,7 @@ LogProtoBufferedServerState *log_proto_buffered_server_get_state(LogProtoBuffere
 void log_proto_buffered_server_put_state(LogProtoBufferedServer *self);
 
 /* LogProtoBufferedServer */
+gboolean log_proto_buffered_server_validate_options_method(LogProtoServer *s);
 void log_proto_buffered_server_init(LogProtoBufferedServer *self, LogTransport *transport, const LogProtoServerOptions *options);
 void log_proto_buffered_server_free_method(LogProtoServer *s);
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -64,6 +64,7 @@ typedef struct _LogWriterOptions
   LogTemplate *proto_template;
   
   LogTemplateOptions template_options;
+  HostResolveOptions host_resolve_options;
   LogProtoClientOptionsStorage proto_options;
 
   gint time_reopen;
@@ -71,12 +72,6 @@ typedef struct _LogWriterOptions
   gint padding;
   gint mark_mode;
   gint mark_freq;
-
-  /* options for resolve_sockaddr() */
-  gboolean use_dns;
-  gboolean use_fqdn;
-  gboolean use_dns_cache;
-  gboolean normalize_hostnames;
 } LogWriterOptions;
 
 typedef struct _LogWriter LogWriter;
@@ -90,7 +85,7 @@ gboolean log_writer_opened(LogWriter *self);
 void log_writer_reopen(LogWriter *self, LogProtoClient *proto);
 void log_writer_set_queue(LogWriter *self, LogQueue *queue);
 LogQueue *log_writer_get_queue(LogWriter *s);
-LogWriter *log_writer_new(guint32 flags);
+LogWriter *log_writer_new(guint32 flags, GlobalConfig *cfg);
 
 void log_writer_options_set_template_escape(LogWriterOptions *options, gboolean enable);
 void log_writer_options_defaults(LogWriterOptions *options);

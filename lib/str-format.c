@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2011 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2011 Balabit
  * Copyright (c) 1998-2011 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -77,6 +77,24 @@ format_uint64_base16_rev(gchar *result, gsize result_len, guint64 value)
   return p - result;
 }
 
+static inline gint
+format_uint64_base8_rev(gchar *result, gsize result_len, guint64 value)
+{
+  gchar *p;
+  gboolean first = TRUE;
+
+  p = result;
+  while (first || (result_len > 0 && value > 0))
+    {
+      *p = digits[value & 0x07];
+      value >>= 3;
+      p++;
+      result_len--;
+      first = FALSE;
+    }
+  return p - result;
+}
+
 static gint
 format_padded_int64(GString *result, gint field_len, gchar pad_char, gint sign, gint base, guint64 value)
 {
@@ -87,8 +105,10 @@ format_padded_int64(GString *result, gint field_len, gchar pad_char, gint sign, 
     len = format_uint64_base10_rev(num, sizeof(num), sign, value);
   else if (base == 16)
     len = format_uint64_base16_rev(num, sizeof(num), value);
+  else if (base == 8)
+    len = format_uint64_base8_rev(num, sizeof(num), value);
   else
-    return 0;
+    g_assert_not_reached();
 
   if (field_len == 0 || field_len < len)
     field_len = len;
@@ -174,6 +194,24 @@ format_uint32_base16_rev(gchar *result, gsize result_len, guint32 value)
   return p - result;
 }
 
+static inline gint
+format_uint32_base8_rev(gchar *result, gsize result_len, guint32 value)
+{
+  gchar *p;
+  gboolean first = TRUE;
+
+  p = result;
+  while (first || (result_len > 0 && value > 0))
+    {
+      *p = digits[value & 0x07];
+      value >>= 3;
+      p++;
+      result_len--;
+      first = FALSE;
+    }
+  return p - result;
+}
+
 static gint
 format_padded_int32(GString *result, gint field_len, gchar pad_char, gint sign, gint base, guint32 value)
 {
@@ -184,8 +222,10 @@ format_padded_int32(GString *result, gint field_len, gchar pad_char, gint sign, 
     len = format_uint32_base10_rev(num, sizeof(num), sign, value);
   else if (base == 16)
     len = format_uint32_base16_rev(num, sizeof(num), value);
+  else if (base == 8)
+    len = format_uint32_base8_rev(num, sizeof(num), value);
   else
-    return 0;
+    g_assert_not_reached();
 
   if (field_len == 0 || field_len < len)
     field_len = len;
@@ -219,6 +259,35 @@ gint
 format_int32_padded(GString *result, gint field_len, gchar pad_char, gint base, gint32 value)
 {
   return format_padded_int32(result, field_len, pad_char, 1, base, value);
+}
+
+gchar *
+format_hex_string_with_delimiter(gpointer data, gsize data_len, gchar *result, gsize result_len, gchar delimiter)
+{
+  gint i;
+  gint pos = 0;
+  guchar *str = (guchar *) data;
+
+  for (i = 0; i < data_len && result_len - pos >= 3; i++)
+    {
+      if ( (delimiter != 0) && (i < data_len - 1))
+      {
+        g_snprintf(result + pos, 4, "%02x%c", str[i], delimiter);
+        pos += 3;
+      }
+      else
+      {
+        g_snprintf(result + pos, 3, "%02x", str[i]);
+        pos += 2;
+      }
+    }
+  return result;
+}
+
+gchar *
+format_hex_string(gpointer data, gsize data_len, gchar *result, gsize result_len)
+{
+  return format_hex_string_with_delimiter(data, data_len, result, result_len, 0);
 }
 
 /* parse 32 bit ints */

@@ -1,9 +1,32 @@
+/*
+ * Copyright (c) 2002-2014 Balabit
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
+ * As an additional exemption you are allowed to compile & link against the
+ * OpenSSL libraries as published by the OpenSSL project. See the file
+ * COPYING for details.
+ *
+ */
 #include "testutils.h"
 #include "type-hinting.h"
 #include "apphook.h"
 
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 #define assert_type_hint(hint,expected)                                 \
   do                                                                    \
@@ -31,9 +54,6 @@ assert_error(GError *error, gint code, const gchar *expected_message)
 static void
 test_type_hint_parse(void)
 {
-  TypeHint t;
-  GError *e = NULL;
-
   testcase_begin("Testing type hint parsing");
 
   assert_type_hint(NULL, TYPE_HINT_STRING);
@@ -43,13 +63,16 @@ test_type_hint_parse(void)
   assert_type_hint("int", TYPE_HINT_INT32);
   assert_type_hint("int32", TYPE_HINT_INT32);
   assert_type_hint("int64", TYPE_HINT_INT64);
+  assert_type_hint("double", TYPE_HINT_DOUBLE);
   assert_type_hint("datetime", TYPE_HINT_DATETIME);
   assert_type_hint("default", TYPE_HINT_DEFAULT);
 
+  TypeHint t;
+  GError *e = NULL;
   assert_false(type_hint_parse("invalid-hint", &t, &e),
                "Parsing an invalid hint results in an error.");
 
-  assert_error(e, TYPE_HINTING_INVALID_TYPE, "invalid-hint");
+  assert_error(e, TYPE_HINTING_INVALID_TYPE, "Unknown type specified in type hinting: invalid-hint");
 
   testcase_end();
 }
@@ -80,6 +103,15 @@ test_type_hint_parse(void)
                       value, #expected);                                \
     } while(0)
 
+#define assert_double_cast(value,expected)                              \
+  do                                                                    \
+    {                                                                   \
+      gdouble od;                                                       \
+      assert_type_cast(double, value, &od);                             \
+      assert_gdouble(od, expected, "'%s' casted to double is %s",       \
+                      value, #expected);                                \
+    } while(0)
+
 #define assert_int_cast(value,width,expected)                           \
   do                                                                    \
     {                                                                   \
@@ -93,10 +125,10 @@ static void
 test_type_cast(void)
 {
   GError *error = NULL;
-  gboolean ob;
   gint32 i32;
   gint64 i64;
   guint64 dt;
+  gdouble d;
 
   testcase_begin("Testing type casting");
 
@@ -111,7 +143,10 @@ test_type_cast(void)
   assert_bool_cast("0", FALSE);
   assert_bool_cast("fatally false", FALSE);
 
-  assert_type_cast_fail(boolean, "booyah", &ob);
+  {
+    gboolean ob;
+    assert_type_cast_fail(boolean, "booyah", &ob);
+  }
 
   /* int32 */
   assert_int_cast("12345", 32, 12345);
@@ -120,6 +155,18 @@ test_type_cast(void)
   /* int64 */
   assert_int_cast("12345", 64, 12345);
   assert_type_cast_fail(int64, "12345a", &i64);
+
+  /* double */
+  assert_double_cast("1.0", 1.0);
+  assert_type_cast_fail(double, "2.0bad", &d);
+  assert_type_cast_fail(double, "bad", &d);
+  assert_type_cast_fail(double, "", &d);
+  assert_type_cast_fail(double, "1e1000000", &d);
+  assert_type_cast_fail(double, "-1e1000000", &d);
+  assert_double_cast("1e-100000000", 0.0);
+#ifdef INFINITY
+  assert_double_cast("INF", INFINITY);
+#endif
 
   /* datetime */
   assert_type_cast(datetime_int, "12345", &dt);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -23,6 +23,8 @@
  */
 #include "logproto-text-client.h"
 #include "messages.h"
+
+#include <errno.h>
 
 static gboolean
 log_proto_text_client_prepare(LogProtoClient *s, gint *fd, GIOCondition *cond)
@@ -56,8 +58,7 @@ log_proto_text_client_flush(LogProtoClient *s)
             {
               msg_error("I/O error occurred while writing",
                         evt_tag_int("fd", self->super.transport->fd),
-                        evt_tag_errno(EVT_TAG_OSERROR, errno),
-                        NULL);
+                        evt_tag_errno(EVT_TAG_OSERROR, errno));
               return LPS_ERROR;
             }
           return LPS_SUCCESS;
@@ -77,6 +78,9 @@ log_proto_text_client_flush(LogProtoClient *s)
               self->state = self->next_state;
               self->next_state = -1;
             }
+
+          log_proto_client_msg_ack(&self->super, 1);
+
           /* NOTE: we return here to give a chance to the framed protocol to send the frame header. */
           return LPS_SUCCESS;
         }

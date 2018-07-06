@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -28,7 +28,7 @@
 #include "afsocket-dest.h"
 #include "tlscontext.h"
 
-#if ENABLE_SPOOF_SOURCE
+#if SYSLOG_NG_ENABLE_SPOOF_SOURCE
 
 /* this forward declaration avoids having to include libnet, which requires
  * ugly playing with macros, see that for yourself in the implementation
@@ -39,14 +39,12 @@ struct libnet_context;
 typedef struct _AFInetDestDriver
 {
   AFSocketDestDriver super;
-#if ENABLE_SPOOF_SOURCE
+#if SYSLOG_NG_ENABLE_SPOOF_SOURCE
   gboolean spoof_source;
   struct libnet_context *lnet_ctx;
   GStaticMutex lnet_lock;
   GString *lnet_buffer;
-#endif
-#if BUILD_WITH_SSL
-  TLSContext *tls_context;
+  gint spoof_source_maxmsglen;
 #endif
   gchar *hostname;
 
@@ -65,11 +63,11 @@ void afinet_dd_set_sync_freq(LogDriver *self, gint sync_freq);
 void afinet_dd_set_spoof_source(LogDriver *self, gboolean enable);
 void afinet_dd_set_tls_context(LogDriver *s, TLSContext *tls_context);
 
-AFInetDestDriver *afinet_dd_new_tcp(gchar *host);
-AFInetDestDriver *afinet_dd_new_tcp6(gchar *host);
-AFInetDestDriver *afinet_dd_new_udp(gchar *host);
-AFInetDestDriver *afinet_dd_new_udp6(gchar *host);
-AFInetDestDriver *afinet_dd_new_syslog(gchar *host);
-AFInetDestDriver *afinet_dd_new_network(gchar *host);
+AFInetDestDriver *afinet_dd_new_tcp(gchar *host, GlobalConfig *cfg);
+AFInetDestDriver *afinet_dd_new_tcp6(gchar *host, GlobalConfig *cfg);
+AFInetDestDriver *afinet_dd_new_udp(gchar *host, GlobalConfig *cfg);
+AFInetDestDriver *afinet_dd_new_udp6(gchar *host, GlobalConfig *cfg);
+AFInetDestDriver *afinet_dd_new_syslog(gchar *host, GlobalConfig *cfg);
+AFInetDestDriver *afinet_dd_new_network(gchar *host, GlobalConfig *cfg);
 
 #endif

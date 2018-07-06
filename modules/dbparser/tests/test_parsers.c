@@ -1,3 +1,26 @@
+/*
+ * Copyright (c) 2013 Balabit
+ * Copyright (c) 2013 Balázs Scheidler <balazs.scheidler@balabit.com>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published
+ * by the Free Software Foundation, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
+ * As an additional exemption you are allowed to compile & link against the
+ * OpenSSL libraries as published by the OpenSSL project. See the file
+ * COPYING for details.
+ *
+ */
+
 #include "testutils.h"
 #include <string.h>
 
@@ -27,7 +50,7 @@ static gboolean
 _invoke_parser(gboolean (*parser)(guint8 *str, gint *len, const gchar *param, gpointer state, RParserMatch *match), const gchar *str, gpointer param, gpointer state, gchar **result_string)
 {
   gboolean result;
-  gint len;
+  gint len = 0;
   guint8 *dup = g_strdup(str);
   RParserMatch match;
 
@@ -53,7 +76,7 @@ _invoke_parser(gboolean (*parser)(guint8 *str, gint *len, const gchar *param, gp
 static void
 assert_parser_success(gboolean (*parser)(guint8 *str, gint *len, const gchar *param, gpointer state, RParserMatch *match), const gchar *str, gpointer param, gpointer state, const gchar *expected_string)
 {
-  gchar *result_string;
+  gchar *result_string = NULL;
   gboolean result;
 
   result = _invoke_parser(parser, str, param, state, &result_string);

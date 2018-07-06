@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2013 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -22,11 +22,11 @@
  *
  */
 
-#include "compat.h"
 #include "timeutils.h"
 #include "messages.h"
-#include "syslog-ng.h"
 #include "tls-support.h"
+#include "reloc.h"
+#include "pathutils.h"
 
 #include <ctype.h>
 #include <string.h>
@@ -63,7 +63,7 @@ static const gchar *time_zone_path_list[] =
 #ifdef PATH_TIMEZONEDIR
   PATH_TIMEZONEDIR,               /* search the user specified dir */
 #endif
-  PATH_PREFIX "/share/zoneinfo/", /* then local installation first */
+  SYSLOG_NG_PATH_PREFIX "/share/zoneinfo/", /* then local installation first */
   "/usr/share/zoneinfo/",         /* linux */
   "/usr/share/lib/zoneinfo/",     /* solaris, AIX */
   NULL,
@@ -84,7 +84,7 @@ get_time_zone_basedir(void)
 
   if (!time_zone_basedir)
     {
-      for (i = 0; time_zone_path_list[i] != NULL && !g_file_test(time_zone_path_list[i], G_FILE_TEST_IS_DIR); i++)
+      for (i = 0; time_zone_path_list[i] != NULL && !is_file_directory(get_installation_path_for(time_zone_path_list[i])); i++)
         ;
       time_zone_basedir = time_zone_path_list[i];
     }
@@ -109,7 +109,7 @@ TLS_BLOCK_END;
 #define mktime_prev_tm       __tls_deref(mktime_prev_tm)
 #define mktime_prev_time     __tls_deref(mktime_prev_time)
 
-#if !defined(HAVE_LOCALTIME_R) || !defined(HAVE_GMTIME_R)
+#if !defined(SYSLOG_NG_HAVE_LOCALTIME_R) || !defined(SYSLOG_NG_HAVE_GMTIME_R)
 static GStaticMutex localtime_lock = G_STATIC_MUTEX_INIT;
 #endif
 
@@ -191,7 +191,7 @@ cached_localtime(time_t *when, struct tm *tm)
     }
   else
     {
-#ifdef HAVE_LOCALTIME_R
+#ifdef SYSLOG_NG_HAVE_LOCALTIME_R
       localtime_r(when, tm);
 #else
       struct tm *ltm;
@@ -212,14 +212,14 @@ cached_gmtime(time_t *when, struct tm *tm)
   guchar i = 0;
 
   i = *when & 0x3F;
-  if (G_LIKELY(*when == gm_time_cache[i].when))
+  if (G_LIKELY(*when == gm_time_cache[i].when && *when != 0))
     {
       *tm = gm_time_cache[i].tm;
       return;
     }
   else
     {
-#ifdef HAVE_GMTIME_R
+#ifdef SYSLOG_NG_HAVE_GMTIME_R
       gmtime_r(when, tm);
 #else
       struct tm *ltm;
@@ -244,7 +244,7 @@ cached_gmtime(time_t *when, struct tm *tm)
 long
 get_local_timezone_ofs(time_t when)
 {
-#ifdef HAVE_STRUCT_TM_TM_GMTOFF
+#ifdef SYSLOG_NG_HAVE_STRUCT_TM_TM_GMTOFF
   struct tm ltm;
 
   cached_localtime(&when, &ltm);
@@ -269,12 +269,12 @@ get_local_timezone_ofs(time_t when)
     tzoff += 86400;
   
   return tzoff;
-#endif /* HAVE_STRUCT_TM_TM_GMTOFF */
+#endif /* SYSLOG_NG_HAVE_STRUCT_TM_TM_GMTOFF */
 }
 
 
 void
-clean_time_cache()
+clean_time_cache(void)
 {
   memset(&gm_time_cache, 0, sizeof(gm_time_cache));
   memset(&local_time_cache, 0, sizeof(local_time_cache));
@@ -300,19 +300,18 @@ format_zone_info(gchar *buf, size_t buflen, glong gmtoff)
 gboolean
 check_nanosleep(void)
 {
-#ifdef HAVE_CLOCK_GETTIME
-  struct timespec start, stop, sleep;
+  struct timespec start, stop, sleep_amount;
   glong diff;
   gint attempts;
 
   for (attempts = 0; attempts < 3; attempts++)
     {
       clock_gettime(CLOCK_MONOTONIC, &start);
-      sleep.tv_sec = 0;
+      sleep_amount.tv_sec = 0;
       /* 0.1 msec */
-      sleep.tv_nsec = 1e5;
+      sleep_amount.tv_nsec = 1e5;
 
-      while (nanosleep(&sleep, &sleep) < 0)
+      while (nanosleep(&sleep_amount, &sleep_amount) < 0)
         ;
 
       clock_gettime(CLOCK_MONOTONIC, &stop);
@@ -320,7 +319,6 @@ check_nanosleep(void)
       if (diff < 5e5)
         return TRUE;
     }
-#endif
   return FALSE;
 }
 
@@ -366,6 +364,21 @@ glong
 timespec_diff_nsec(struct timespec *t1, struct timespec *t2)
 {
   return (t1->tv_sec - t2->tv_sec) * 1e9 + (t1->tv_nsec - t2->tv_nsec);
+}
+
+/* Determine (guess) the year for the month.
+ *
+ * It can be used for BSD logs, where year is missing.
+ */
+gint
+determine_year_for_month(gint month, const struct tm *now)
+{
+  if (month == 11 && now->tm_mon == 0)
+    return now->tm_year - 1;
+  else if (month == 0 && now->tm_mon == 11)
+    return now->tm_year + 1;
+  else
+    return now->tm_year;
 }
 
 /** Time zone file parser code **/
@@ -455,8 +468,7 @@ readcoded32(unsigned char **input, gint64 minv, gint64 maxv)
       msg_error("Error while processing the time zone file", 
                 evt_tag_str("message", "oded value out-of-range"), 
                 evt_tag_int("value", val),
-                evt_tag_printf("expected", "[%"G_GINT64_FORMAT", %"G_GINT64_FORMAT"]", minv, maxv), 
-                NULL);
+                evt_tag_printf("expected", "[%"G_GINT64_FORMAT", %"G_GINT64_FORMAT"]", minv, maxv));
       g_assert_not_reached();
     }
   return val;
@@ -482,8 +494,7 @@ readcoded64(unsigned char **input, gint64 minv, gint64 maxv)
       msg_error("Error while processing the time zone file",
                 evt_tag_str("message", "Coded value out-of-range"), 
                 evt_tag_int("value", val), 
-                evt_tag_printf("expected", "[%"G_GINT64_FORMAT", %"G_GINT64_FORMAT"]", minv, maxv), 
-                NULL);
+                evt_tag_printf("expected", "[%"G_GINT64_FORMAT", %"G_GINT64_FORMAT"]", minv, maxv));
       g_assert_not_reached();
     }
   return val;
@@ -502,8 +513,7 @@ readbool(unsigned char **input)
     {
       msg_error("Error while processing the time zone file",
                 evt_tag_str("message", "Boolean value out-of-range"), 
-                evt_tag_int("value", c), 
-                NULL);
+                evt_tag_int("value", c));
       g_assert_not_reached();
     }
   return (c != 0);
@@ -563,8 +573,7 @@ zone_info_parser(unsigned char **input, gboolean is64bitData, gint *version)
   if (strncmp((gchar*)buf, TZ_MAGIC, 4) != 0)
     {
       msg_error("Error while processing the time zone file", 
-                evt_tag_str("message", TZ_MAGIC" signature is missing"), 
-                NULL);
+                evt_tag_str("message", TZ_MAGIC" signature is missing"));
       goto error;
     }
   
@@ -579,8 +588,7 @@ zone_info_parser(unsigned char **input, gboolean is64bitData, gint *version)
   if (buf[0] != 0 && buf[0] != '2' && buf[0] != '3')
     {
       msg_error("Error in the time zone file", 
-                evt_tag_str("message", "Bad Olson version info"), 
-                NULL);
+                evt_tag_str("message", "Bad Olson version info"));
       goto error;
     }
   else 
@@ -612,8 +620,7 @@ zone_info_parser(unsigned char **input, gboolean is64bitData, gint *version)
       isdstcnt != typecnt) 
     {
       msg_warning("Error in the time zone file", 
-                   evt_tag_str("message", "Count mismatch between tzh_ttisgmtcnt, tzh_ttisdstcnt, tth_typecnt"), 
-                   NULL);
+                   evt_tag_str("message", "Count mismatch between tzh_ttisgmtcnt, tzh_ttisdstcnt, tth_typecnt"));
     }
 
   /* 
@@ -647,8 +654,7 @@ zone_info_parser(unsigned char **input, gboolean is64bitData, gint *version)
           msg_warning("Error in the time zone file", 
                       evt_tag_str("message", "Illegal type number"), 
                       evt_tag_printf("val", "%ld", (long) t), 
-                      evt_tag_printf("expected", "[0, %" G_GINT64_FORMAT "]", typecnt-1), 
-                      NULL);
+                      evt_tag_printf("expected", "[0, %" G_GINT64_FORMAT "]", typecnt-1));
           goto error;
         }
       transition_types[i] = t;
@@ -668,8 +674,7 @@ zone_info_parser(unsigned char **input, gboolean is64bitData, gint *version)
           msg_warning("Error in the time zone file", 
                       evt_tag_str("message", "Illegal gmtoffset number"), 
                       evt_tag_int("val", gmt_offsets[i]), 
-                      evt_tag_printf("expected", "[%d, %d]", -1 * offs * 60 * 60, offs * 60 * 60), 
-                      NULL);
+                      evt_tag_printf("expected", "[%d, %d]", -1 * offs * 60 * 60, offs * 60 * 60));
           goto error;
         }
       /* ignore isdst flag */ 
@@ -789,6 +794,7 @@ error:
   g_free(transition_times);
   g_free(transition_types);
   g_free(gmt_offsets);
+  *version = 0;
   return info;
 }
 
@@ -838,7 +844,7 @@ zone_info_read(const gchar *zonename, ZoneInfo **zone, ZoneInfo **zone64)
   file_map = g_mapped_file_new(filename, FALSE, &error);
   if (!file_map)
     {
-      msg_error("Failed to open the time zone file", evt_tag_str("filename", filename), evt_tag_str("message", error->message), NULL);
+      msg_error("Failed to open the time zone file", evt_tag_str("filename", filename), evt_tag_str("message", error->message));
       g_error_free(error);
       g_free(filename);
       return FALSE;
@@ -849,23 +855,23 @@ zone_info_read(const gchar *zonename, ZoneInfo **zone, ZoneInfo **zone64)
 
   if (byte_read == -1)
     {
-      msg_error("Failed to read the time zone file", evt_tag_str("filename", filename), NULL);
+      msg_error("Failed to read the time zone file", evt_tag_str("filename", filename));
       g_mapped_file_unref(file_map);
       g_free(filename);
       return FALSE;
     }
 
-  msg_debug("Processing the time zone file (32bit part)", evt_tag_str("filename", filename), NULL);
+  msg_debug("Processing the time zone file (32bit part)", evt_tag_str("filename", filename));
   *zone = zone_info_parser(&buff, FALSE, &version);
   if (version == 2)
     {
-      msg_debug("Processing the time zone file (64bit part)", evt_tag_str("filename", filename), NULL);
+      msg_debug("Processing the time zone file (64bit part)", evt_tag_str("filename", filename));
       *zone64 = zone_info_parser(&buff, TRUE, &version);
     }
 
   g_mapped_file_unref(file_map);
-    g_free(filename);
-  return TRUE;
+  g_free(filename);
+  return *zone != NULL || *zone64 != NULL;
 }
 
 gint32
@@ -923,8 +929,7 @@ time_zone_info_new(const gchar *tz)
 
   /* failed to read time zone data */
   msg_error("Bogus timezone spec, must be in the format [+-]HH:MM, offset must be less than 24:00",
-            evt_tag_str("value", tz),
-            NULL);
+            evt_tag_str("value", tz));
   return NULL;
 }
 
@@ -937,4 +942,3 @@ time_zone_info_free(TimeZoneInfo *self)
   zone_info_free(self->zone64);
   g_free(self);
 }
-

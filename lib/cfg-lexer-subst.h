@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2012 Balázs Scheidler
+ * Copyright (c) 2010-2013 Balabit
+ * Copyright (c) 2010-2013 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -30,7 +30,7 @@
 
 typedef struct _CfgLexerSubst CfgLexerSubst;
 
-gchar *cfg_lexer_subst_invoke(CfgLexerSubst *self, gchar *cptr, gsize *length, GError **error);
+gchar *cfg_lexer_subst_invoke(CfgLexerSubst *self, const gchar *input, gssize input_len, gsize *output_length, GError **error);
 
 CfgLexerSubst *cfg_lexer_subst_new(CfgArgs *globals, CfgArgs *defs, CfgArgs *args);
 void cfg_lexer_subst_free(CfgLexerSubst *self);

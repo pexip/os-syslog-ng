@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2012-2013 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 2012-2013 Gergely Nagy <algernon@balabit.hu>
+ * Copyright (c) 2012-2014 Balabit
+ * Copyright (c) 2012-2014 Gergely Nagy <algernon@balabit.hu>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published
@@ -36,10 +36,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <iv.h>
-
-#if ENABLE_SYSTEMD
-#include <systemd/sd-daemon.h>
-#endif
+#include "service-management.h"
 
 #if __FreeBSD__
 #include <sys/sysctl.h>
@@ -47,8 +44,8 @@
 #endif
 
 static void
-system_sysblock_add_unix_dgram(GString *sysblock, const gchar *path,
-                               const gchar *perms, const gchar *recvbuf_size)
+system_sysblock_add_unix_dgram_driver(GString *sysblock, const gchar *path,
+                                      const gchar *perms, const gchar *recvbuf_size)
 {
   g_string_append_printf(sysblock, "unix-dgram(\"%s\"", path);
   if (perms)
@@ -59,9 +56,27 @@ system_sysblock_add_unix_dgram(GString *sysblock, const gchar *path,
 }
 
 static void
+system_sysblock_add_unix_dgram(GString *sysblock, const gchar *path,
+                               const gchar *perms, const gchar *recvbuf_size)
+{
+  GString *unix_driver = g_string_sized_new(0);
+  
+  system_sysblock_add_unix_dgram_driver(unix_driver, path, perms, recvbuf_size);
+
+  g_string_append_printf(sysblock, 
+"channel {\n"
+"    source { %s };\n"
+"    rewrite { set(\"${.unix.pid}\" value(\"PID\") condition(\"${.unix.pid}\" ne \"\")); };\n"
+"};\n", unix_driver->str);
+
+  g_string_free(unix_driver, TRUE);
+}
+
+static void
 system_sysblock_add_file(GString *sysblock, const gchar *path,
                          gint follow_freq, const gchar *prg_override,
-                         const gchar *flags, const gchar *format)
+                         const gchar *flags, const gchar *format,
+                         gboolean ignore_timestamp)
 {
   g_string_append_printf(sysblock, "file(\"%s\"", path);
   if (follow_freq >= 0)
@@ -72,6 +87,8 @@ system_sysblock_add_file(GString *sysblock, const gchar *path,
     g_string_append_printf(sysblock, " flags(%s)", flags);
   if (format)
     g_string_append_printf(sysblock, " format(%s)", format);
+  if (ignore_timestamp)
+    g_string_append_printf(sysblock, " keep-timestamp(no)");
   g_string_append(sysblock, ");\n");
 }
 
@@ -85,10 +102,22 @@ static void
 system_sysblock_add_sun_streams(GString *sysblock, const gchar *path,
                                 const gchar *door)
 {
-  g_string_append_printf(sysblock, "sun-streams(\"%s\"", path);
+  GString *solaris_driver = g_string_sized_new(0);
+
+
+
+  g_string_append_printf(solaris_driver, "sun-streams(\"%s\"", path);
   if (door)
-    g_string_append_printf(sysblock, " door(\"%s\")", door);
-  g_string_append(sysblock, ");\n");
+    g_string_append_printf(solaris_driver, " door(\"%s\")", door);
+  g_string_append(solaris_driver, ");\n");
+
+
+  g_string_append_printf(sysblock,
+"channel {\n"
+"    source { %s };\n"
+"    parser { extract-solaris-msgid(); };\n"
+"};\n", solaris_driver->str);
+  g_string_free(solaris_driver, TRUE);
 }
 
 static void
@@ -130,52 +159,10 @@ system_sysblock_add_freebsd_klog(GString *sysblock, const gchar *release)
   if (strncmp(release, "7.", 2) == 0 ||
       strncmp(release, "8.", 2) == 0 ||
       strncmp(release, "9.0", 3) == 0)
-    system_sysblock_add_file(sysblock, "/dev/klog", 1, "kernel", "no-parse", NULL);
+    system_sysblock_add_file(sysblock, "/dev/klog", 1, "kernel", "no-parse", NULL, FALSE);
   else
-    system_sysblock_add_file(sysblock, "/dev/klog", 0, "kernel", "no-parse", NULL);
+    system_sysblock_add_file(sysblock, "/dev/klog", 0, "kernel", "no-parse", NULL, FALSE);
 }
-
-#if ENABLE_SYSTEMD
-static char *
-system_linux_find_dev_log(void)
-{
-  int r, fd;
-
-  r = sd_listen_fds(0);
-  if (r == 0)
-    return "/dev/log";
-  if (r < 0)
-    {
-      msg_error ("system(): sd_listen_fds() failed",
-                 evt_tag_int("errno", r),
-                 NULL);
-      return NULL;
-    }
-
-  /* We only support socket activation for /dev/log, meaning
-   * one socket only. Bail out if we get more.
-   */
-  if (r != 1)
-    {
-      msg_error("system(): Too many sockets passed in for socket activation, syslog-ng only supports one.",
-                NULL);
-      return NULL;
-    }
-
-  fd = SD_LISTEN_FDS_START;
-  if (sd_is_socket_unix(fd, SOCK_DGRAM, -1,
-                        "/run/systemd/journal/syslog", 0) != 1)
-    {
-      msg_error("system(): Socket activation is only supported on /run/systemd/journal/syslog",
-                NULL);
-      return NULL;
-    }
-
-  return "/run/systemd/journal/syslog";
-}
-#else
-#define system_linux_find_dev_log() "/dev/log"
-#endif
 
 static gboolean
 _is_fd_pollable(gint fd)
@@ -191,6 +178,13 @@ _is_fd_pollable(gint fd)
   if (pollable)
     iv_fd_unregister(&check_fd);
   return pollable;
+}
+
+
+static void
+system_sysblock_add_systemd_source(GString *sysblock)
+{
+  g_string_append(sysblock, "systemd-journal();\n");
 }
 
 static void
@@ -215,45 +209,66 @@ system_sysblock_add_linux_kmsg(GString *sysblock)
       msg_warning("system(): The kernel message buffer is not readable, "
                   "please check permissions if this is unintentional.",
                   evt_tag_str("device", kmsg),
-                  evt_tag_errno("error", errno),
-                  NULL);
+                  evt_tag_errno("error", errno));
     }
   else
     system_sysblock_add_file(sysblock, kmsg, -1,
-                             "kernel", "kernel", format);
+                             "kernel", "kernel", format, TRUE);
 }
 
-gboolean
-system_generate_system(CfgLexer *lexer, gint type, const gchar *name,
-                       CfgArgs *args, gpointer user_data)
+static gboolean
+_is_running_in_linux_container(void)
 {
-  gchar buf[256];
-  GString *sysblock;
+  FILE *f;
+  char line[2048];
+  gboolean container = FALSE;
+
+  f = fopen("/proc/1/cgroup", "r");
+  if (!f)
+    return FALSE;
+
+  while (fgets(line, sizeof(line), f) != NULL)
+    {
+      if (line[strlen(line) - 2] != '/')
+        {
+          container = TRUE;
+          break;
+        }
+    }
+
+  fclose (f);
+
+  return container;
+}
+
+static void
+system_sysblock_add_linux(GString *sysblock)
+{
+  if (service_management_get_type() == SMT_SYSTEMD)
+    system_sysblock_add_systemd_source(sysblock);
+  else
+    {
+      system_sysblock_add_unix_dgram(sysblock, "/dev/log", NULL, "8192");
+      if (!_is_running_in_linux_container())
+        system_sysblock_add_linux_kmsg(sysblock);
+    }
+}
+
+static gboolean
+system_generate_system_transports(GString *sysblock)
+{
   struct utsname u;
-
-  g_snprintf(buf, sizeof(buf), "source confgen system");
-
-  sysblock = g_string_sized_new(1024);
 
   if (uname(&u) < 0)
     {
       msg_error("system(): Cannot get information about the running kernel",
-                evt_tag_errno("error", errno),
-                NULL);
+                evt_tag_errno("error", errno));
       return FALSE;
     }
 
   if (strcmp(u.sysname, "Linux") == 0)
     {
-      char *log = system_linux_find_dev_log ();
-
-      if (!log)
-        {
-          return FALSE;
-        }
-
-      system_sysblock_add_unix_dgram(sysblock, log, NULL, "8192");
-      system_sysblock_add_linux_kmsg(sysblock);
+      system_sysblock_add_linux(sysblock);
     }
   else if (strcmp(u.sysname, "SunOS") == 0)
     {
@@ -294,18 +309,77 @@ system_generate_system(CfgLexer *lexer, gint type, const gchar *name,
       msg_error("system(): Error detecting platform, unable to define the system() source. "
                 "Please send your system information to the developers!",
                 evt_tag_str("sysname", u.sysname),
-                evt_tag_str("release", u.release),
-                NULL);
+                evt_tag_str("release", u.release));
       return FALSE;
     }
-
-  if (!cfg_lexer_include_buffer(lexer, buf, sysblock->str, sysblock->len))
-    {
-      g_string_free(sysblock, TRUE);
-      return FALSE;
-    }
-
+  g_string_append(sysblock, "\n");
   return TRUE;
+}
+
+static gboolean
+_is_json_parser_available(GlobalConfig *cfg)
+{
+  return plugin_find(cfg, LL_CONTEXT_PARSER, "json-parser") != NULL;
+}
+
+static void
+system_generate_cim_parser(GlobalConfig *cfg, GString *sysblock)
+{
+  if (cfg_is_config_version_older(cfg, 0x0306))
+    {
+      msg_warning_once("WARNING: Starting with " VERSION_3_6 ", the system() source performs JSON parsing of messages starting with the '@cim:' prefix. No additional action is needed");
+      return;
+    }
+
+  if (!_is_json_parser_available(cfg))
+    {
+      msg_debug("system(): json-parser() is missing, skipping the automatic JSON parsing of messages submitted via syslog(3), Please install the json module");
+      return;
+    }
+
+  g_string_append(sysblock,
+                  "channel {\n"
+                  "  channel {\n"
+                  "    parser {\n"
+                  "      json-parser(prefix('.cim.') marker('@cim:'));\n"
+                  "    };\n"
+                  "    flags(final);\n"
+                  "  };\n"
+                  "  channel { };\n"
+                  "};\n");
+}
+
+static gboolean
+system_generate_system(CfgLexer *lexer, gint type, const gchar *name,
+                       CfgArgs *args, gpointer user_data)
+{
+  gchar buf[256];
+  GString *sysblock;
+  gboolean result = FALSE;
+  GlobalConfig *cfg = (GlobalConfig *) user_data;
+
+  g_snprintf(buf, sizeof(buf), "source confgen system");
+
+  sysblock = g_string_sized_new(1024);
+
+  g_string_append(sysblock,
+                  "channel {\n"
+                  "    source {\n");
+
+  if (!system_generate_system_transports(sysblock))
+    {
+      goto exit;
+    }
+
+  g_string_append(sysblock, "    }; # source\n");
+
+  system_generate_cim_parser(cfg, sysblock);
+
+  g_string_append(sysblock, "}; # channel\n");
+  result = cfg_lexer_include_buffer(lexer, buf, sysblock->str, sysblock->len);
+ exit:
+  g_string_free(sysblock, TRUE);
+  return result;
 }
 
 gboolean
@@ -314,7 +388,7 @@ system_source_module_init(GlobalConfig *cfg, CfgArgs *args)
   cfg_lexer_register_block_generator(cfg->lexer,
                                      cfg_lexer_lookup_context_type_by_name("source"),
                                      "system", system_generate_system,
-                                     NULL, NULL);
+                                     cfg, NULL);
 
   return TRUE;
 }
@@ -322,9 +396,9 @@ system_source_module_init(GlobalConfig *cfg, CfgArgs *args)
 const ModuleInfo module_info =
 {
   .canonical_name = "system-source",
-  .version = VERSION,
+  .version = SYSLOG_NG_VERSION,
   .description = "The system-source module provides support for determining the system log sources at run time.",
-  .core_revision = SOURCE_REVISION,
+  .core_revision = SYSLOG_NG_SOURCE_REVISION,
   .plugins = NULL,
   .plugins_len = 0,
 };

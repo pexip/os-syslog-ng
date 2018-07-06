@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -25,7 +25,7 @@
 #ifndef LOGPROTO_H_INCLUDED
 #define LOGPROTO_H_INCLUDED
 
-#include "logtransport.h"
+#include "transport/logtransport.h"
 
 typedef enum
 {

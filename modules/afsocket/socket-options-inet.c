@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2013 Balabit
  * Copyright (c) 1998-2013 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -48,7 +48,7 @@ socket_options_inet_setup_socket(SocketOptions *s, gint fd, GSockAddr *addr, AFS
 #ifdef TCP_KEEPIDLE
       setsockopt(fd, SOL_TCP, TCP_KEEPIDLE, &self->tcp_keepalive_time, sizeof(self->tcp_keepalive_time));
 #else
-      msg_error("tcp-keepalive-time() is set but no TCP_KEEPIDLE setsockopt on this platform", NULL);
+      msg_error("tcp-keepalive-time() is set but no TCP_KEEPIDLE setsockopt on this platform");
       return FALSE;
 #endif
     }
@@ -57,7 +57,7 @@ socket_options_inet_setup_socket(SocketOptions *s, gint fd, GSockAddr *addr, AFS
 #ifdef TCP_KEEPCNT
       setsockopt(fd, SOL_TCP, TCP_KEEPCNT, &self->tcp_keepalive_probes, sizeof(self->tcp_keepalive_probes));
 #else
-      msg_error("tcp-keepalive-probes() is set but no TCP_KEEPCNT setsockopt on this platform", NULL);
+      msg_error("tcp-keepalive-probes() is set but no TCP_KEEPCNT setsockopt on this platform");
       return FALSE;
 #endif
     }
@@ -66,7 +66,7 @@ socket_options_inet_setup_socket(SocketOptions *s, gint fd, GSockAddr *addr, AFS
 #ifdef TCP_KEEPINTVL
       setsockopt(fd, SOL_TCP, TCP_KEEPINTVL, &self->tcp_keepalive_intvl, sizeof(self->tcp_keepalive_intvl));
 #else
-      msg_error("tcp-keepalive-intvl() is set but no TCP_KEEPINTVL setsockopt on this platform", NULL);
+      msg_error("tcp-keepalive-intvl() is set but no TCP_KEEPINTVL setsockopt on this platform");
       return FALSE;
 #endif
     }
@@ -104,7 +104,7 @@ socket_options_inet_setup_socket(SocketOptions *s, gint fd, GSockAddr *addr, AFS
 
         break;
       }
-#if ENABLE_IPV6
+#if SYSLOG_NG_ENABLE_IPV6
     case AF_INET6:
       {
         struct ipv6_mreq mreq6;

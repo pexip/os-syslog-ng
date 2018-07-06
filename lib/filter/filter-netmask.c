@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2013 Balabit
  * Copyright (c) 1998-2013 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -24,7 +24,7 @@
 
 #include "filter-netmask.h"
 #include "gsocket.h"
-#include "logmsg.h"
+#include "logmsg/logmsg.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -67,7 +67,7 @@ filter_netmask_new(gchar *cidr)
   gchar buf[32];
   gchar *slash;
 
-  filter_expr_node_init(&self->super);
+  filter_expr_node_init_instance(&self->super);
   slash = strchr(cidr, '/');
   if (strlen(cidr) >= sizeof(buf) || !slash)
     {

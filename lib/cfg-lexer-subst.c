@@ -1,3 +1,27 @@
+/*
+ * Copyright (c) 2010-2013 Balabit
+ * Copyright (c) 2010-2013 Balázs Scheidler
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
+ * As an additional exemption you are allowed to compile & link against the
+ * OpenSSL libraries as published by the OpenSSL project. See the file
+ * COPYING for details.
+ *
+ */
+
 #include "cfg-lexer-subst.h"
 #include "cfg-args.h"
 #include "cfg-lexer.h"
@@ -11,6 +35,7 @@ typedef enum _CfgLexerStringTrackState
   CLS_NOT_STRING,
   CLS_WITHIN_STRING,
   CLS_WITHIN_STRING_QUOTE,
+  CLS_WITHIN_STRING_QUOTED_CHARACTER,
   CLS_WITHIN_QSTRING,
 } CfgLexerStringTrackState;
 
@@ -44,7 +69,7 @@ _lookup_value(CfgLexerSubst *self, const gchar *name)
 }
 
 static CfgLexerStringTrackState
-_track_string_state(CfgLexerSubst *self, CfgLexerStringTrackState last_state, gchar *p)
+_track_string_state(CfgLexerSubst *self, CfgLexerStringTrackState last_state, const gchar *p)
 {
   switch (last_state)
     {
@@ -61,6 +86,8 @@ _track_string_state(CfgLexerSubst *self, CfgLexerStringTrackState last_state, gc
         return CLS_NOT_STRING;
       return CLS_WITHIN_STRING;
     case CLS_WITHIN_STRING_QUOTE:
+      return CLS_WITHIN_STRING_QUOTED_CHARACTER;
+    case CLS_WITHIN_STRING_QUOTED_CHARACTER:
       return CLS_WITHIN_STRING;
     case CLS_WITHIN_QSTRING:
       if (*p == '\'')
@@ -143,6 +170,7 @@ static gboolean
 _append_value(CfgLexerSubst *self, const gchar *value, GError **error)
 {
   g_return_val_if_fail(error == NULL || (*error) == NULL, FALSE);
+  gboolean result = TRUE;
 
   if (self->string_state == CLS_NOT_STRING)
     {
@@ -158,11 +186,13 @@ _append_value(CfgLexerSubst *self, const gchar *value, GError **error)
           switch (self->string_state)
             {
             case CLS_WITHIN_STRING:
-              return _encode_as_string(self, string_literal, error);
+              result = _encode_as_string(self, string_literal, error);
+              break;
             case CLS_WITHIN_QSTRING:
-              return _encode_as_qstring(self, string_literal, error);
-            case CLS_WITHIN_STRING_QUOTE:
+              result = _encode_as_qstring(self, string_literal, error);
+              break;
             default:
+              g_assert_not_reached();
               break;
             }
           g_free(string_literal);
@@ -170,27 +200,35 @@ _append_value(CfgLexerSubst *self, const gchar *value, GError **error)
       else
         g_string_append(self->result_buffer, value);
     }
-  return TRUE;
+  return result;
 }
 
 gchar *
-cfg_lexer_subst_invoke(CfgLexerSubst *self, gchar *cptr, gsize *length, GError **error)
+cfg_lexer_subst_invoke(CfgLexerSubst *self, const gchar *input, gssize input_len, gsize *output_length, GError **error)
 {
   gboolean backtick = FALSE;
-  gchar *p, *ref_start = cptr;
+  const gchar *p, *ref_start = input;
   GString *result;
 
   g_return_val_if_fail(error == NULL || (*error) == NULL, FALSE);
 
+  if (input_len < 0)
+    input_len = strlen(input);
+
   result = g_string_sized_new(32);
   self->result_buffer = result;
-  p = cptr;
-  while (*p)
+  p = input;
+  while (p - input < input_len)
     {
       self->string_state = _track_string_state(self, self->string_state, p);
 
       if (!backtick && (*p) == '`')
         {
+          if (self->string_state == CLS_WITHIN_STRING_QUOTED_CHARACTER)
+            {
+              g_set_error(error, CFG_LEXER_ERROR, CFG_LEXER_BACKTICKS_CANT_BE_SUBSTITUTED_AFTER_BACKSLASH, "cannot subsitute backticked values right after a string quote character");
+              goto error;
+            }
           /* start of reference */
           backtick = TRUE;
           ref_start = p + 1;
@@ -208,10 +246,11 @@ cfg_lexer_subst_invoke(CfgLexerSubst *self, gchar *cptr, gsize *length, GError *
           else
             {
               const gchar *value;
+              gchar *name;
 
-              *p = 0;
-              value = _lookup_value(self, ref_start);
-              *p = '`';
+              name = g_strndup(ref_start, p - ref_start);
+              value = _lookup_value(self, name);
+              g_free(name);
               if (!_append_value(self, value ? : "", error))
                 goto error;
             }
@@ -229,7 +268,7 @@ cfg_lexer_subst_invoke(CfgLexerSubst *self, gchar *cptr, gsize *length, GError *
       goto error;
     }
 
-  *length = result->len;
+  *output_length = result->len;
   return g_string_free(result, FALSE);
  error:
   g_string_free(result, TRUE);

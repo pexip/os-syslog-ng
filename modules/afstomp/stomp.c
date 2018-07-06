@@ -1,17 +1,18 @@
 /*
+ * Copyright (c) 2013 Balabit
  * Copyright (c) 2013 Viktor Tusa <tusa@balabit.hu>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published
  * by the Free Software Foundation, or (at your option) any later version.
  *
- * This library is distributed in the hope that it will be useful,
+ * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  * As an additional exemption you are allowed to compile & link against the
@@ -20,15 +21,18 @@
  *
  */
 
+#include "stomp.h"
+#include "host-resolve.h"
+#include "str-utils.h"
+#include "messages.h"
+
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <poll.h>
+#include <unistd.h>
 
-#include "misc.h"
-#include "stomp.h"
-#include "messages.h"
 
 #define STOMP_PARSE_HEADER 1
 #define STOMP_PARSE_DATA 2
@@ -48,8 +52,7 @@ stomp_frame_add_header(stomp_frame *frame, const char *name, const char *value)
 {
   msg_debug("Adding header",
             evt_tag_str("name",name),
-            evt_tag_str("value",value),
-            NULL);
+            evt_tag_str("value",value));
 
   g_hash_table_insert(frame->headers, g_strdup(name), g_strdup(value));
 };
@@ -61,8 +64,7 @@ stomp_frame_add_header_len(stomp_frame *frame, const char *name, int name_len, c
   char* value_slice = g_strndup(value, value_len);
   msg_debug("Adding header",
             evt_tag_str("name",name_slice),
-            evt_tag_str("value",value_slice),
-            NULL);
+            evt_tag_str("value",value_slice));
 
   g_hash_table_insert(frame->headers, name_slice, value_slice);
 };
@@ -101,25 +103,23 @@ stomp_connect(stomp_connection **connection_ref, char *hostname, int port)
   conn->socket = socket(AF_INET, SOCK_STREAM, 0);
   if (conn->socket == -1)
     {
-      msg_error("Failed to create socket!", NULL);
+      msg_error("Failed to create socket!");
       return FALSE;
     }
 
-  conn->remote_sa = g_sockaddr_inet_new("127.0.0.1", port);
-  if (!resolve_hostname(&conn->remote_sa, hostname))
+  if (!resolve_hostname_to_sockaddr(&conn->remote_sa, AF_INET, hostname))
     {
       msg_error("Failed to resolve hostname in stomp driver",
-                evt_tag_str("hostname", hostname),
-                NULL);
+                evt_tag_str("hostname", hostname));
 
       return FALSE;
     }
 
+  g_sockaddr_set_port(conn->remote_sa, port);
   if (!g_connect(conn->socket, conn->remote_sa))
     {
       msg_error("Stomp connection failed",
-                evt_tag_str("host", hostname),
-                NULL);
+                evt_tag_str("host", hostname));
       _stomp_connection_free(conn);
       return FALSE;
     }
@@ -159,14 +159,14 @@ write_header_into_gstring(gpointer key, gpointer value, gpointer userdata)
 }
 
 static int
-write_gstring_to_socket(int socket, GString *data)
+write_gstring_to_socket(int fd, GString *data)
 {
   int res = 0;
   int remaining = data->len;
 
   while ((remaining > 0) && (res >= 0))
     {
-      res = write(socket, data->str + (data->len - remaining), remaining);
+      res = write(fd, data->str + (data->len - remaining), remaining);
       if (res > 0)
         remaining = remaining - res;
     }
@@ -174,8 +174,7 @@ write_gstring_to_socket(int socket, GString *data)
   if (res < 0)
     {
       msg_error("Error happened during write",
-                evt_tag_errno("errno", errno),
-                NULL);
+                evt_tag_errno("errno", errno));
       return FALSE;
     }
 
@@ -275,8 +274,7 @@ stomp_receive_frame(stomp_connection *connection, stomp_frame *frame)
 
   res = stomp_parse_frame(data, frame);
   msg_debug("Frame received",
-            evt_tag_str("command",frame->command),
-            NULL);
+            evt_tag_str("command",frame->command));
   g_string_free(data, TRUE);
   return res;
 }
@@ -298,7 +296,7 @@ stomp_check_for_frame(stomp_connection *connection)
           return FALSE;
       if (!strcmp(frame.command, "ERROR"))
         {
-          msg_error("ERROR frame received from stomp_server", NULL);
+          msg_error("ERROR frame received from stomp_server");
           stomp_frame_deinit(&frame);
           return FALSE;
         }
@@ -339,7 +337,7 @@ stomp_write(stomp_connection *connection, stomp_frame *frame)
   data = create_gstring_from_frame(frame);
   if (!write_gstring_to_socket(connection->socket, data))
     {
-      msg_error("Write error, partial write", NULL);
+      msg_error("Write error, partial write");
       stomp_frame_deinit(frame);
       g_string_free(data, TRUE);
       return FALSE;
