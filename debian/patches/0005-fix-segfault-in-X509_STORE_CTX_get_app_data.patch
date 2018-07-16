@@ -1,0 +1,41 @@
+From b53330f9a490249a1b5c4bdd611831856ca9eaeb Mon Sep 17 00:00:00 2001
+From: grin <Peter Gervai grin@grin.hu>
+Date: Tue, 10 Jan 2017 00:20:28 +0100
+Subject: [PATCH] Hopefully fix segfault in X509_STORE_CTX_get_app_data(ctx)
+ see https://bz.apache.org/bugzilla/show_bug.cgi?id=32529
+
+---
+ lib/tlscontext.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/lib/tlscontext.c b/lib/tlscontext.c
+index 45ca423..e6cc021 100644
+--- a/lib/tlscontext.c
++++ b/lib/tlscontext.c
+@@ -54,7 +54,7 @@ tls_get_x509_digest(X509 *x, GString *hash_string)
+ int
+ tls_session_verify_fingerprint(X509_STORE_CTX *ctx)
+ {
+-  SSL *ssl = X509_STORE_CTX_get_app_data(ctx);
++  SSL *ssl = (SSL *)X509_STORE_CTX_get_ex_data(ctx, SSL_get_ex_data_X509_STORE_CTX_idx());
+   TLSSession *self = SSL_get_app_data(ssl);
+   GList *current_fingerprint = self->ctx->trusted_fingerpint_list;
+   GString *hash;
+@@ -105,7 +105,7 @@ tls_x509_format_dn(X509_NAME *name, GString *dn)
+ int
+ tls_session_verify_dn(X509_STORE_CTX *ctx)
+ {
+-  SSL *ssl = X509_STORE_CTX_get_app_data(ctx);
++  SSL *ssl = (SSL *)X509_STORE_CTX_get_ex_data(ctx, SSL_get_ex_data_X509_STORE_CTX_idx());
+   TLSSession *self = SSL_get_app_data(ssl);
+   gboolean match = FALSE;
+   GList *current_dn = self->ctx->trusted_dn_list;
+@@ -178,7 +178,7 @@ tls_session_verify(TLSSession *self, int ok, X509_STORE_CTX *ctx)
+ int
+ tls_session_verify_callback(int ok, X509_STORE_CTX *ctx)
+ {
+-  SSL *ssl = X509_STORE_CTX_get_app_data(ctx);
++  SSL *ssl = (SSL *)X509_STORE_CTX_get_ex_data(ctx, SSL_get_ex_data_X509_STORE_CTX_idx());
+   TLSSession *self = SSL_get_app_data(ssl);
+   /* NOTE: Sometimes libssl calls this function
+      with no current_cert. This happens when

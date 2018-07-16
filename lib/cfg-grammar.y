@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2014 Balabit
  * Copyright (c) 1998-2013 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -37,6 +37,8 @@
 #include "filter/filter-pipe.h"
 #include "parser/parser-expr-parser.h"
 #include "rewrite/rewrite-expr-parser.h"
+#include "logmatcher.h"
+#include "logthrdestdrv.h"
 
 /* uses struct declarations instead of the typedefs to avoid having to
  * include logreader/logwriter/driver.h, which defines the typedefs.  This
@@ -55,6 +57,9 @@ extern struct _LogTemplateOptions *last_template_options;
 extern struct _LogTemplate *last_template;
 extern struct _ValuePairs *last_value_pairs;
 extern struct _ValuePairsTransformSet *last_vp_transset;
+extern struct _LogMatcherOptions *last_matcher_options;
+extern struct _HostResolveOptions *last_host_resolve_options;
+extern struct _StatsOptions *last_stats_options;
 
 }
 
@@ -74,13 +79,9 @@ extern struct _ValuePairsTransformSet *last_vp_transset;
 
 %code {
 
-# ifndef YYID
-# define YYID(N) N
-# endif
-
 # define YYLLOC_DEFAULT(Current, Rhs, N)                                \
   do {                                                                  \
-    if (YYID (N))                                                       \
+    if (N)                                                              \
       {                                                                 \
         (Current).level = YYRHSLOC(Rhs, 1).level;                       \
         (Current).first_line   = YYRHSLOC (Rhs, 1).first_line;          \
@@ -96,7 +97,14 @@ extern struct _ValuePairsTransformSet *last_vp_transset;
         (Current).first_column = (Current).last_column =                \
           YYRHSLOC (Rhs, 0).last_column;                                \
       }                                                                 \
-  } while (YYID (0))
+  } while (0)
+
+#define CHECK_ERROR_WITHOUT_MESSAGE(val, token) do {                    \
+    if (!(val))                                                         \
+      {                                                                 \
+        YYERROR;                                                        \
+      }                                                                 \
+  } while (0)
 
 #define CHECK_ERROR(val, token, errorfmt, ...) do {                     \
     if (!(val))                                                         \
@@ -104,7 +112,7 @@ extern struct _ValuePairsTransformSet *last_vp_transset;
         if (errorfmt)                                                   \
           {                                                             \
             gchar __buf[256];                                           \
-            g_snprintf(__buf, sizeof(__buf), errorfmt ? errorfmt : "x", ## __VA_ARGS__); \
+            g_snprintf(__buf, sizeof(__buf), errorfmt, ## __VA_ARGS__); \
             yyerror(& (token), lexer, NULL, NULL, __buf);               \
           }                                                             \
         YYERROR;                                                        \
@@ -166,37 +174,22 @@ extern struct _ValuePairsTransformSet *last_vp_transset;
 /* source & destination items */
 %token KW_INTERNAL                    10010
 %token KW_FILE                        10011
-
-%token KW_SQL                         10030
-%token KW_TYPE                        10031
-%token KW_COLUMNS                     10032
-%token KW_INDEXES                     10033
-%token KW_VALUES                      10034
-%token KW_PASSWORD                    10035
-%token KW_DATABASE                    10036
-%token KW_USERNAME                    10037
-%token KW_TABLE                       10038
-%token KW_ENCODING                    10039
-%token KW_SESSION_STATEMENTS          10040
-
-%token KW_DELIMITERS                  10050
-%token KW_QUOTES                      10051
-%token KW_QUOTE_PAIRS                 10052
-%token KW_NULL                        10053
-
 %token KW_SYSLOG                      10060
 
 /* option items */
 %token KW_MARK_FREQ                   10071
 %token KW_STATS_FREQ                  10072
 %token KW_STATS_LEVEL                 10073
-%token KW_FLUSH_LINES                 10074
-%token KW_SUPPRESS                    10075
-%token KW_FLUSH_TIMEOUT               10076
-%token KW_LOG_MSG_SIZE                10077
-%token KW_FILE_TEMPLATE               10078
-%token KW_PROTO_TEMPLATE              10079
-%token KW_MARK_MODE                   10080
+%token KW_STATS_LIFETIME	      10074
+%token KW_FLUSH_LINES                 10075
+%token KW_SUPPRESS                    10076
+%token KW_FLUSH_TIMEOUT               10077
+%token KW_LOG_MSG_SIZE                10078
+%token KW_FILE_TEMPLATE               10079
+%token KW_PROTO_TEMPLATE              10080
+%token KW_MARK_MODE                   10081
+%token KW_ENCODING                    10082
+%token KW_TYPE                        10083
 
 %token KW_CHAIN_HOSTNAMES             10090
 %token KW_NORMALIZE_HOSTNAMES         10091
@@ -208,6 +201,7 @@ extern struct _ValuePairsTransformSet *last_vp_transset;
 
 %token KW_USE_DNS                     10110
 %token KW_USE_FQDN                    10111
+%token KW_CUSTOM_DOMAIN	              10112
 
 %token KW_DNS_CACHE                   10120
 %token KW_DNS_CACHE_SIZE              10121
@@ -217,6 +211,8 @@ extern struct _ValuePairsTransformSet *last_vp_transset;
 %token KW_DNS_CACHE_HOSTS             10132
 
 %token KW_PERSIST_ONLY                10140
+%token KW_USE_RCPTID                  10141
+%token KW_USE_UNIQID                  10142
 
 %token KW_TZ_CONVERT                  10150
 %token KW_TS_FORMAT                   10151
@@ -231,6 +227,9 @@ extern struct _ValuePairsTransformSet *last_vp_transset;
 
 %token KW_THROTTLE                    10170
 %token KW_THREADED                    10171
+%token KW_PASS_UNIX_CREDENTIALS       10231
+
+%token KW_PERSIST_NAME                10302
 
 /* log statement options */
 %token KW_FLAGS                       10190
@@ -267,6 +266,7 @@ extern struct _ValuePairsTransformSet *last_vp_transset;
 
 %token KW_TEMPLATE                    10270
 %token KW_TEMPLATE_ESCAPE             10271
+%token KW_TEMPLATE_FUNCTION           10272
 
 %token KW_DEFAULT_FACILITY            10300
 %token KW_DEFAULT_LEVEL               10301
@@ -284,16 +284,12 @@ extern struct _ValuePairsTransformSet *last_vp_transset;
 %token KW_MESSAGE                     10354
 %token KW_NETMASK                     10355
 %token KW_TAGS                        10356
+%token KW_NETMASK6                    10357
 
 /* parser items */
 
-%token KW_VALUE                       10361
-
 /* rewrite items */
-
 %token KW_REWRITE                     10370
-%token KW_SET                         10371
-%token KW_SUBST                       10372
 
 /* yes/no switches */
 
@@ -315,9 +311,10 @@ extern struct _ValuePairsTransformSet *last_vp_transset;
 %token LL_EOL                         10428
 %token LL_ERROR                       10429
 
+%destructor { free($$); } <cptr>
+
 /* value pairs */
 %token KW_VALUE_PAIRS                 10500
-%token KW_SELECT                      10501
 %token KW_EXCLUDE                     10502
 %token KW_PAIR                        10503
 %token KW_KEY                         10504
@@ -329,6 +326,8 @@ extern struct _ValuePairsTransformSet *last_vp_transset;
 
 %token KW_ON_ERROR                    10510
 
+%token KW_RETRIES                     10511
+
 /* END_DECLS */
 
 %code {
@@ -337,13 +336,14 @@ extern struct _ValuePairsTransformSet *last_vp_transset;
 #include "cfg.h"
 #include "cfg-tree.h"
 #include "template/templates.h"
+#include "template/user-function.h"
 #include "logreader.h"
+#include "logpipe.h"
 #include "parser/parser-expr.h"
 #include "rewrite/rewrite-expr.h"
 #include "rewrite/rewrite-expr-parser.h"
 #include "filter/filter-expr-parser.h"
-#include "value-pairs.h"
-#include "vptransform.h"
+#include "value-pairs/value-pairs.h"
 #include "file-perms.h"
 #include "block-ref-parser.h"
 #include "plugin.h"
@@ -372,6 +372,10 @@ LogTemplate *last_template;
 CfgArgs *last_block_args;
 ValuePairs *last_value_pairs;
 ValuePairsTransformSet *last_vp_transset;
+LogMatcherOptions *last_matcher_options;
+HostResolveOptions *last_host_resolve_options;
+StatsOptions *last_stats_options;
+DNSCacheOptions *last_dns_cache_options;
 
 }
 
@@ -382,6 +386,7 @@ ValuePairsTransformSet *last_vp_transset;
 %type   <ptr> parser_stmt
 %type   <ptr> rewrite_stmt
 %type   <ptr> log_stmt
+%type   <ptr> plugin_stmt
 
 /* START_DECLS */
 
@@ -421,7 +426,6 @@ ValuePairsTransformSet *last_vp_transset;
 
 %type	<num> yesno
 %type   <num> dnsmode
-%type   <num> regexp_option_flags
 %type	<num> dest_writer_options_flags
 
 %type	<cptr> string
@@ -432,6 +436,11 @@ ValuePairsTransformSet *last_vp_transset;
 %type   <num> level_string
 
 /* END_DECLS */
+
+%type   <ptr> template_def
+%type   <ptr> template_block
+%type   <ptr> template_simple
+%type   <ptr> template_fn
 
 
 %%
@@ -453,6 +462,7 @@ stmt
 	| template_stmt
 	| options_stmt
 	| block_stmt
+	| plugin_stmt
 	;
 
 expr_stmt
@@ -483,6 +493,15 @@ dest_stmt
 filter_stmt
         : KW_FILTER string '{' filter_content '}'
           {
+            /* NOTE: the filter() subexpression (e.g. the one that invokes
+             * one filter expression from another) depends on the layout
+             * parsed into the cfg-tree when looking up the referenced
+             * filter expression.  So when changing how a filter statement
+             * is transformed into the cfg-tree, make sure you check
+             * filter-call.c, especially filter_call_init() function as
+             * well.
+             */
+
             $$ = log_expr_node_new_filter($2, $4, &@1);
             free($2);
           }
@@ -513,6 +532,24 @@ log_stmt
           }
 
 	;
+
+
+plugin_stmt
+        : LL_IDENTIFIER
+          {
+            Plugin *p;
+            gint context = LL_CONTEXT_ROOT;
+            gpointer result;
+
+            p = plugin_find(configuration, context, $1);
+            CHECK_ERROR(p, @1, "%s plugin %s not found", cfg_lexer_lookup_context_name_by_type(context), $1);
+
+            result = plugin_parse_config(p, configuration, &@1, NULL);
+            free($1);
+            if (!result)
+              YYERROR;
+            $$ = NULL;
+          }
 
 /* START_RULES */
 
@@ -562,7 +599,7 @@ source_afinter
 
 source_afinter_params
         : {
-            last_driver = afinter_sd_new();
+            last_driver = afinter_sd_new(configuration);
             last_source_options = &((AFInterSourceDriver *) last_driver)->source_options;
           }
           source_afinter_options { $$ = last_driver; }
@@ -582,9 +619,9 @@ filter_content
         : {
             FilterExprNode *last_filter_expr = NULL;
 
-	    CHECK_ERROR(cfg_parser_parse(&filter_expr_parser, lexer, (gpointer *) &last_filter_expr, NULL), @$, NULL);
+	    CHECK_ERROR_WITHOUT_MESSAGE(cfg_parser_parse(&filter_expr_parser, lexer, (gpointer *) &last_filter_expr, NULL), @$);
 
-            $$ = log_expr_node_new_pipe(log_filter_pipe_new(last_filter_expr), &@$);
+            $$ = log_expr_node_new_pipe(log_filter_pipe_new(last_filter_expr, configuration), &@$);
 	  }
 	;
 
@@ -593,7 +630,7 @@ parser_content
           {
             LogExprNode *last_parser_expr = NULL;
 
-            CHECK_ERROR(cfg_parser_parse(&parser_expr_parser, lexer, (gpointer *) &last_parser_expr, NULL), @$, NULL);
+            CHECK_ERROR_WITHOUT_MESSAGE(cfg_parser_parse(&parser_expr_parser, lexer, (gpointer *) &last_parser_expr, NULL), @$);
             $$ = last_parser_expr;
           }
         ;
@@ -603,7 +640,7 @@ rewrite_content
           {
             LogExprNode *last_rewrite_expr = NULL;
 
-            CHECK_ERROR(cfg_parser_parse(&rewrite_expr_parser, lexer, (gpointer *) &last_rewrite_expr, NULL), @$, NULL);
+            CHECK_ERROR_WITHOUT_MESSAGE(cfg_parser_parse(&rewrite_expr_parser, lexer, (gpointer *) &last_rewrite_expr, NULL), @$);
             $$ = last_rewrite_expr;
           }
         ;
@@ -715,15 +752,45 @@ options_stmt
 	;
 	
 template_stmt
+        : template_def
+          {
+            CHECK_ERROR(cfg_tree_add_template(&configuration->tree, $1) || cfg_allow_config_dups(configuration), @1, "duplicate template");
+          }
+        | template_fn
+          {
+            user_template_function_register(configuration, last_template->name, last_template);
+            log_template_unref(last_template);
+            last_template = NULL;
+          }
+        ;
+
+template_def
+        : template_block
+        | template_simple
+        ;
+
+template_block
 	: KW_TEMPLATE string
 	  {
 	    last_template = log_template_new(configuration, $2);
-	    free($2);
 	  }
-	  '{' template_items '}'
+	  '{' template_items '}'						{ $$ = last_template; free($2); }
+        ;
+
+template_simple
+        : KW_TEMPLATE string
           {
-            CHECK_ERROR(cfg_tree_add_template(&configuration->tree, last_template) || cfg_allow_config_dups(configuration), @2, "duplicate template");
+	    last_template = log_template_new(configuration, $2);
           }
+          template_content_inner						{ $$ = last_template; free($2); }
+	;
+
+template_fn
+        : KW_TEMPLATE_FUNCTION string
+          {
+	    last_template = log_template_new(configuration, $2);
+          }
+          template_content_inner						{ $$ = last_template; free($2); }
 	;
 	
 template_items
@@ -813,57 +880,58 @@ options_items
 
 options_item
 	: KW_MARK_FREQ '(' LL_NUMBER ')'		{ configuration->mark_freq = $3; }
-	| KW_STATS_FREQ '(' LL_NUMBER ')'          { configuration->stats_freq = $3; }
-	| KW_STATS_LEVEL '(' LL_NUMBER ')'         { configuration->stats_level = $3; }
 	| KW_FLUSH_LINES '(' LL_NUMBER ')'		{ configuration->flush_lines = $3; }
         | KW_MARK_MODE '(' KW_INTERNAL ')'         { cfg_set_mark_mode(configuration, "internal"); }
         | KW_MARK_MODE '(' string ')'
           {
             CHECK_ERROR(cfg_lookup_mark_mode($3) > 0 && cfg_lookup_mark_mode($3) != MM_GLOBAL, @3, "illegal global mark-mode");
+            cfg_set_mark_mode(configuration, $3);
             free($3);
           }
 	| KW_FLUSH_TIMEOUT '(' LL_NUMBER ')'	{ configuration->flush_timeout = $3; }
 	| KW_CHAIN_HOSTNAMES '(' yesno ')'	{ configuration->chain_hostnames = $3; }
-	| KW_NORMALIZE_HOSTNAMES '(' yesno ')'	{ configuration->normalize_hostnames = $3; }
 	| KW_KEEP_HOSTNAME '(' yesno ')'	{ configuration->keep_hostname = $3; }
 	| KW_CHECK_HOSTNAME '(' yesno ')'	{ configuration->check_hostname = $3; }
 	| KW_BAD_HOSTNAME '(' string ')'	{ cfg_bad_hostname_set(configuration, $3); free($3); }
-	| KW_USE_FQDN '(' yesno ')'		{ configuration->use_fqdn = $3; }
-	| KW_USE_DNS '(' dnsmode ')'		{ configuration->use_dns = $3; }
 	| KW_TIME_REOPEN '(' LL_NUMBER ')'		{ configuration->time_reopen = $3; }
 	| KW_TIME_REAP '(' LL_NUMBER ')'		{ configuration->time_reap = $3; }
 	| KW_TIME_SLEEP '(' LL_NUMBER ')'	{}
 	| KW_SUPPRESS '(' LL_NUMBER ')'		{ configuration->suppress = $3; }
 	| KW_THREADED '(' yesno ')'		{ configuration->threaded = $3; }
+	| KW_PASS_UNIX_CREDENTIALS '(' yesno ')' { configuration->pass_unix_credentials = $3; }
+	| KW_USE_RCPTID '(' yesno ')'		{ cfg_set_use_uniqid($3); }
+	| KW_USE_UNIQID '(' yesno ')'		{ cfg_set_use_uniqid($3); }
 	| KW_LOG_FIFO_SIZE '(' LL_NUMBER ')'	{ configuration->log_fifo_size = $3; }
-	| KW_LOG_IW_SIZE '(' LL_NUMBER ')'	{ msg_error("Using a global log-iw-size() option was removed, please use a per-source log-iw-size()", NULL); }
-	| KW_LOG_FETCH_LIMIT '(' LL_NUMBER ')'	{ msg_error("Using a global log-fetch-limit() option was removed, please use a per-source log-fetch-limit()", NULL); }
+	| KW_LOG_IW_SIZE '(' LL_NUMBER ')'	{ msg_error("Using a global log-iw-size() option was removed, please use a per-source log-iw-size()"); }
+	| KW_LOG_FETCH_LIMIT '(' LL_NUMBER ')'	{ msg_error("Using a global log-fetch-limit() option was removed, please use a per-source log-fetch-limit()"); }
 	| KW_LOG_MSG_SIZE '(' LL_NUMBER ')'	{ configuration->log_msg_size = $3; }
 	| KW_KEEP_TIMESTAMP '(' yesno ')'	{ configuration->keep_timestamp = $3; }
 	| KW_CREATE_DIRS '(' yesno ')'		{ configuration->create_dirs = $3; }
-	| KW_OWNER '(' string_or_number ')'	{ cfg_file_owner_set(configuration, $3); free($3); }
-	| KW_OWNER '(' ')'	                { cfg_file_owner_set(configuration, "-2"); }
-	| KW_GROUP '(' string_or_number ')'	{ cfg_file_group_set(configuration, $3); free($3); }
-	| KW_GROUP '(' ')'                    	{ cfg_file_group_set(configuration, "-2"); }
-	| KW_PERM '(' LL_NUMBER ')'		{ cfg_file_perm_set(configuration, $3); }
-	| KW_PERM '(' ')'		        { cfg_file_perm_set(configuration, -2); }
-	| KW_DIR_OWNER '(' string_or_number ')'	{ cfg_dir_owner_set(configuration, $3); free($3); }
-	| KW_DIR_OWNER '('  ')'	                { cfg_dir_owner_set(configuration, "-2"); }
-	| KW_DIR_GROUP '(' string_or_number ')'	{ cfg_dir_group_set(configuration, $3); free($3); }
-	| KW_DIR_GROUP '('  ')'	                { cfg_dir_group_set(configuration, "-2"); }
-	| KW_DIR_PERM '(' LL_NUMBER ')'		{ cfg_dir_perm_set(configuration, $3); }
-	| KW_DIR_PERM '('  ')'		        { cfg_dir_perm_set(configuration, -2); }
-	| KW_DNS_CACHE '(' yesno ')' 		{ configuration->use_dns_cache = $3; }
-	| KW_DNS_CACHE_SIZE '(' LL_NUMBER ')'	{ configuration->dns_cache_size = $3; }
-	| KW_DNS_CACHE_EXPIRE '(' LL_NUMBER ')'	{ configuration->dns_cache_expire = $3; }
-	| KW_DNS_CACHE_EXPIRE_FAILED '(' LL_NUMBER ')'
-	  			{ configuration->dns_cache_expire_failed = $3; }
-	| KW_DNS_CACHE_HOSTS '(' string ')'     { configuration->dns_cache_hosts = g_strdup($3); free($3); }
+        | KW_CUSTOM_DOMAIN '(' string ')'       { configuration->custom_domain = g_strdup($3); free($3); }
 	| KW_FILE_TEMPLATE '(' string ')'	{ configuration->file_template_name = g_strdup($3); free($3); }
 	| KW_PROTO_TEMPLATE '(' string ')'	{ configuration->proto_template_name = g_strdup($3); free($3); }
 	| KW_RECV_TIME_ZONE '(' string ')'      { configuration->recv_time_zone = g_strdup($3); free($3); }
 	| { last_template_options = &configuration->template_options; } template_option
+	| { last_host_resolve_options = &configuration->host_resolve_options; } host_resolve_option
+	| { last_stats_options = &configuration->stats_options; } stat_option
+	| { last_dns_cache_options = &configuration->dns_cache_options; } dns_cache_option
+	| { last_file_perm_options = &configuration->file_perm_options; } file_perm_option
 	;
+
+stat_option
+	: KW_STATS_FREQ '(' LL_NUMBER ')'          { last_stats_options->log_freq = $3; }
+	| KW_STATS_LEVEL '(' LL_NUMBER ')'         { last_stats_options->level = $3; }
+	| KW_STATS_LIFETIME '(' LL_NUMBER ')'      { last_stats_options->lifetime = $3; }
+	;
+
+dns_cache_option
+	: KW_DNS_CACHE_SIZE '(' LL_NUMBER ')'	{ last_dns_cache_options->cache_size = $3; }
+	| KW_DNS_CACHE_EXPIRE '(' LL_NUMBER ')'	{ last_dns_cache_options->expire = $3; }
+	| KW_DNS_CACHE_EXPIRE_FAILED '(' LL_NUMBER ')'
+	                                        { last_dns_cache_options->expire_failed = $3; }
+	| KW_DNS_CACHE_HOSTS '(' string ')'     { last_dns_cache_options->hosts = g_strdup($3); free($3); }
+        ;
+
 
 /* START_RULES */
 
@@ -927,11 +995,6 @@ facility_string
         | KW_SYSLOG 				{ $$ = LOG_SYSLOG; }
         ;
 
-regexp_option_flags
-        : string regexp_option_flags            { $$ = log_matcher_lookup_flag($1) | $2; free($1); }
-        |                                       { $$ = 0; }
-        ;
-
 parser_opt
         : KW_TEMPLATE '(' string ')'            {
                                                   LogTemplate *template;
@@ -944,35 +1007,41 @@ parser_opt
                                                 }
         ;
 
-parser_column_opt
-        : parser_opt
-        | KW_COLUMNS '(' string_list ')'        { log_column_parser_set_columns((LogColumnParser *) last_parser, $3); }
-        ;
-
 /* LogSource related options */
 source_option
         /* NOTE: plugins need to set "last_source_options" in order to incorporate this rule in their grammar */
 	: KW_LOG_IW_SIZE '(' LL_NUMBER ')'	{ last_source_options->init_window_size = $3; }
 	| KW_CHAIN_HOSTNAMES '(' yesno ')'	{ last_source_options->chain_hostnames = $3; }
-	| KW_NORMALIZE_HOSTNAMES '(' yesno ')'	{ last_source_options->normalize_hostnames = $3; }
 	| KW_KEEP_HOSTNAME '(' yesno ')'	{ last_source_options->keep_hostname = $3; }
-        | KW_USE_FQDN '(' yesno ')'             { last_source_options->use_fqdn = $3; }
-        | KW_USE_DNS '(' dnsmode ')'            { last_source_options->use_dns = $3; }
-	| KW_DNS_CACHE '(' yesno ')' 		{ last_source_options->use_dns_cache = $3; }
 	| KW_PROGRAM_OVERRIDE '(' string ')'	{ last_source_options->program_override = g_strdup($3); free($3); }
 	| KW_HOST_OVERRIDE '(' string ')'	{ last_source_options->host_override = g_strdup($3); free($3); }
 	| KW_LOG_PREFIX '(' string ')'	        { gchar *p = strrchr($3, ':'); if (p) *p = 0; last_source_options->program_override = g_strdup($3); free($3); }
 	| KW_KEEP_TIMESTAMP '(' yesno ')'	{ last_source_options->keep_timestamp = $3; }
         | KW_TAGS '(' string_list ')'		{ log_source_options_set_tags(last_source_options, $3); }
+        | { last_host_resolve_options = &last_source_options->host_resolve_options; } host_resolve_option
+        | driver_option
         ;
 
 source_proto_option
-        : KW_ENCODING '(' string ')'		{ last_proto_server_options->encoding = g_strdup($3); free($3); }
+        : KW_ENCODING '(' string ')'
+          {
+            CHECK_ERROR(log_proto_server_options_set_encoding(last_proto_server_options, $3),
+                        @3,
+                        "unknown encoding %s", $3);
+            free($3);
+          }
 	| KW_LOG_MSG_SIZE '(' LL_NUMBER ')'	{ last_proto_server_options->max_msg_size = $3; }
         ;
 
 source_reader_options
 	: source_reader_option source_reader_options
+	;
+
+host_resolve_option
+        : KW_USE_FQDN '(' yesno ')'             { last_host_resolve_options->use_fqdn = $3; }
+        | KW_USE_DNS '(' dnsmode ')'            { last_host_resolve_options->use_dns = $3; }
+	| KW_DNS_CACHE '(' yesno ')' 		{ last_host_resolve_options->use_dns_cache = $3; }
+	| KW_NORMALIZE_HOSTNAMES '(' yesno ')'	{ last_host_resolve_options->normalize_hostnames = $3; }
 	;
 
 msg_format_option
@@ -1011,6 +1080,16 @@ source_reader_option_flags
 	|
 	;
 
+driver_option
+    : KW_PERSIST_NAME '(' string ')' { log_pipe_set_persist_name(&last_driver->super, g_strdup($3)); free($3); }
+    ;
+
+threaded_dest_driver_option
+	: KW_RETRIES '(' LL_NUMBER ')'
+        {
+          log_threaded_dest_driver_set_max_retries(last_driver, $3);
+        }
+
 dest_driver_option
         /* NOTE: plugins need to set "last_driver" in order to incorporate this rule in their grammar */
 
@@ -1034,6 +1113,7 @@ dest_driver_option
               }
             log_driver_add_plugin(last_driver, (LogDriverPlugin *) value);
           }
+    | driver_option
         ;
 
 dest_writer_options
@@ -1075,21 +1155,17 @@ dest_writer_options_flags
 
 file_perm_option
 	: KW_OWNER '(' string_or_number ')'	{ file_perm_options_set_file_uid(last_file_perm_options, $3); free($3); }
-	| KW_OWNER '(' ')'	                { file_perm_options_set_file_uid(last_file_perm_options, "-2"); }
+	| KW_OWNER '(' ')'	                { file_perm_options_dont_change_file_uid(last_file_perm_options); }
 	| KW_GROUP '(' string_or_number ')'	{ file_perm_options_set_file_gid(last_file_perm_options, $3); free($3); }
-	| KW_GROUP '(' ')'	                { file_perm_options_set_file_gid(last_file_perm_options, "-2"); }
+	| KW_GROUP '(' ')'	                { file_perm_options_dont_change_file_gid(last_file_perm_options); }
 	| KW_PERM '(' LL_NUMBER ')'		{ file_perm_options_set_file_perm(last_file_perm_options, $3); }
-	| KW_PERM '(' ')'		        { file_perm_options_set_file_perm(last_file_perm_options, -2); }
-        ;
-
-file_dir_perm_option
-        : file_perm_option
+	| KW_PERM '(' ')'		        { file_perm_options_dont_change_file_perm(last_file_perm_options); }
         | KW_DIR_OWNER '(' string_or_number ')'	{ file_perm_options_set_dir_uid(last_file_perm_options, $3); free($3); }
-	| KW_DIR_OWNER '(' ')'	                { file_perm_options_set_dir_uid(last_file_perm_options, "-2"); }
+	| KW_DIR_OWNER '(' ')'	                { file_perm_options_dont_change_dir_uid(last_file_perm_options); }
 	| KW_DIR_GROUP '(' string_or_number ')'	{ file_perm_options_set_dir_gid(last_file_perm_options, $3); free($3); }
-	| KW_DIR_GROUP '(' ')'	                { file_perm_options_set_dir_gid(last_file_perm_options, "-2"); }
+	| KW_DIR_GROUP '(' ')'	                { file_perm_options_dont_change_dir_gid(last_file_perm_options); }
 	| KW_DIR_PERM '(' LL_NUMBER ')'		{ file_perm_options_set_dir_perm(last_file_perm_options, $3); }
-	| KW_DIR_PERM '(' ')'		        { file_perm_options_set_dir_perm(last_file_perm_options, -2); }
+	| KW_DIR_PERM '(' ')'		        { file_perm_options_dont_change_dir_perm(last_file_perm_options); }
         ;
 
 template_option
@@ -1108,6 +1184,16 @@ template_option
           log_template_options_set_on_error(last_template_options, on_error);
         }
 	;
+
+matcher_option
+        : KW_TYPE '(' string ')'		{ CHECK_ERROR(log_matcher_options_set_type(last_matcher_options, $3), @3, "unknown matcher type"); free($3); }
+        | KW_FLAGS '(' matcher_flags ')'
+        ;
+
+matcher_flags
+        : string matcher_flags			{ CHECK_ERROR(log_matcher_options_process_flag(last_matcher_options, $1), @1, "unknown matcher flag"); free($1); }
+        |
+        ;
 
 value_pair_option
 	: KW_VALUE_PAIRS
@@ -1142,14 +1228,14 @@ vp_option
         }
         vp_rekey_options
         ')' { value_pairs_add_transforms(last_value_pairs, last_vp_transset); } ')'
-	| KW_KEY '(' string ')'		         { value_pairs_add_glob_pattern(last_value_pairs, $3, TRUE); free($3);  }
+	| KW_KEY '(' string_list ')'		         { value_pairs_add_glob_patterns(last_value_pairs, $3, TRUE); }
         | KW_REKEY '(' string
         {
           last_vp_transset = value_pairs_transform_set_new($3);
           free($3);
         }
         vp_rekey_options ')'                     { value_pairs_add_transforms(last_value_pairs, last_vp_transset); }
-	| KW_EXCLUDE '(' string ')'	         { value_pairs_add_glob_pattern(last_value_pairs, $3, FALSE); free($3); }
+        | KW_EXCLUDE '(' string_list ')'         { value_pairs_add_glob_patterns(last_value_pairs, $3, FALSE); }
 	| KW_SCOPE '(' vp_scope_list ')'
 	;
 

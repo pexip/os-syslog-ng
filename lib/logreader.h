@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -59,7 +59,7 @@ void log_reader_set_follow_filename(LogReader *self, const gchar *follow_filenam
 void log_reader_set_peer_addr(LogReader *s, GSockAddr *peer_addr);
 void log_reader_set_immediate_check(LogReader *s);
 void log_reader_reopen(LogReader *s, LogProtoServer *proto, PollEvents *poll_events);
-LogReader *log_reader_new(void);
+LogReader *log_reader_new(GlobalConfig *cfg);
 
 void log_reader_options_defaults(LogReaderOptions *options);
 void log_reader_options_init(LogReaderOptions *options, GlobalConfig *cfg, const gchar *group_name);

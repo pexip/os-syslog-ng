@@ -1,6 +1,6 @@
-/*
- * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2012 Balázs Scheidler
+ /*
+ * Copyright (c) 2002-2013 Balabit
+ * Copyright (c) 1998-2013 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -22,33 +22,30 @@
  *
  */
 #include "mainloop.h"
+#include "mainloop-worker.h"
+#include "mainloop-io-worker.h"
+#include "mainloop-call.h"
 #include "apphook.h"
 #include "cfg.h"
-#include "stats.h"
+#include "stats/stats-registry.h"
 #include "messages.h"
 #include "children.h"
-#include "misc.h"
-#include "control.h"
-#include "logqueue.h"
-#include "dnscache.h"
-#include "tls-support.h"
-#include "scratch-buffers.h"
+#include "control/control.h"
+#include "reloc.h"
+#include "service-management.h"
+#include "persist-state.h"
+#include "run-id.h"
+#include "host-id.h"
+#include "debugger/debugger-main.h"
+#include "plugin.h"
+#include "resolved-configurable-paths.h"
 
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <string.h>
-#include <netinet/in.h>
-#include <arpa/nameser.h>
-#include <resolv.h>
-#include <time.h>
 #include <iv.h>
 #include <iv_signal.h>
-#include <iv_work.h>
 #include <iv_event.h>
-
-#if ENABLE_SYSTEMD
-#include <systemd/sd-daemon.h>
-#endif
 
 /**
  * Processing model
@@ -91,20 +88,57 @@
  */
 
 /* parsed command line arguments */
-static gchar *cfgfilename = PATH_SYSLOG_NG_CONF;
-static const gchar *persist_file = PATH_PERSIST_CONFIG;
-static gchar *ctlfilename = PATH_CONTROL_SOCKET;
+
+/* NOTE: these should not be here, rather they should be either processed by
+ * the main module and then passed as parameters or propagated to a place
+ * closer to their usage.  The simple reason they are here, is that mainloop
+ * needed them and it implements the command line options to parse them.
+ * This is far from perfect. (Bazsi) */
 static gchar *preprocess_into = NULL;
 gboolean syntax_only = FALSE;
+gboolean interactive_mode = FALSE;
 
-
-gboolean under_termination = FALSE;
+/*
+ * This variable is used to detect that syslog-ng is being terminated, in which
+ * case ongoing reload operations are aborted.
+ *
+ * The variable is deeply embedded in various mainloop callbacks to get out
+ * of an ongoing reload and start doing the termination instead.  A better
+ * solution would be to use a queue for intrusive, worker-stopping
+ * operations and serialize such tasks so they won't interfere which each other.
+ *
+ * This interference is now implemented by conditionals scattered around the code.
+ *
+ * Example:
+ *   * reload is now taking two steps (marked R in the figure below)
+ *     1) parse the configuration and request worker threads to be stopped
+ *     2) apply the configuration once all threads exited
+ *   * termination is also taking two steps
+ *     1) send out the shutting down message and start waiting 100msec
+ *     2) terminate the mainloop
+ *
+ * The problem happens when reload and termination happen at around the same
+ * time and these steps are interleaved.
+ *
+ *   Normal operation: RRTT (e.g. reload finishes, then termination)
+ *   Problematic case: RTRT (e.g. reload starts, termination starts, config apply, terminate)
+ *
+ * In the problematic case, two independent operations do similar things to
+ * the mainloop, and to prevent misfortune we need to handle this case explicitly.
+ *
+ * Were the two operations serialized by some kind of queue, the problems
+ * would be gone.
+ */
+gboolean __main_loop_is_terminating = FALSE;
 
 /* signal handling */
 static struct iv_signal sighup_poll;
 static struct iv_signal sigterm_poll;
 static struct iv_signal sigint_poll;
 static struct iv_signal sigchild_poll;
+
+static struct iv_event exit_requested;
+static struct iv_event reload_config_requested;
 
 
 /* Currently running configuration, should not be used outside the mainloop
@@ -115,394 +149,7 @@ static struct iv_signal sigchild_poll;
  * finished.
  */
 static GlobalConfig *current_configuration;
-
-/************************************************************************************
- * Cross-thread function calls into the main loop
- ************************************************************************************/
-typedef struct _MainLoopTaskCallSite MainLoopTaskCallSite;
-struct _MainLoopTaskCallSite
-{
-  struct iv_list_head list;
-  MainLoopTaskFunc func;
-  gpointer user_data;
-  gpointer result;
-  gboolean pending;
-  gboolean wait;
-  GCond *cond;
-  GStaticMutex lock;
-};
-
-TLS_BLOCK_START
-{
-  MainLoopIOWorkerJob *main_loop_current_job;
-  gint main_loop_io_worker_id;
-  MainLoopTaskCallSite call_info;
-}
-TLS_BLOCK_END;
-
-static GStaticMutex main_task_lock = G_STATIC_MUTEX_INIT;
-static struct iv_list_head main_task_queue = IV_LIST_HEAD_INIT(main_task_queue);
-static struct iv_event main_task_posted;
-GThread *main_thread_handle;
-
-#define call_info  __tls_deref(call_info)
-
-gpointer
-main_loop_call(MainLoopTaskFunc func, gpointer user_data, gboolean wait)
-{
-  if (main_thread_handle == g_thread_self())
-    return func(user_data);
-
-  g_static_mutex_lock(&main_task_lock);
-
-  /* check if a previous call is being executed */
-  g_static_mutex_lock(&call_info.lock);
-  if (call_info.pending)
-    {
-      /* yes, it is still running, indicate that we need to be woken up */
-      call_info.wait = TRUE;
-      g_static_mutex_unlock(&call_info.lock);
-
-      while (call_info.pending)
-        g_cond_wait(call_info.cond, g_static_mutex_get_mutex(&main_task_lock));
-    }
-  else
-    {
-      g_static_mutex_unlock(&call_info.lock);
-    }
-
-  /* call_info.lock is no longer needed, since we're the only ones using call_info now */
-  INIT_IV_LIST_HEAD(&call_info.list);
-  call_info.pending = TRUE;
-  call_info.func = func;
-  call_info.user_data = user_data;
-  call_info.wait = wait;
-  if (!call_info.cond)
-    call_info.cond = g_cond_new();
-  iv_list_add(&call_info.list, &main_task_queue);
-  iv_event_post(&main_task_posted);
-  if (wait)
-    {
-      while (call_info.pending)
-        g_cond_wait(call_info.cond, g_static_mutex_get_mutex(&main_task_lock));
-    }
-  g_static_mutex_unlock(&main_task_lock);
-  return call_info.result;
-}
-
-static void
-main_loop_call_handler(gpointer user_data)
-{
-  g_static_mutex_lock(&main_task_lock);
-  while (!iv_list_empty(&main_task_queue))
-    {
-      MainLoopTaskCallSite *site;
-      gpointer result;
-
-      site = iv_list_entry(main_task_queue.next, MainLoopTaskCallSite, list);
-      iv_list_del_init(&site->list);
-      g_static_mutex_unlock(&main_task_lock);
-
-      result = site->func(site->user_data);
-
-      g_static_mutex_lock(&site->lock);
-      site->result = result;
-      site->pending = FALSE;
-      g_static_mutex_unlock(&site->lock);
-
-      g_static_mutex_lock(&main_task_lock);
-      if (site->wait)
-        g_cond_signal(site->cond);
-    }
-  g_static_mutex_unlock(&main_task_lock);
-}
-
-void
-main_loop_call_init(void)
-{
-  IV_EVENT_INIT(&main_task_posted);
-  main_task_posted.cookie = NULL;
-  main_task_posted.handler = main_loop_call_handler;
-  iv_event_register(&main_task_posted);
-}
-
-/************************************************************************************
- * stats timer
- ************************************************************************************/
-
-/* stats timer */
-static struct iv_timer stats_timer;
-
-static void
-stats_timer_rearm(gint stats_freq)
-{
-  stats_timer.cookie = GINT_TO_POINTER(stats_freq);
-  if (stats_freq > 0)
-    {
-      /* arm the timer */
-      iv_validate_now();
-      stats_timer.expires = iv_now;
-      timespec_add_msec(&stats_timer.expires, stats_freq * 1000);
-      iv_timer_register(&stats_timer);
-    }
-}
-
-static void
-stats_timer_elapsed(gpointer st)
-{
-  gint stats_freq = GPOINTER_TO_INT(st);
-
-  stats_generate_log();
-  stats_timer_rearm(stats_freq);
-}
-
-static void
-stats_timer_kickoff(GlobalConfig *cfg)
-{
-  if (iv_timer_registered(&stats_timer))
-    iv_timer_unregister(&stats_timer);
-
-  stats_timer_rearm(cfg->stats_freq);
-}
-
-/************************************************************************************
- * I/O worker threads
- ************************************************************************************/
-
-static struct iv_task main_loop_io_workers_reenable_jobs_task;
-static struct iv_work_pool main_loop_io_workers;
-static void (*main_loop_io_workers_sync_func)(void);
-
-/* number of I/O worker jobs running */
-static gint main_loop_io_workers_running;
-
-/* cause workers to stop, no new I/O jobs to be submitted */
-volatile gboolean main_loop_io_workers_quit;
-#define main_loop_current_job  __tls_deref(main_loop_current_job)
-
-
-#define MAIN_LOOP_MAX_WORKER_THREADS 64
-
-static GStaticMutex main_loop_io_workers_idmap_lock = G_STATIC_MUTEX_INIT;
-static guint64 main_loop_io_workers_idmap;
-
-/* the thread id is shifted by one, to make 0 the uninitialized state,
- * e.g. everything that sets it adds +1, everything that queries it
- * subtracts 1 */
-#define main_loop_io_worker_id __tls_deref(main_loop_io_worker_id)
-
-void
-main_loop_io_worker_thread_start(void *cookie)
-{
-  gint id;
-
-  dns_cache_init();
-  scratch_buffers_init();
-  g_static_mutex_lock(&main_loop_io_workers_idmap_lock);
-  /* NOTE: this algorithm limits the number of I/O worker threads to 64,
-   * since the ID map is stored in a single 64 bit integer.  If we ever need
-   * more threads than that, we can generalize this algorithm further. */
-
-  main_loop_io_worker_id = 0;
-  for (id = 0; id < main_loop_io_workers.max_threads && id < MAIN_LOOP_MAX_WORKER_THREADS; id++)
-    {
-      if ((main_loop_io_workers_idmap & (1 << id)) == 0)
-        {
-          /* id not yet used */
-
-          main_loop_io_worker_id = id + 1;
-          main_loop_io_workers_idmap |= (1 << id);
-          break;
-        }
-    }
-  g_static_mutex_unlock(&main_loop_io_workers_idmap_lock);
-}
-
-void
-main_loop_io_worker_thread_stop(void *cookie)
-{
-  g_static_mutex_lock(&main_loop_io_workers_idmap_lock);
-  if (main_loop_io_worker_id)
-    {
-      main_loop_io_workers_idmap &= ~(1 << (main_loop_io_worker_id - 1));
-      main_loop_io_worker_id = 0;
-    }
-  g_static_mutex_unlock(&main_loop_io_workers_idmap_lock);
-  dns_cache_destroy();
-  scratch_buffers_free();
-
-  if (call_info.cond)
-    g_cond_free(call_info.cond);
-}
-
-/* NOTE: only used by the unit test program to emulate worker threads with LogQueue */
-void
-main_loop_io_worker_set_thread_id(gint id)
-{
-  main_loop_io_worker_id = id + 1;
-}
-
-gint
-main_loop_io_worker_thread_id(void)
-{
-  return main_loop_io_worker_id - 1;
-}
-
-void
-main_loop_io_worker_reenable_jobs(void *s)
-{
-  main_loop_io_workers_quit = FALSE;
-  main_loop_io_workers_sync_func = NULL;
-}
-
-void
-main_loop_io_worker_job_submit(MainLoopIOWorkerJob *self)
-{
-  g_assert(self->working == FALSE);
-  if (main_loop_io_workers_quit)
-    return;
-  main_loop_io_workers_running++;
-  self->working = TRUE;
-  iv_work_pool_submit_work(&main_loop_io_workers, &self->work_item);
-}
-
-static void
-main_loop_io_worker_job_start(MainLoopIOWorkerJob *self)
-{
-  struct iv_list_head *lh, *lh2;
-
-  g_assert(main_loop_current_job == NULL);
-
-  main_loop_current_job = self;
-  self->work(self->user_data);
-  
-  iv_list_for_each_safe(lh, lh2, &self->finish_callbacks)
-    {
-      MainLoopIOWorkerFinishCallback *cb = iv_list_entry(lh, MainLoopIOWorkerFinishCallback, list);
-      
-      cb->func(cb->user_data);
-      iv_list_del_init(&cb->list);
-    }
-  g_assert(iv_list_empty(&self->finish_callbacks));
-  main_loop_current_job = NULL;
-}
-
-static void
-main_loop_io_worker_job_complete(MainLoopIOWorkerJob *self)
-{
-  self->working = FALSE;
-  main_loop_io_workers_running--;
-  self->completion(self->user_data);
-  if (main_loop_io_workers_quit && main_loop_io_workers_running == 0)
-    {
-       /* NOTE: we can't reenable I/O jobs by setting
-        * main_loop_io_workers_quit to FALSE right here, because a task
-        * generated by the old config might still be sitting in the task
-        * queue, to be invoked once we return from here.  Tasks cannot be
-        * cancelled, thus we have to get to the end of the currently running
-        * task queue.
-        *
-        * Thus we register another task
-        * (&main_loop_io_workers_reenable_jobs_task), which is guaranteed to
-        * be added to the end of the task queue, which reenables task
-        * submission.
-        *
-        *
-        * A second constraint is that any tasks submitted by the reload
-        * logic (sitting behind the sync_func() call below), MUST be
-        * registered after the reenable_jobs_task, because otherwise some
-        * I/O events will be missed, due to main_loop_io_workers_quit being
-        * TRUE.
-        *
-        *
-        *   |OldTask1|OldTask2|OldTask3| ReenableTask |NewTask1|NewTask2|NewTask3|
-        *   ^
-        *   | ivykis task list
-        *
-        * OldTasks get dropped because _quit is TRUE, NewTasks have to be
-        * executed properly, otherwise we'd hang.
-        */
-
-      iv_task_register(&main_loop_io_workers_reenable_jobs_task);
-      main_loop_io_workers_sync_func();
-    }
-}
-
-/*
- * Register a function to be called back when the current I/O job is
- * finished (in the worker thread).
- *
- * NOTE: we only support one pending callback at a time, may become a list of callbacks if needed in the future
- */
-void
-main_loop_io_worker_register_finish_callback(MainLoopIOWorkerFinishCallback *cb)
-{
-  g_assert(main_loop_current_job != NULL);
-  
-  iv_list_add(&cb->list, &main_loop_current_job->finish_callbacks);
-}
-
-void
-main_loop_io_worker_job_init(MainLoopIOWorkerJob *self)
-{
-  IV_WORK_ITEM_INIT(&self->work_item);
-  self->work_item.cookie = self;
-  self->work_item.work = (void (*)(void *)) main_loop_io_worker_job_start;
-  self->work_item.completion = (void (*)(void *)) main_loop_io_worker_job_complete;
-  INIT_IV_LIST_HEAD(&self->finish_callbacks);
-}
-
-static void
-main_loop_io_worker_sync_call(void (*func)(void))
-{
-  g_assert(main_loop_io_workers_sync_func == NULL || main_loop_io_workers_sync_func == func);
-
-  if (main_loop_io_workers_running == 0)
-    {
-      func();
-    }
-  else
-    {
-      main_loop_io_workers_quit = TRUE;
-      main_loop_io_workers_sync_func = func;
-    }
-}
-
-/************************************************************************************
- *
- ************************************************************************************/
-
-#if ENABLE_SYSTEMD
-static void
-main_loop_publish_status(const gchar *status)
-{
-  gchar *status_buffer;
-  time_t now = time(NULL);
-
-  status_buffer = g_strdup_printf("STATUS=%s (%s)", status, ctime(&now));
-  sd_notify(0, status_buffer);
-  g_free(status_buffer);
-}
-
-static void
-main_loop_clear_status(void)
-{
-  sd_notify(0, "STATUS=");
-}
-
-static void
-main_loop_indicate_readiness(void)
-{
-  sd_notify(0, "READY=1");
-}
-
-#else
-
-#define main_loop_publish_status(x)
-#define main_loop_clear_status()
-#define main_loop_indicate_readiness()
-
-#endif
+ThreadId main_thread_handle;
 
 /************************************************************************************
  * config load/reload
@@ -515,7 +162,7 @@ static GlobalConfig *main_loop_new_config;
 
 
 /* called when syslog-ng first starts up */
-static gboolean
+gboolean
 main_loop_initialize_state(GlobalConfig *cfg, const gchar *persist_filename)
 {
   gboolean success;
@@ -524,7 +171,10 @@ main_loop_initialize_state(GlobalConfig *cfg, const gchar *persist_filename)
   if (!persist_state_start(cfg->state))
     return FALSE;
 
+  run_id_init(cfg->state);
+  host_id_init(cfg->state);
   success = cfg_init(cfg);
+
   if (success)
     persist_state_commit(cfg->state);
   else
@@ -536,24 +186,34 @@ main_loop_initialize_state(GlobalConfig *cfg, const gchar *persist_filename)
 static void
 main_loop_reload_config_apply(void)
 {
+  if (main_loop_is_terminating())
+    {
+      if (main_loop_new_config)
+        {
+          cfg_free(main_loop_new_config);
+          main_loop_new_config = NULL;
+        }
+      return;
+    }
   main_loop_old_config->persist = persist_config_new();
   cfg_deinit(main_loop_old_config);
   cfg_persist_config_move(main_loop_old_config, main_loop_new_config);
 
   if (cfg_init(main_loop_new_config))
     {
-      msg_verbose("New configuration initialized", NULL);
+      msg_verbose("New configuration initialized");
       persist_config_free(main_loop_new_config->persist);
       main_loop_new_config->persist = NULL;
       cfg_free(main_loop_old_config);
       current_configuration = main_loop_new_config;
-      main_loop_clear_status();
+      service_management_clear_status();
     }
   else
     {
-      msg_error("Error initializing new configuration, reverting to old config", NULL);
-      main_loop_publish_status("Error initializing new configuration, using the old config");
+      msg_error("Error initializing new configuration, reverting to old config");
+      service_management_publish_status("Error initializing new configuration, using the old config");
       cfg_persist_config_move(main_loop_new_config, main_loop_old_config);
+      cfg_deinit(main_loop_new_config);
       if (!cfg_init(main_loop_old_config))
         {
           /* hmm. hmmm, error reinitializing old configuration, we're hosed.
@@ -571,19 +231,13 @@ main_loop_reload_config_apply(void)
     }
 
   /* this is already running with the new config in place */
-  res_init();
   app_post_config_loaded();
-  msg_notice("Configuration reload request received, reloading configuration",
-               NULL);
+  msg_notice("Configuration reload request received, reloading configuration");
 
  finish:
   main_loop_new_config = NULL;
   main_loop_old_config = NULL;
 
-  reset_cached_hostname();
-
-  stats_timer_kickoff(current_configuration);
-  stats_cleanup_orphans();
   return;
 }
 
@@ -591,7 +245,10 @@ main_loop_reload_config_apply(void)
 void
 main_loop_reload_config_initiate(void)
 {
-  main_loop_publish_status("Reloading configuration");
+  if (main_loop_is_terminating())
+    return;
+
+  service_management_publish_status("Reloading configuration");
 
   if (main_loop_new_config)
     {
@@ -608,18 +265,17 @@ main_loop_reload_config_initiate(void)
   main_loop_old_config = current_configuration;
   app_pre_config_loaded();
   main_loop_new_config = cfg_new(0);
-  if (!cfg_read_config(main_loop_new_config, cfgfilename, FALSE, NULL))
+  if (!cfg_read_config(main_loop_new_config, resolvedConfigurablePaths.cfgfilename, FALSE, NULL))
     {
       cfg_free(main_loop_new_config);
       main_loop_new_config = NULL;
       main_loop_old_config = NULL;
       msg_error("Error parsing configuration",
-                evt_tag_str(EVT_TAG_FILENAME, cfgfilename),
-                NULL);
-      main_loop_publish_status("Error parsing new configuration, using the old config");
+                evt_tag_str(EVT_TAG_FILENAME, resolvedConfigurablePaths.cfgfilename));
+      service_management_publish_status("Error parsing new configuration, using the old config");
       return;
     }
-  main_loop_io_worker_sync_call(main_loop_reload_config_apply);
+  main_loop_worker_sync_call(main_loop_reload_config_apply);
 }
 
 /************************************************************************************
@@ -634,7 +290,6 @@ main_loop_exit_finish(void)
   /* deinit the current configuration, as at this point we _know_ that no
    * threads are running.  This will unregister ivykis tasks and timers
    * that could fire while the configuration is being destructed */
-  dns_cache_deinit();
   cfg_deinit(current_configuration);
   iv_quit();
 }
@@ -642,8 +297,27 @@ main_loop_exit_finish(void)
 static void
 main_loop_exit_timer_elapsed(void *arg)
 {
-  main_loop_io_worker_sync_call(main_loop_exit_finish);
+  main_loop_worker_sync_call(main_loop_exit_finish);
 }
+
+static void
+main_loop_exit_initiate(void)
+{
+  if (main_loop_is_terminating())
+    return;
+
+  msg_notice("syslog-ng shutting down",
+             evt_tag_str("version", SYSLOG_NG_VERSION));
+
+  IV_TIMER_INIT(&main_loop_exit_timer);
+  iv_validate_now();
+  main_loop_exit_timer.expires = iv_now;
+  main_loop_exit_timer.handler = main_loop_exit_timer_elapsed;
+  timespec_add_msec(&main_loop_exit_timer.expires, 100);
+  iv_timer_register(&main_loop_exit_timer);
+  __main_loop_is_terminating = TRUE;
+}
+
 
 /************************************************************************************
  * signal handlers
@@ -652,27 +326,13 @@ main_loop_exit_timer_elapsed(void *arg)
 static void
 sig_hup_handler(void *s)
 {
-  if (!under_termination)
-    main_loop_reload_config_initiate();
+  main_loop_reload_config_initiate();
 }
 
 static void
 sig_term_handler(void *s)
 {
-  if (under_termination)
-    return;
-
-  msg_notice("syslog-ng shutting down",
-             evt_tag_str("version", VERSION),
-             NULL);
-
-  IV_TIMER_INIT(&main_loop_exit_timer);
-  iv_validate_now();
-  main_loop_exit_timer.expires = iv_now;
-  main_loop_exit_timer.handler = main_loop_exit_timer_elapsed;
-  timespec_add_msec(&main_loop_exit_timer.expires, 100);
-  iv_timer_register(&main_loop_exit_timer);
-  under_termination = TRUE;
+  main_loop_exit_initiate();
 }
 
 static void
@@ -694,39 +354,94 @@ sig_child_handler(void *s)
 }
 
 static void
-setup_signals(void)
+_ignore_signal(gint signum)
 {
   struct sigaction sa;
 
   memset(&sa, 0, sizeof(sa));
   sa.sa_handler = SIG_IGN;
-  sigaction(SIGPIPE, &sa, NULL);
+  sigaction(signum, &sa, NULL);
+}
+
+static void
+_register_signal_handler(struct iv_signal *signal_poll, gint signum, void (*handler)(void *))
+{
+  IV_SIGNAL_INIT(signal_poll);
+  signal_poll->signum = signum;
+  signal_poll->flags = IV_SIGNAL_FLAG_EXCLUSIVE;
+  signal_poll->cookie = NULL;
+  signal_poll->handler = handler;
+  iv_signal_register(signal_poll);
+}
+
+static void
+setup_signals(void)
+{
+  _ignore_signal(SIGPIPE);
+  _register_signal_handler(&sighup_poll, SIGHUP, sig_hup_handler);
+  _register_signal_handler(&sigchild_poll, SIGCHLD, sig_child_handler);
+  _register_signal_handler(&sigterm_poll, SIGTERM, sig_term_handler);
+  _register_signal_handler(&sigint_poll, SIGINT, sig_term_handler);
 }
 
 /************************************************************************************
  * syslog-ng main loop
  ************************************************************************************/
 
-/*
- * Returns: exit code to be returned to the calling process.
- */
-int
+static void
+_register_event(struct iv_event *event, void (*handler)(void *))
+{
+  IV_EVENT_INIT(event);
+  event->handler = handler;
+  event->cookie = NULL;
+  iv_event_register(event);
+}
+
+static void
+main_loop_init_events(void)
+{
+  _register_event(&exit_requested, (void (*)(void *)) main_loop_exit_initiate);
+  _register_event(&reload_config_requested, (void (*)(void *)) main_loop_reload_config_initiate);
+}
+
+void
+main_loop_exit(void)
+{
+  iv_event_post(&exit_requested);
+  return;
+}
+
+void
+main_loop_reload_config(void)
+{
+  iv_event_post(&reload_config_requested);
+  return;
+}
+
+void
 main_loop_init(void)
 {
-  main_loop_publish_status("Starting up...");
+  service_management_publish_status("Starting up...");
 
-  app_startup();
-  setup_signals();
-  main_loop_io_workers.thread_start = main_loop_io_worker_thread_start;
-  main_loop_io_workers.thread_stop = main_loop_io_worker_thread_stop;
-  iv_work_pool_create(&main_loop_io_workers);
-  IV_TASK_INIT(&main_loop_io_workers_reenable_jobs_task);
-  main_loop_io_workers_reenable_jobs_task.handler = main_loop_io_worker_reenable_jobs;
-  log_queue_set_max_threads(MIN(main_loop_io_workers.max_threads, MAIN_LOOP_MAX_WORKER_THREADS));
+  main_thread_handle = get_thread_id();
+  main_loop_worker_init();
+  main_loop_io_worker_init();
   main_loop_call_init();
 
+  main_loop_init_events();
+  if (!syntax_only)
+    control_init(resolvedConfigurablePaths.ctlfilename);
+  setup_signals();
+}
+
+/*
+ * Returns: exit code to be returned to the calling process, 0 on success.
+ */
+int
+main_loop_read_and_init_config(void)
+{
   current_configuration = cfg_new(0);
-  if (!cfg_read_config(current_configuration, cfgfilename, syntax_only, preprocess_into))
+  if (!cfg_read_config(current_configuration, resolvedConfigurablePaths.cfgfilename, syntax_only, preprocess_into))
     {
       return 1;
     }
@@ -736,86 +451,68 @@ main_loop_init(void)
       return 0;
     }
 
-  if (!main_loop_initialize_state(current_configuration, persist_file))
+  if (!main_loop_initialize_state(current_configuration, resolvedConfigurablePaths.persist_file))
     {
       return 2;
     }
   return 0;
 }
 
-int
+static void
+main_loop_free_config(void)
+{
+  cfg_free(current_configuration);
+  current_configuration = NULL;
+}
+
+void
+main_loop_deinit(void)
+{
+  main_loop_free_config();
+
+  if (!syntax_only)
+    control_destroy();
+
+  iv_event_unregister(&exit_requested);
+  iv_event_unregister(&reload_config_requested);
+  main_loop_call_deinit();
+  main_loop_io_worker_deinit();
+  main_loop_worker_deinit();
+}
+
+void
 main_loop_run(void)
 {
   msg_notice("syslog-ng starting up",
-             evt_tag_str("version", VERSION),
-             NULL);
-
-  IV_TIMER_INIT(&stats_timer);
-  stats_timer.handler = stats_timer_elapsed;
-
-  control_init(ctlfilename);
-
-  IV_SIGNAL_INIT(&sighup_poll);
-  sighup_poll.signum = SIGHUP;
-  sighup_poll.flags = IV_SIGNAL_FLAG_EXCLUSIVE;
-  sighup_poll.cookie = NULL;
-  sighup_poll.handler = sig_hup_handler;
-  iv_signal_register(&sighup_poll);
-
-  IV_SIGNAL_INIT(&sigchild_poll);
-  sigchild_poll.signum = SIGCHLD;
-  sigchild_poll.flags = IV_SIGNAL_FLAG_EXCLUSIVE;
-  sigchild_poll.handler = sig_child_handler;
-  iv_signal_register(&sigchild_poll);
-
-  IV_SIGNAL_INIT(&sigterm_poll);
-  sigterm_poll.signum = SIGTERM;
-  sigterm_poll.flags = IV_SIGNAL_FLAG_EXCLUSIVE;
-  sigterm_poll.handler = sig_term_handler;
-  iv_signal_register(&sigterm_poll);
-
-  IV_SIGNAL_INIT(&sigint_poll);
-  sigint_poll.signum = SIGINT;
-  sigint_poll.flags = IV_SIGNAL_FLAG_EXCLUSIVE;
-  sigint_poll.handler = sig_term_handler;
-  iv_signal_register(&sigint_poll);
-
-  stats_timer_kickoff(current_configuration);
+             evt_tag_str("version", SYSLOG_NG_VERSION));
 
   /* main loop */
-  main_loop_indicate_readiness();
-  main_loop_clear_status();
+  service_management_indicate_readiness();
+  service_management_clear_status();
+  if (interactive_mode)
+    {
+      plugin_load_module("python", current_configuration, NULL);
+      debugger_start(current_configuration);
+    }
   iv_main();
-  main_loop_publish_status("Shutting down...");
-
-  control_destroy();
-
-  cfg_deinit(current_configuration);
-  cfg_free(current_configuration);
-  current_configuration = NULL;
-  return 0;
+  service_management_publish_status("Shutting down...");
 }
 
 
 static GOptionEntry main_loop_options[] =
 {
-  { "cfgfile",           'f',         0, G_OPTION_ARG_STRING, &cfgfilename, "Set config file name, default=" PATH_SYSLOG_NG_CONF, "<config>" },
-  { "persist-file",      'R',         0, G_OPTION_ARG_STRING, &persist_file, "Set the name of the persistent configuration file, default=" PATH_PERSIST_CONFIG, "<fname>" },
+  { "cfgfile",           'f',         0, G_OPTION_ARG_STRING, &resolvedConfigurablePaths.cfgfilename, "Set config file name, default=" PATH_SYSLOG_NG_CONF, "<config>" },
+  { "persist-file",      'R',         0, G_OPTION_ARG_STRING, &resolvedConfigurablePaths.persist_file, "Set the name of the persistent configuration file, default=" PATH_PERSIST_CONFIG, "<fname>" },
   { "preprocess-into",     0,         0, G_OPTION_ARG_STRING, &preprocess_into, "Write the preprocessed configuration file to the file specified", "output" },
-  { "worker-threads",      0,         0, G_OPTION_ARG_INT, &main_loop_io_workers.max_threads, "Set the number of I/O worker threads", "<max>" },
   { "syntax-only",       's',         0, G_OPTION_ARG_NONE, &syntax_only, "Only read and parse config file", NULL},
-  { "control",           'c',         0, G_OPTION_ARG_STRING, &ctlfilename, "Set syslog-ng control socket, default=" PATH_CONTROL_SOCKET, "<ctlpath>" },
+  { "control",           'c',         0, G_OPTION_ARG_STRING, &resolvedConfigurablePaths.ctlfilename, "Set syslog-ng control socket, default=" PATH_CONTROL_SOCKET, "<ctlpath>" },
+  { "interactive",       'i',         0, G_OPTION_ARG_NONE, &interactive_mode, "Enable interactive mode" },
   { NULL },
 };
 
 void
 main_loop_add_options(GOptionContext *ctx)
 {
-#ifdef _SC_NPROCESSORS_ONLN
-  main_loop_io_workers.max_threads = MIN(MAX(2, sysconf(_SC_NPROCESSORS_ONLN)), MAIN_LOOP_MAX_WORKER_THREADS);
-#else
-  main_loop_io_workers.max_threads = 2;
-#endif
-
   g_option_context_add_main_entries(ctx, main_loop_options, NULL);
+  main_loop_io_worker_add_options(ctx);
 }

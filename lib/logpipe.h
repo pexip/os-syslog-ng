@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -26,7 +26,7 @@
 #define LOGPIPE_H_INCLUDED
 
 #include "syslog-ng.h"
-#include "logmsg.h"
+#include "logmsg/logmsg.h"
 #include "cfg.h"
 #include "atomic.h"
 #include "messages.h"
@@ -38,6 +38,7 @@
 #define NC_FILE_MOVED  4
 #define NC_FILE_EOF    5
 #define NC_FILE_SKIP   6
+#define NC_REOPEN_REQUIRED 7
 
 /* indicates that the LogPipe was initialized */
 #define PIF_INITIALIZED       0x0001
@@ -184,7 +185,7 @@ struct _LogPathOptions
     * ack_needed.
     */
 
-  gboolean ack_needed:1,
+  gboolean ack_needed;
 
   /* The user has requested flow-control on this processing path,
    * which means that the destination should invoke log_msg_ack()
@@ -198,7 +199,7 @@ struct _LogPathOptions
    * required action.
    */
 
-    flow_control_requested:1;
+  gboolean flow_control_requested;
 
   gboolean *matched;
 };
@@ -212,6 +213,7 @@ struct _LogPipe
   GlobalConfig *cfg;
   LogExprNode *expr_node;
   LogPipe *pipe_next;
+  const gchar *persist_name;
 
   /* user_data pointer of the "queue" method in case it is overridden
      by a plugin, see the explanation in the comment on the top. */
@@ -219,6 +221,8 @@ struct _LogPipe
   void (*queue)(LogPipe *self, LogMessage *msg, const LogPathOptions *path_options, gpointer user_data);
   gboolean (*init)(LogPipe *self);
   gboolean (*deinit)(LogPipe *self);
+
+  const gchar *(*generate_persist_name)(const LogPipe *self);
 
   /* clone this pipe when used in multiple locations in the processing
    * pipe-line. If it contains state, it should behave as if it was
@@ -230,13 +234,14 @@ struct _LogPipe
   void (*notify)(LogPipe *self, gint notify_code, gpointer user_data);
 };
 
+extern gboolean (*pipe_single_step_hook)(LogPipe *pipe, LogMessage *msg, const LogPathOptions *path_options);
 
 LogPipe *log_pipe_ref(LogPipe *self);
 void log_pipe_unref(LogPipe *self);
-LogPipe *log_pipe_new(void);
-void log_pipe_init_instance(LogPipe *self);
+LogPipe *log_pipe_new(GlobalConfig *cfg);
+void log_pipe_init_instance(LogPipe *self, GlobalConfig *cfg);
 void log_pipe_forward_notify(LogPipe *self, gint notify_code, gpointer user_data);
-
+EVTTAG *log_pipe_location_tag(LogPipe *pipe);
 
 static inline GlobalConfig *
 log_pipe_get_config(LogPipe *s)
@@ -244,12 +249,23 @@ log_pipe_get_config(LogPipe *s)
   return s->cfg;
 }
 
+static inline void
+log_pipe_set_config(LogPipe *s, GlobalConfig *cfg)
+{
+  s->cfg = cfg;
+}
+
+static inline void
+log_pipe_reset_config(LogPipe *s)
+{
+  log_pipe_set_config(s, NULL);
+}
+
 static inline gboolean
-log_pipe_init(LogPipe *s, GlobalConfig *cfg)
+log_pipe_init(LogPipe *s)
 {
   if (!(s->flags & PIF_INITIALIZED))
     {
-      s->cfg = cfg;
       if (!s->init || s->init(s))
         {
           s->flags |= PIF_INITIALIZED;
@@ -267,12 +283,9 @@ log_pipe_deinit(LogPipe *s)
     {
       if (!s->deinit || s->deinit(s))
         {
-          s->cfg = NULL;
-
           s->flags &= ~PIF_INITIALIZED;
           return TRUE;
         }
-      s->cfg = NULL;
       return FALSE;
     }
   return TRUE;
@@ -290,7 +303,7 @@ log_pipe_forward_msg(LogPipe *self, LogMessage *msg, const LogPathOptions *path_
     }
   else
     {
-      log_msg_drop(msg, path_options);
+      log_msg_drop(msg, path_options, AT_PROCESSED);
     }
 }
 
@@ -298,6 +311,15 @@ static inline void
 log_pipe_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options)
 {
   g_assert((s->flags & PIF_INITIALIZED) != 0);
+
+  if (G_UNLIKELY(pipe_single_step_hook))
+    {
+      if (!pipe_single_step_hook(s, msg, path_options))
+        {
+          log_msg_drop(msg, path_options, AT_PROCESSED);
+          return;
+        }
+    }
 
   if (G_UNLIKELY(s->flags & (PIF_HARD_FLOW_CONTROL)))
     {
@@ -307,11 +329,8 @@ log_pipe_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options)
       path_options = &local_path_options;
       if (G_UNLIKELY(debug_flag))
         {
-          gchar buf[32];
-
           msg_debug("Requesting flow control",
-                    evt_tag_str("location", log_expr_node_format_location(s->expr_node, buf, sizeof(buf))),
-                    NULL);
+                    log_pipe_location_tag(s));
         }
     }
 
@@ -345,6 +364,12 @@ log_pipe_append(LogPipe *s, LogPipe *next)
 {
   s->pipe_next = next;
 }
+
+void
+log_pipe_set_persist_name(LogPipe *self, const gchar *persist_name);
+
+const gchar *
+log_pipe_get_persist_name(const LogPipe *self);
 
 void log_pipe_free_method(LogPipe *s);
 

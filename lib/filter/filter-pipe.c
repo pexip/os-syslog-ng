@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2013 Balabit
  * Copyright (c) 1998-2013 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -34,8 +34,7 @@ log_filter_pipe_init(LogPipe *s)
   LogFilterPipe *self = (LogFilterPipe *) s;
   GlobalConfig *cfg = log_pipe_get_config(s);
 
-  if (self->expr->init)
-    self->expr->init(self->expr, log_pipe_get_config(s));
+  filter_expr_init(self->expr, log_pipe_get_config(s));
   if (!self->name)
     self->name = cfg_tree_get_rule_name(&cfg->tree, ENC_FILTER, s->expr_node);
   return TRUE;
@@ -45,20 +44,17 @@ static void
 log_filter_pipe_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options, gpointer user_data)
 {
   LogFilterPipe *self = (LogFilterPipe *) s;
-  gchar buf[128];
   gboolean res;
 
   msg_debug("Filter rule evaluation begins",
             evt_tag_str("rule", self->name),
-            evt_tag_str("location", log_expr_node_format_location(s->expr_node, buf, sizeof(buf))),
-            NULL);
+            log_pipe_location_tag(s));
 
   res = filter_expr_eval_root(self->expr, &msg, path_options);
   msg_debug("Filter rule evaluation result",
             evt_tag_str("result", res ? "match" : "not-match"),
             evt_tag_str("rule", self->name),
-            evt_tag_str("location", log_expr_node_format_location(s->expr_node, buf, sizeof(buf))),
-            NULL);
+            log_pipe_location_tag(s));
   if (res)
     {
       log_pipe_forward_msg(s, msg, path_options);
@@ -67,7 +63,7 @@ log_filter_pipe_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_op
     {
       if (path_options->matched)
         (*path_options->matched) = FALSE;
-      log_msg_drop(msg, path_options);
+      log_msg_drop(msg, path_options, AT_PROCESSED);
     }
 }
 
@@ -76,7 +72,7 @@ log_filter_pipe_clone(LogPipe *s)
 {
   LogFilterPipe *self = (LogFilterPipe *) s;
 
-  return log_filter_pipe_new(filter_expr_ref(self->expr));
+  return log_filter_pipe_new(filter_expr_ref(self->expr), s->cfg);
 }
 
 static void
@@ -90,11 +86,11 @@ log_filter_pipe_free(LogPipe *s)
 }
 
 LogPipe *
-log_filter_pipe_new(FilterExprNode *expr)
+log_filter_pipe_new(FilterExprNode *expr, GlobalConfig *cfg)
 {
   LogFilterPipe *self = g_new0(LogFilterPipe, 1);
 
-  log_pipe_init_instance(&self->super);
+  log_pipe_init_instance(&self->super, cfg);
   self->super.init = log_filter_pipe_init;
   self->super.queue = log_filter_pipe_queue;
   self->super.free_fn = log_filter_pipe_free;

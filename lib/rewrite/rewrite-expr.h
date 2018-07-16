@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -40,8 +40,10 @@ struct _LogRewrite
 };
 
 /* LogRewrite, abstract class */
+gboolean log_rewrite_init_method(LogPipe *s);
+
 void log_rewrite_set_condition(LogRewrite *s, FilterExprNode *condition);
-void log_rewrite_init(LogRewrite *self);
+void log_rewrite_init_instance(LogRewrite *self, GlobalConfig *cfg);
 void log_rewrite_free_method(LogPipe *self);
 
 #endif

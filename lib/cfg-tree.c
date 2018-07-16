@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -23,9 +23,8 @@
  */
 
 #include "cfg-tree.h"
-#include "messages.h"
-#include "afinter.h"
 #include "logmpx.h"
+#include "logpipe.h"
 
 #include <string.h>
 
@@ -152,6 +151,14 @@ log_expr_node_format_location(LogExprNode *self, gchar *buf, gsize buf_len)
   if (!node)
     strncpy(buf, "#unknown", buf_len);
   return buf;
+}
+
+EVTTAG *
+log_expr_node_location_tag(LogExprNode *self)
+{
+  gchar buf[128];
+
+  return evt_tag_str("location", log_expr_node_format_location(self, buf, sizeof(buf)));
 }
 
 /*
@@ -364,8 +371,26 @@ log_expr_node_lookup_flag(const gchar *flag)
     return LC_FINAL;
   else if (strcmp(flag, "flow_control") == 0 || strcmp(flag, "flow-control") == 0)
     return LC_FLOW_CONTROL;
-  msg_error("Unknown log statement flag", evt_tag_str("flag", flag), NULL);
+  msg_error("Unknown log statement flag", evt_tag_str("flag", flag));
   return 0;
+}
+
+LogPipe *
+cfg_tree_new_pipe(CfgTree *self, LogExprNode *related_expr)
+{
+  LogPipe *pipe = log_pipe_new(self->cfg);
+  pipe->expr_node = related_expr;
+  g_ptr_array_add(self->initialized_pipes, pipe);
+  return pipe;
+}
+
+LogMultiplexer *
+cfg_tree_new_mpx(CfgTree *self, LogExprNode *related_expr)
+{
+  LogMultiplexer *pipe = log_multiplexer_new(self->cfg);
+  pipe->super.expr_node = related_expr;
+  g_ptr_array_add(self->initialized_pipes, pipe);
+  return pipe;
 }
 
 /*
@@ -445,11 +470,8 @@ cfg_tree_compile_single(CfgTree *self, LogExprNode *node,
       pipe = log_pipe_clone(pipe);
       if (!pipe)
         {
-          gchar buf[128];
-
           msg_error("Error cloning pipe into its reference point, probably the element in question is not meant to be used in this situation",
-                    evt_tag_str("location", log_expr_node_format_location(node, buf, sizeof(buf))),
-                    NULL);
+                    log_expr_node_location_tag(node));
           goto error;
         }
       pipe->flags |= PIF_INLINED;
@@ -484,13 +506,10 @@ cfg_tree_compile_reference(CfgTree *self, LogExprNode *node,
 
   if (!referenced_node)
     {
-      gchar buf[128];
-
       msg_error("Error resolving reference",
                 evt_tag_str("content", log_expr_node_get_content_name(node->content)),
                 evt_tag_str("name", node->name),
-                evt_tag_str("location", log_expr_node_format_location(node, buf, sizeof(buf))),
-                NULL);
+                log_expr_node_location_tag(node));
       goto error;
     }
 
@@ -513,8 +532,7 @@ cfg_tree_compile_reference(CfgTree *self, LogExprNode *node,
             sub_pipe_tail = referenced_node->aux;
           }
 
-        attach_pipe = log_pipe_new();
-        g_ptr_array_add(self->initialized_pipes, attach_pipe);
+        attach_pipe = cfg_tree_new_pipe(self, node);
 
         if (sub_pipe_tail)
           {
@@ -524,8 +542,7 @@ cfg_tree_compile_reference(CfgTree *self, LogExprNode *node,
 
             if (!sub_pipe_tail->pipe_next)
               {
-                mpx = log_multiplexer_new(0);
-                g_ptr_array_add(self->initialized_pipes, &mpx->super);
+                mpx = cfg_tree_new_mpx(self, referenced_node);
                 log_pipe_append(sub_pipe_tail, &mpx->super);
               }
             else
@@ -565,8 +582,7 @@ cfg_tree_compile_reference(CfgTree *self, LogExprNode *node,
            our next chain
         */
 
-        mpx = log_multiplexer_new(0);
-        g_ptr_array_add(self->initialized_pipes, &mpx->super);
+        mpx = cfg_tree_new_mpx(self, node);
 
         if (sub_pipe_head)
           {
@@ -646,8 +662,7 @@ cfg_tree_compile_sequence(CfgTree *self, LogExprNode *node,
     {
       /* the catch-all resolution code clears this flag */
 
-      msg_error("Error in configuration, catch-all flag can only be specified for top-level log statements",
-                NULL);
+      msg_error("Error in configuration, catch-all flag can only be specified for top-level log statements");
       goto error;
     }
 
@@ -721,18 +736,14 @@ cfg_tree_compile_sequence(CfgTree *self, LogExprNode *node,
 
           if (first_pipe)
             {
-              gchar buf[128];
-
               msg_error("Error compiling sequence, source-pipe follows a non-source one, please list source references/definitions first",
-                        evt_tag_str("location", log_expr_node_format_location(ep, buf, sizeof(buf))),
-                        NULL);
+                        log_expr_node_location_tag(ep));
               goto error;
             }
 
           if (!source_join_pipe)
             {
-              source_join_pipe = last_pipe = log_pipe_new();
-              g_ptr_array_add(self->initialized_pipes, source_join_pipe);
+              source_join_pipe = last_pipe = cfg_tree_new_pipe(self, node);
             }
           log_pipe_append(sub_pipe_tail, source_join_pipe);
         }
@@ -752,8 +763,7 @@ cfg_tree_compile_sequence(CfgTree *self, LogExprNode *node,
   if (!first_pipe && !last_pipe)
     {
       /* this is an empty sequence, insert a do-nothing LogPipe */
-      first_pipe = last_pipe = log_pipe_new();
-      g_ptr_array_add(self->initialized_pipes, first_pipe);
+      first_pipe = last_pipe = cfg_tree_new_pipe(self, node);
     }
   
   if (!node_properties_propagated)
@@ -822,17 +832,13 @@ cfg_tree_compile_junction(CfgTree *self,
 
           if (!is_first_branch && !fork_mpx)
             {
-              gchar buf[128];
-
               msg_error("Error compiling junction, source and non-source branches are mixed",
-                        evt_tag_str("location", log_expr_node_format_location(ep, buf, sizeof(buf))),
-                        NULL);
+                        log_expr_node_location_tag(ep));
               goto error;
             }
           if (!fork_mpx)
             {
-              fork_mpx = log_multiplexer_new(0);
-              g_ptr_array_add(self->initialized_pipes, &fork_mpx->super);
+              fork_mpx = cfg_tree_new_mpx(self, node);
             }
           log_multiplexer_add_next_hop(fork_mpx, sub_pipe_head);
         }
@@ -842,11 +848,8 @@ cfg_tree_compile_junction(CfgTree *self,
 
           if (fork_mpx)
             {
-              gchar buf[128];
-
               msg_error("Error compiling junction, source and non-source branches are mixed",
-                        evt_tag_str("location", log_expr_node_format_location(ep, buf, sizeof(buf))),
-                        NULL);
+                        log_expr_node_location_tag(ep));
               goto error;
             }
         }
@@ -855,8 +858,7 @@ cfg_tree_compile_junction(CfgTree *self,
         {
           if (!join_pipe)
             {
-              join_pipe = log_pipe_new();
-              g_ptr_array_add(self->initialized_pipes, join_pipe);
+              join_pipe = cfg_tree_new_pipe(self, node);
             }
           log_pipe_append(sub_pipe_tail, join_pipe);
 
@@ -890,15 +892,18 @@ cfg_tree_compile_node(CfgTree *self, LogExprNode *node,
 
   if (debug_flag)
     {
-      gchar buf[32];
+      gchar buf[128];
+      gchar compile_message[256];
 
       indent++;
-      fprintf(stderr, "%.*sCompiling %s %s [%s] at [%s]\n",
-              indent * 2, "                   ",
-              node->name ? : "#unnamed",
-              log_expr_node_get_layout_name(node->layout),
-              log_expr_node_get_content_name(node->content),
-              log_expr_node_format_location(node, buf, sizeof(buf)));
+      g_snprintf(compile_message, sizeof(compile_message),
+                 "%-*sCompiling %s %s [%s] at [%s]",
+                  indent * 2, "",
+                  node->name ? : "#unnamed",
+                  log_expr_node_get_layout_name(node->layout),
+                  log_expr_node_get_content_name(node->content),
+                  log_expr_node_format_location(node, buf, sizeof(buf)));
+      msg_send_formatted_message(EVT_PRI_DEBUG, compile_message);
     }
 
   switch (node->layout)
@@ -1032,6 +1037,8 @@ cfg_tree_compile(CfgTree *self)
   gint i;
 
   /* resolve references within the configuration */
+  if (self->compiled)
+    return TRUE;
 
   for (i = 0; i < self->rules->len; i++)
     {
@@ -1050,7 +1057,43 @@ cfg_tree_compile(CfgTree *self)
           return FALSE;
         }
     }
+  self->compiled = TRUE;
   return TRUE;
+}
+
+static gboolean
+_verify_unique_persist_names_among_pipes(const GPtrArray *initialized_pipes)
+{
+  GHashTable *pipe_persist_names = g_hash_table_new(g_str_hash, g_str_equal);
+  gboolean result = TRUE;
+
+  for (gint i = 0; i < initialized_pipes->len; ++i)
+    {
+      LogPipe *current_pipe = g_ptr_array_index(initialized_pipes, i);
+      const gchar *current_pipe_name = log_pipe_get_persist_name(current_pipe);
+
+      if (current_pipe_name != NULL)
+        {
+          if (g_hash_table_lookup_extended(pipe_persist_names, current_pipe_name, NULL, NULL))
+            {
+              msg_error("Error checking the uniqueness of the persist names, please override it "
+                        "with persist-name option. Shutting down.",
+                        evt_tag_str("persist_name", current_pipe_name),
+                        log_pipe_location_tag(current_pipe), NULL);
+              result = FALSE;
+            }
+          else
+            {
+              g_hash_table_replace(pipe_persist_names,
+                                   (gpointer)current_pipe_name,
+                                   (gpointer)current_pipe_name);
+            }
+        }
+    }
+
+  g_hash_table_destroy(pipe_persist_names);
+
+  return result;
 }
 
 gboolean
@@ -1069,14 +1112,16 @@ cfg_tree_start(CfgTree *self)
    */
   for (i = 0; i < self->initialized_pipes->len; i++)
     {
-      if (!log_pipe_init(g_ptr_array_index(self->initialized_pipes, i), self->cfg))
+      LogPipe *pipe = g_ptr_array_index(self->initialized_pipes, i);
+
+      if (!log_pipe_init(pipe))
         {
-          msg_error("Error initializing message pipeline",
-                    NULL);
+          msg_error("Error initializing message pipeline");
           return FALSE;
         }
     }
-  return TRUE;
+
+  return _verify_unique_persist_names_among_pipes(self->initialized_pipes);
 }
 
 gboolean
@@ -1097,6 +1142,7 @@ cfg_tree_stop(CfgTree *self)
 void
 cfg_tree_init_instance(CfgTree *self, GlobalConfig *cfg)
 {
+  memset(self, 0, sizeof(*self));
   self->initialized_pipes = g_ptr_array_new();
   self->objects = g_hash_table_new_full(cfg_tree_objects_hash, cfg_tree_objects_equal, NULL, (GDestroyNotify) log_expr_node_free);
   self->templates = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, (GDestroyNotify) log_template_unref);

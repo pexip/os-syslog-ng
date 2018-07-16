@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -36,15 +36,13 @@ static void
 log_rewrite_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options, gpointer user_data)
 {
   LogRewrite *self = (LogRewrite *) s;
-  gchar buf[128];
   gssize length;
   const gchar *value;
 
   if (self->condition && !filter_expr_eval_root(self->condition, &msg, path_options))
     {
       msg_debug("Rewrite condition unmatched, skipping rewrite",
-                evt_tag_str("value", log_msg_get_value_name(self->value_handle, NULL)),
-                NULL);
+                evt_tag_str("value", log_msg_get_value_name(self->value_handle, NULL)));
     }
   else
     {
@@ -57,13 +55,12 @@ log_rewrite_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_option
                 evt_tag_str("value", log_msg_get_value_name(self->value_handle, NULL)),
                 evt_tag_printf("new_value", "%.*s", (gint) length, value),
                 evt_tag_str("rule", self->name),
-                evt_tag_str("location", log_expr_node_format_location(s->expr_node, buf, sizeof(buf))),
-                NULL);
+                log_pipe_location_tag(s));
     }
   log_pipe_forward_msg(s, msg, path_options);
 }
 
-static gboolean
+gboolean
 log_rewrite_init_method(LogPipe *s)
 {
   LogRewrite *self = (LogRewrite *) s;
@@ -89,9 +86,9 @@ log_rewrite_free_method(LogPipe *s)
 }
 
 void
-log_rewrite_init(LogRewrite *self)
+log_rewrite_init_instance(LogRewrite *self, GlobalConfig *cfg)
 {
-  log_pipe_init_instance(&self->super);
+  log_pipe_init_instance(&self->super, cfg);
   /* indicate that the rewrite rule is changing the message */
   self->super.free_fn = log_rewrite_free_method;
   self->super.queue = log_rewrite_queue;

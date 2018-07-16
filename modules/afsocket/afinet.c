@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -22,7 +22,6 @@
  */
 #include "afinet.h"
 #include "messages.h"
-#include "misc.h"
 #include "gprocess.h"
 
 #include <sys/types.h>
@@ -54,8 +53,7 @@ afinet_lookup_service_and_proto(const gchar *service, const gchar *proto)
       else
         {
           msg_error("Error finding port number, falling back to default",
-                    evt_tag_printf("service", "%s/%s", proto, service),
-                    NULL);
+                    evt_tag_printf("service", "%s/%s", proto, service));
           return 0;
         }
     }

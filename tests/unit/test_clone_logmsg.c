@@ -1,7 +1,29 @@
+/*
+ * Copyright (c) 2014 Balabit
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published
+ * by the Free Software Foundation, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
+ * As an additional exemption you are allowed to compile & link against the
+ * OpenSSL libraries as published by the OpenSSL project. See the file
+ * COPYING for details.
+ *
+ */
+
 #include "testutils.h"
 #include "msg_parse_lib.h"
 #include "syslog-ng.h"
-#include "logmsg.h"
+#include "logmsg/logmsg.h"
 #include "serialize.h"
 #include "apphook.h"
 #include "gsockaddr.h"
@@ -37,7 +59,7 @@ set_new_log_message_attributes(LogMessage *log_message)
   log_msg_set_value(log_message, LM_V_PID, "newpid", -1);
   log_msg_set_value(log_message, LM_V_MSGID, "newmsgid", -1);
   log_msg_set_value(log_message, LM_V_SOURCE, "newsource", -1);
-  log_msg_set_value(log_message, log_msg_get_value_handle("newvalue"), "newvalue", -1);
+  log_msg_set_value_by_name(log_message, "newvalue", "newvalue", -1);
 }
 
 void

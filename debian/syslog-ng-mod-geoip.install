@@ -1,1 +1,1 @@
-usr/lib/syslog-ng/*/libtfgeoip.so
+usr/lib/syslog-ng/*/libgeoip-plugin.so

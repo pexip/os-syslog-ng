@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2013 Balabit
  * Copyright (c) 1998-2013 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -26,7 +26,11 @@
 #include "gsockaddr.h"
 #include "gsocket.h"
 #include "messages.h"
-#include "misc.h"
+#include "fdhelpers.h"
+#include "transport/transport-socket.h"
+
+#include <errno.h>
+#include <unistd.h>
 
 static gboolean
 transport_mapper_privileged_bind(gint sock, GSockAddr *bind_addr)
@@ -57,8 +61,7 @@ transport_mapper_open_socket(TransportMapper *self,
   if (sock < 0)
     {
       msg_error("Error creating socket",
-                evt_tag_errno(EVT_TAG_OSERROR, errno),
-                NULL);
+                evt_tag_errno(EVT_TAG_OSERROR, errno));
       goto error;
     }
 
@@ -71,8 +74,7 @@ transport_mapper_open_socket(TransportMapper *self,
 
       msg_error("Error binding socket",
                 evt_tag_str("addr", g_sockaddr_format(bind_addr, buf, sizeof(buf), GSA_FULL)),
-                evt_tag_errno(EVT_TAG_OSERROR, errno),
-                NULL);
+                evt_tag_errno(EVT_TAG_OSERROR, errno));
       goto error_close;
     }
 
@@ -93,6 +95,15 @@ gboolean
 transport_mapper_apply_transport_method(TransportMapper *self, GlobalConfig *cfg)
 {
   return TRUE;
+}
+
+LogTransport *
+transport_mapper_construct_log_transport_method(TransportMapper *self, gint fd)
+{
+  if (self->sock_type == SOCK_DGRAM)
+    return log_transport_dgram_socket_new(fd);
+  else
+    return log_transport_stream_socket_new(fd);
 }
 
 void
@@ -122,6 +133,7 @@ transport_mapper_init_instance(TransportMapper *self, const gchar *transport)
   self->sock_type = -1;
   self->free_fn = transport_mapper_free_method;
   self->apply_transport = transport_mapper_apply_transport_method;
+  self->construct_log_transport = transport_mapper_construct_log_transport_method;
 }
 
 void

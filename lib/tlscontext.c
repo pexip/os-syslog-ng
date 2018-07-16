@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2011 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2011 Balabit
  * Copyright (c) 1998-2011 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -22,12 +22,11 @@
  */
 
 #include "tlscontext.h"
-#include "misc.h"
+#include "str-utils.h"
 #include "messages.h"
 
-#if ENABLE_SSL
-
 #include <arpa/inet.h>
+#include <unistd.h>
 #include <openssl/x509_vfy.h>
 #include <openssl/x509v3.h>
 #include <openssl/err.h>
@@ -61,7 +60,12 @@ tls_session_verify_fingerprint(X509_STORE_CTX *ctx)
   gboolean match = FALSE;
   X509 *cert = X509_STORE_CTX_get_current_cert(ctx);
 
-  if (!current_fingerprint || !cert)
+  if (!current_fingerprint)
+    {
+      return TRUE;
+    }
+
+  if (!cert)
     return match;
 
   hash = g_string_sized_new(EVP_MAX_MD_SIZE * 3);
@@ -133,15 +137,15 @@ tls_session_verify(TLSSession *self, int ok, X509_STORE_CTX *ctx)
     return 1;
 
   /* accept certificate if its fingerprint matches, again regardless whether x509 certificate validation was successful */
-  if (tls_session_verify_fingerprint(ctx))
+  if (ok && ctx->error_depth == 0 && !tls_session_verify_fingerprint(ctx))
     {
-      msg_notice("Certificate accepted because its fingerprint is listed", NULL);
-      return 1;
+      msg_notice("Certificate valid, but fingerprint constraints were not met, rejecting");
+      return 0;
     }
 
   if (ok && ctx->error_depth != 0 && (ctx->current_cert->ex_flags & EXFLAG_CA) == 0)
     {
-      msg_notice("Invalid certificate found in chain, basicConstraints.ca is unset in non-leaf certificate", NULL);
+      msg_notice("Invalid certificate found in chain, basicConstraints.ca is unset in non-leaf certificate");
       ctx->error = X509_V_ERR_INVALID_CA;
       return 0;
     }
@@ -149,20 +153,20 @@ tls_session_verify(TLSSession *self, int ok, X509_STORE_CTX *ctx)
   /* reject certificate if it is valid, but its DN is not trusted */
   if (ok && ctx->error_depth == 0 && !tls_session_verify_dn(ctx))
     {
-      msg_notice("Certificate valid, but DN constraints were not met, rejecting", NULL);
+      msg_notice("Certificate valid, but DN constraints were not met, rejecting");
       ctx->error = X509_V_ERR_CERT_UNTRUSTED;
       return 0;
     }
   /* if the crl_dir is set in the configuration file but the directory is empty ignore this error */
   if (!ok && ctx->error == X509_V_ERR_UNABLE_TO_GET_CRL)
     {
-      msg_notice("CRL directory is set but no CRLs found", NULL);
+      msg_notice("CRL directory is set but no CRLs found");
       return 1;
     }
 
   if (!ok && ctx->error == X509_V_ERR_INVALID_PURPOSE)
     {
-      msg_warning("Certificate valid, but purpose is invalid", NULL);
+      msg_warning("Certificate valid, but purpose is invalid");
       return 1;
     }
   return ok;
@@ -192,8 +196,7 @@ tls_session_verify_callback(int ok, X509_STORE_CTX *ctx)
         break;
       default:
         msg_notice("Error occured during certificate validation",
-                    evt_tag_int("error", ctx->error),
-                    NULL);
+                    evt_tag_int("error", ctx->error));
         break;
       }
     }
@@ -264,8 +267,7 @@ file_exists(const gchar *fname)
     {
       msg_error("Error opening TLS file",
                 evt_tag_str("filename", fname),
-                evt_tag_errno("error", errno),
-                NULL);
+                evt_tag_errno("error", errno));
       return FALSE;
     }
   return TRUE;
@@ -277,6 +279,7 @@ tls_context_setup_session(TLSContext *self)
   SSL *ssl;
   TLSSession *session;
   gint ssl_error;
+  long ssl_options;
 
   if (!self->ssl_ctx)
     {
@@ -293,7 +296,7 @@ tls_context_setup_session(TLSContext *self)
       if (file_exists(self->key_file) && !SSL_CTX_use_PrivateKey_file(self->ssl_ctx, self->key_file, SSL_FILETYPE_PEM))
         goto error;
 
-      if (file_exists(self->cert_file) && !SSL_CTX_use_certificate_file(self->ssl_ctx, self->cert_file, SSL_FILETYPE_PEM))
+      if (file_exists(self->cert_file) && !SSL_CTX_use_certificate_chain_file(self->ssl_ctx, self->cert_file))
         goto error;
       if (self->key_file && self->cert_file && !SSL_CTX_check_private_key(self->ssl_ctx))
         goto error;
@@ -331,7 +334,26 @@ tls_context_setup_session(TLSContext *self)
         }
 
       SSL_CTX_set_verify(self->ssl_ctx, verify_mode, tls_session_verify_callback);
-      SSL_CTX_set_options(self->ssl_ctx, SSL_OP_NO_SSLv2);
+
+      if (self->ssl_options != TSO_NONE)
+        {
+          ssl_options=0;
+          if(self->ssl_options & TSO_NOSSLv2)
+            ssl_options |= SSL_OP_NO_SSLv2;
+          if(self->ssl_options & TSO_NOSSLv3)
+            ssl_options |= SSL_OP_NO_SSLv3;
+          if(self->ssl_options & TSO_NOTLSv1)
+            ssl_options |= SSL_OP_NO_TLSv1;
+#ifdef SSL_OP_NO_TLSv1_2
+          if(self->ssl_options & TSO_NOTLSv11)
+            ssl_options |= SSL_OP_NO_TLSv1_1;
+          if(self->ssl_options & TSO_NOTLSv12)
+            ssl_options |= SSL_OP_NO_TLSv1_2;
+#endif
+          SSL_CTX_set_options(self->ssl_ctx, ssl_options);
+        }
+      else
+	msg_debug("empty ssl options");
       if (self->cipher_suite)
         {
           if (!SSL_CTX_set_cipher_list(self->ssl_ctx, self->cipher_suite))
@@ -353,8 +375,7 @@ tls_context_setup_session(TLSContext *self)
  error:
   ssl_error = ERR_get_error();
   msg_error("Error setting up TLS session context",
-            evt_tag_printf("tls_error", "%s:%s:%s", ERR_lib_error_string(ssl_error), ERR_func_error_string(ssl_error), ERR_reason_error_string(ssl_error)),
-            NULL);
+            evt_tag_printf("tls_error", "%s:%s:%s", ERR_lib_error_string(ssl_error), ERR_func_error_string(ssl_error), ERR_reason_error_string(ssl_error)));
   ERR_clear_error();
   if (self->ssl_ctx)
     {
@@ -371,6 +392,7 @@ tls_context_new(TLSMode mode)
 
   self->mode = mode;
   self->verify_mode = TVM_REQUIRED | TVM_TRUSTED;
+  self->ssl_options = TSO_NOSSLv2;
   return self;
 }
 
@@ -405,6 +427,33 @@ tls_lookup_verify_mode(const gchar *mode_str)
   return TVM_REQUIRED | TVM_TRUSTED;
 }
 
+gint
+tls_lookup_options(GList *options)
+{
+  gint ret=TSO_NONE;
+  GList *l;
+  for (l=options; l != NULL; l=l->next)
+    {
+      msg_debug("ssl-option", evt_tag_str("opt", l->data));
+      if (strcasecmp(l->data, "no-sslv2") == 0 || strcasecmp(l->data, "no_sslv2") == 0)
+        ret|=TSO_NOSSLv2;
+      else if (strcasecmp(l->data, "no-sslv3") == 0 || strcasecmp(l->data, "no_sslv3") == 0)
+        ret|=TSO_NOSSLv3;
+      else if (strcasecmp(l->data, "no-tlsv1") == 0 || strcasecmp(l->data, "no_tlsv1") == 0)
+        ret|=TSO_NOTLSv1;
+#ifdef SSL_OP_NO_TLSv1_2
+      else if (strcasecmp(l->data, "no-tlsv11") == 0 || strcasecmp(l->data, "no_tlsv11") == 0)
+        ret|=TSO_NOTLSv11;
+      else if (strcasecmp(l->data, "no-tlsv12") == 0 || strcasecmp(l->data, "no_tlsv12") == 0)
+        ret|=TSO_NOTLSv12;
+#endif
+      else
+        msg_error("Unknown ssl-option", evt_tag_str("option", l->data));
+    }
+  msg_debug("ssl-options parsed", evt_tag_printf("parsed value", "%d", ret));
+  return ret;
+}
+
 void
 tls_log_certificate_validation_progress(int ok, X509_STORE_CTX *ctx)
 {
@@ -422,8 +471,7 @@ tls_log_certificate_validation_progress(int ok, X509_STORE_CTX *ctx)
     {
       msg_debug("Certificate validation progress",
                   evt_tag_str("subject", subject_name->str),
-                  evt_tag_str("issuer", issuer_name->str),
-                  NULL);
+                  evt_tag_str("issuer", issuer_name->str));
     }
   else
     {
@@ -435,8 +483,7 @@ tls_log_certificate_validation_progress(int ok, X509_STORE_CTX *ctx)
                 evt_tag_str("subject", subject_name->str),
                 evt_tag_str("issuer", issuer_name->str),
                 evt_tag_str("error", X509_verify_cert_error_string(errnum)),
-                evt_tag_int("depth", errdepth),
-                NULL);
+                evt_tag_int("depth", errdepth));
     }
   g_string_free(subject_name, TRUE);
   g_string_free(issuer_name, TRUE);
@@ -447,6 +494,8 @@ tls_wildcard_match(const gchar *host_name, const gchar *pattern)
 {
   gchar **pattern_parts, **hostname_parts;
   gboolean success = FALSE;
+  gchar *lower_pattern = NULL;
+  gchar *lower_hostname = NULL;
   gint i;
 
   pattern_parts = g_strsplit(pattern, ".", 0);
@@ -458,11 +507,17 @@ tls_wildcard_match(const gchar *host_name, const gchar *pattern)
           /* number of dot separated entries is not the same in the hostname and the pattern spec */
           goto exit;
         }
-      if (!g_pattern_match_simple(pattern_parts[i], hostname_parts[i]))
+
+      lower_pattern = g_ascii_strdown(pattern_parts[i],-1);
+      lower_hostname = g_ascii_strdown(hostname_parts[i],-1);
+
+      if (!g_pattern_match_simple(lower_pattern, lower_hostname))
         goto exit;
     }
   success = TRUE;
  exit:
+  g_free(lower_pattern);
+  g_free(lower_hostname);
   g_strfreev(pattern_parts);
   g_strfreev(hostname_parts);
   return success;
@@ -518,7 +573,7 @@ tls_verify_certificate_name(X509 *cert, const gchar *host_name)
 
                   g_strlcpy(pattern_buf, dotted_ip, sizeof(pattern_buf));
                   found = TRUE;
-                  result = strcmp(host_name, pattern_buf) == 0;
+                  result = strcasecmp(host_name, pattern_buf) == 0;
                 }
             }
           sk_GENERAL_NAME_free(alt_names);
@@ -540,18 +595,15 @@ tls_verify_certificate_name(X509 *cert, const gchar *host_name)
     {
       msg_error("Certificate subject does not match configured hostname",
                 evt_tag_str("hostname", host_name),
-                evt_tag_str("certificate", pattern_buf),
-                NULL);
+                evt_tag_str("certificate", pattern_buf));
     }
   else
     {
       msg_verbose("Certificate subject matches configured hostname",
                 evt_tag_str("hostname", host_name),
-                evt_tag_str("certificate", pattern_buf),
-                NULL);
+                evt_tag_str("certificate", pattern_buf));
     }
 
   return result;
 }
 
-#endif

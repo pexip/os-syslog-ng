@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2010 Balabit
  * Copyright (c) 1998-2010 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -43,7 +43,7 @@ alarm_set(int timeout)
 {
   if (G_UNLIKELY(alarm_pending))
     {
-      msg_error("Internal error, alarm_set() called while an alarm is still active", NULL);
+      msg_error("Internal error, alarm_set() called while an alarm is still active");
       return;
     }
   alarm(timeout);

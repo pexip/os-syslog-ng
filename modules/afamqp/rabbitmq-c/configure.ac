@@ -1,8 +1,9 @@
+# vim:set ts=2 sw=2 sts=2 et:
 AC_PREREQ([2.59])
 
 m4_define([major_version], [0])
-m4_define([minor_version], [2])
-m4_define([micro_version], [0])
+m4_define([minor_version], [5])
+m4_define([micro_version], [3])
 
 # Follow all steps below in order to calculate new ABI version when updating the library
 # NOTE: THIS IS UNRELATED to the actual project version
@@ -11,12 +12,12 @@ m4_define([micro_version], [0])
 # 2. If any interfaces have been added, removed, or changed since the last update, increment current and set revision to 0.
 # 3. If any interfaces have been added since the last public release, then increment age.
 # 4. If any interfaces have been removed since the last public release, then set age to 0.
-m4_define([soversion_current],   [1])
-m4_define([soversion_revision],  [0])
-m4_define([soversion_age],       [0])
+m4_define([soversion_current],   [3])
+m4_define([soversion_revision],  [3])
+m4_define([soversion_age],       [2])
 
 AC_INIT([rabbitmq-c], [major_version.minor_version.micro_version],
-	[https://github.com/alanxz/rabbitmq-c/issues], [librabbitmq],
+	[https://github.com/alanxz/rabbitmq-c/issues], [rabbitmq-c],
 	[http://www.rabbitmq.com/])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE([1.9 subdir-objects foreign -Wno-portability])
@@ -33,10 +34,10 @@ m4_ifdef([AC_PROG_CC_C99], [AC_PROG_CC_C99],
 	 [AC_MSG_WARN([Attempt c99 workaround for old versions of autoconf])
 	  AC_PROG_CC
 	  AX_TRY_CFLAGS([-std=c99], [AX_CFLAGS([-std=c99])])])
+PKG_PROG_PKG_CONFIG([0.17])
 
 # Environment setup
 AC_CANONICAL_HOST
-AC_C_BIGENDIAN
 AC_C_INLINE
 
 # Set compiler flags
@@ -60,14 +61,19 @@ AC_SUBST([LT_AGE])
 
 # OS setup
 os_unix=no
+os_apple=no
 os_win32=no
 AS_CASE([$host],
         [*-*-mingw*],
                 [os_win32=yes],
+        [*-apple-darwin*],
+                [os_apple=yes; os_unix=yes],
         [*],
                 [os_unix=yes])
 AM_CONDITIONAL([OS_UNIX], [test "x$os_unix" = xyes])
+AM_CONDITIONAL([OS_APPLE], [test "x$os_apple" = xyes])
 AM_CONDITIONAL([OS_WIN32], [test "x$os_win32" = xyes])
+AC_DEFINE([ENABLE_THREAD_SAFETY], [1], [Define to 1 to enable thread safety])
 
 # Extra Win32 setup
 AS_IF([test "x$os_win32" = xyes],
@@ -82,30 +88,71 @@ AS_IF([test "x$os_win32" = xyes],
                     [AC_DEFINE([AMQP_STATIC], [1],
                                [Define to 1 for a static Win32 build.])])])])
 
-# 64-bit option
-AC_ARG_ENABLE([64-bit],
-              [AS_HELP_STRING([--enable-64-bit],
-                              [produce 64-bit library @<:@no@:>@])],
-              [AX_TRY_CFLAGS([-m64], AX_CFLAGS([-m64]))
-               AX_TRY_LDFLAGS([-m64], [AX_LDFLAGS([-m64])])],
-              [enable_64_bit=no])
+# Detect which libraries we might need to use socket functions:
+#  Solaris needs -lsocket -lnsl
+#  QNX will need -lsocket
 
-AM_PATH_PYTHON([2.5])
+AC_SEARCH_LIBS([getaddrinfo], [socket], [],
+               [AC_CHECK_LIB([getaddrinfo], [socket],
+                             [LIBS="-lsocket -lnsl $LIBS"],
+                             [AC_MSG_ERROR([cannot find name resolution library (library with getaddrinfo symbol)])],
+                             [-lnsl])])
+AC_SEARCH_LIBS([socket], [socket], [],
+               [AC_CHECK_LIB([socket], [socket],
+                             [LIBS="-lsocket -lnsl $LIBS"], 
+                             [AC_MSG_ERROR([cannot find socket library (library with socket symbol)])],
+                             [-lnsl])])
+AC_SEARCH_LIBS([clock_gettime], [rt])
+AC_MSG_CHECKING([if htonll is defined])
 
-AX_PYTHON_MODULE([json], [Need JSON])
-AS_IF([test "x$HAVE_PYMOD_JSON" = "xno"],
-      [AX_PYTHON_MODULE([simplejson])])
-AS_IF([test "x$HAVE_PYMOD_JSON" = "xno" && test "x$HAVE_PYMOD_SIMPLEJSON" = "xno"],
-     [AC_MSG_ERROR([Unable to find json or simplejson python modules])])
+dnl # Check for htonll
+AC_LINK_IFELSE(
+  [AC_LANG_PROGRAM(
+     [[
+        #include <arpa/inet.h>
+     ]],
+     [[
+       return htonll(0);
+     ]]
+  )],
+  [
+    AC_MSG_RESULT(yes)
+    AC_DEFINE(HAVE_HTONLL, 1, [Define to 1 if the function (or macro) htonll exists.])
+  ],
+  [
+    AC_MSG_RESULT(no)
+  ]
+)
 
-AS_VERSION_COMPARE([$PYTHON_VERSION],[3.0],[eval HAVE_PYTHON3=no],[eval HAVE_PYTHON3=yes],[eval HAVE_PYTHON3=yes])
+# Configure SSL/TLS
+AC_ARG_WITH([ssl],
+	    [AS_HELP_STRING([--with-ssl=@<:@cyassl/gnutls/no/openssl/polarssl/yes@:>@],
+			    [enable SSL/TLS support @<:@default=openssl@:>@])],
+	    [AS_CASE([$withval],
+		     [yes], [with_ssl=openssl],
+		     [*], [with_ssl=$withval])],
+	    [with_ssl=openssl])
 
-AS_IF([test "x$HAVE_PYTHON3" = "xyes"],
-      [AC_PATH_PROG(PYTHON2TO3,[2to3])
-      AS_IF([test "x$PYTHON2TO3" = "x"],
-            AC_MSG_ERROR([Unable to find 2to3 python utility]))])
-
-AM_CONDITIONAL([PYTHON3], [test "x$HAVE_PYTHON3" = "xyes"])
+AS_IF([test "x$with_ssl" = "xcyassl"],
+      [PKG_CHECK_MODULES([SSL], [libcyassl],, [with_ssl=no])],
+      [test "x$with_ssl" = "xgnutls"],
+      [PKG_CHECK_MODULES([SSL], [gnutls],, [with_ssl=no])],
+      [test "x$with_ssl" = "xopenssl"],
+      [PKG_CHECK_MODULES([SSL], [openssl >= 0.9.8], [ssl_pkg_required=openssl],
+                         [with_ssl=no])],
+      [test "x$with_ssl" = "xpolarssl"],
+      [AX_LIB_POLARSSL([SSL_CFLAGS=$POLARSSL_CFLAGS
+			SSL_LIBS=$POLARSSL_LIBS],
+		       [with_ssl=no])],
+      [test "x$with_ssl" = "xno"],,
+      [AC_MSG_ERROR([unknown SSL/TLS implementation: $with_ssl])])
+AM_CONDITIONAL([SSL_CYASSL], [test "x$with_ssl" = "xcyassl"])
+AM_CONDITIONAL([SSL_GNUTLS], [test "x$with_ssl" = "xgnutls"])
+AM_CONDITIONAL([SSL_OPENSSL], [test "x$with_ssl" = "xopenssl"])
+AM_CONDITIONAL([SSL_POLARSSL], [test "x$with_ssl" = "xpolarssl"])
+AM_CONDITIONAL([SSL], [test "x$with_ssl" != "xno"])
+AS_IF([test "x$with_ssl" != "xno"],
+      [AC_DEFINE([WITH_SSL], [1], [Define to 1 if SSL/TLS is enabled.])])
 
 # Configure AMQP command-line tools
 AC_ARG_ENABLE([tools],
@@ -132,6 +179,16 @@ AS_IF([test "x$enable_docs" != "xno"],
 	     [enable_docs=no])])
 AM_CONDITIONAL([DOCS], [test "x$enable_docs" = "xyes"])
 
+# Configure examples
+AC_ARG_ENABLE([examples],
+	      [AS_HELP_STRING([--enable-examples],
+			      [build example code @<:@auto@:>@])],,
+	      [enable_examples=yes])
+AM_CONDITIONAL([EXAMPLES], [test "x$enable_examples" = "xyes"])
+
+AC_SUBST([requires_private], [$ssl_pkg_required])
+AC_SUBST([libs_private], [$LIBS])
+AC_DEFINE_UNQUOTED([AMQ_PLATFORM], ["$host_os"], [Host operating system string])
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_FILES([
 	librabbitmq.pc
@@ -142,7 +199,8 @@ AC_MSG_RESULT([
 $PACKAGE_NAME build options:
 	Host: $host
 	Version: $VERSION
-	64-bit: $enable_64_bit
+	SSL/TLS: $with_ssl
 	Tools: $enable_tools
 	Documentation: $enable_docs
+	Examples: $enable_examples
 ])

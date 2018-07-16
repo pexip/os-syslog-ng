@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2013 Balabit
  * Copyright (c) 1998-2011 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -32,6 +32,7 @@
 
 #include "filter/filter-expr-grammar.h"
 #include "filter/filter-netmask.h"
+#include "filter/filter-netmask6.h"
 #include "filter/filter-op.h"
 #include "filter/filter-cmp.h"
 #include "filter/filter-in-list.h"
@@ -43,6 +44,7 @@
 #include "template/templates.h"
 #include "syslog-names.h"
 #include "plugin.h"
+#include "cfg-grammar.h"
 
 FilterRE *last_re_filter;
 
@@ -56,7 +58,9 @@ FilterRE *last_re_filter;
 
 /* INCLUDE_DECLS */
 
-%token KW_PROGRAM KW_IN_LIST
+%token KW_PROGRAM
+%token KW_IN_LIST
+%token KW_VALUE
 
 %left   ';'
 %left	KW_OR
@@ -67,6 +71,8 @@ FilterRE *last_re_filter;
 
 %type	<node> filter_expr
 %type	<node> filter_simple_expr
+%type	<node> filter_plugin
+%type	<node> filter_comparison
 
 %type   <num> filter_fac_list
 %type   <num> filter_fac
@@ -96,7 +102,15 @@ filter_simple_expr
 	| KW_FACILITY '(' LL_NUMBER ')'		{ $$ = filter_facility_new(0x80000000 | $3); }
 	| KW_LEVEL '(' filter_level_list ')' 	{ $$ = filter_level_new($3); }
 	| KW_FILTER '(' string ')'		{ $$ = filter_call_new($3, configuration); free($3); }
-	| KW_NETMASK '(' string ')'		{ $$ = filter_netmask_new($3); free($3); }
+	| KW_NETMASK '(' string ')'    { $$ = filter_netmask_new($3); free($3); }
+  | KW_NETMASK6 '(' string ')'   {
+  #if SYSLOG_NG_ENABLE_IPV6
+                                    $$ = filter_netmask6_new($3);
+  #else
+                                    YYERROR;
+  #endif
+                                    free($3);
+                                  }
         | KW_TAGS '(' string_list ')'           { $$ = filter_tags_new($3); }
         | KW_IN_LIST '(' string string ')'
           {
@@ -104,8 +118,7 @@ filter_simple_expr
             if (p[0] == '$')
               {
                 msg_warning("Value references in filters should not use the '$' prefix, those are only needed in templates",
-                            evt_tag_str("value", $4),
-                            NULL);
+                            evt_tag_str("value", $4));
                 p++;
               }
             $$ = filter_in_list_new($3, p);
@@ -118,92 +131,28 @@ filter_simple_expr
             if (p[0] == '$')
               {
                 msg_warning("Value references in filters should not use the '$' prefix, those are only needed in templates",
-                            evt_tag_str("value", $6),
-                            NULL);
+                            evt_tag_str("value", $6));
                 p++;
               }
             $$ = filter_in_list_new($3, p);
             free($3);
             free($6);
           }
-        | KW_PROGRAM '(' string
-	  {
-	    last_re_filter = (FilterRE *) filter_re_new(LM_V_PROGRAM);
-          }
-          filter_re_opts ')'
-          {
-            if(!filter_re_set_regexp(last_re_filter, $3))
-              YYERROR;
-            free($3);
+	| filter_re					{ $$ = &last_re_filter->super; }
+	| filter_plugin
+	| filter_comparison
+	;
 
-            $$ = &last_re_filter->super;
-          }
-	| KW_HOST '(' string
-	  {
-	    last_re_filter = (FilterRE *) filter_re_new(LM_V_HOST);
-          }
-          filter_re_opts ')'
-          {
-            if(!filter_re_set_regexp(last_re_filter, $3))
-              YYERROR;
-            free($3);
 
-            $$ = &last_re_filter->super;
-          }
-	| KW_MATCH '(' string
-	  {
-	    last_re_filter = (FilterRE *) filter_match_new();
-	  }
-          filter_match_opts ')'
-          {
-            if(!filter_re_set_regexp(last_re_filter, $3))
-              YYERROR;
-            free($3);
-            $$ = &last_re_filter->super;
-
-            if (last_re_filter->value_handle == 0)
-              {
-                static gboolean warn_written = FALSE;
-
-                if (!warn_written)
-                  {
-                    msg_warning("WARNING: the match() filter without the use of the value() option is deprecated and hinders performance, please update your configuration",
-                                NULL);
-                    warn_written = TRUE;
-                  }
-              }
-          }
-        | KW_MESSAGE '(' string
-          {
-	    last_re_filter = (FilterRE *) filter_re_new(LM_V_MESSAGE);
-          }
-          filter_re_opts ')'
-          {
-            if(!filter_re_set_regexp(last_re_filter, $3))
-              YYERROR;
-	    free($3);
-            $$ = &last_re_filter->super;
-          }
-        | KW_SOURCE '(' string
-          {
-	    last_re_filter = (FilterRE *) filter_re_new(LM_V_SOURCE);
-            filter_re_set_matcher(last_re_filter, log_matcher_string_new());
-          }
-          filter_re_opts ')'
-          {
-            if(!filter_re_set_regexp(last_re_filter, $3))
-              YYERROR;
-	    free($3);
-            $$ = &last_re_filter->super;
-          }
-        | LL_IDENTIFIER
+filter_plugin
+        : LL_IDENTIFIER
           {
             Plugin *p;
             gint context = LL_CONTEXT_FILTER;
             FilterExprNode *node;
 
             p = plugin_find(configuration, context, $1);
-            CHECK_ERROR(p, @1, "%s plugin %s not found", cfg_lexer_lookup_context_name_by_type(context), $1);
+            CHECK_ERROR(p, @1, "%s plugin %s not found OR you may not used double quotes in your filter expression", cfg_lexer_lookup_context_name_by_type(context), $1);
 
             node = (FilterExprNode *) plugin_parse_config(p, configuration, &@1, NULL);
             free($1);
@@ -213,21 +162,21 @@ filter_simple_expr
               }
             $$ = node;
           }
-	| string operator string
+	;
+
+filter_comparison
+	: LL_STRING operator LL_STRING
           {
             LogTemplate *left, *right;
             GError *error = NULL;
-            gboolean success_left, success_right;
 
             left = log_template_new(configuration, NULL);
             right = log_template_new(configuration, NULL);
-            success_left = log_template_compile(left, $1, &error);
-            success_right = log_template_compile(right, $3, &error);
+            CHECK_ERROR_GERROR(log_template_compile(left, $1, &error), @1, error, "error compiling left template");
+            CHECK_ERROR_GERROR(log_template_compile(right, $3, &error), @3, error, "error compiling right template");
+
             free($1);
             free($3);
-            CHECK_ERROR(success_left, @1, "error compiling template: %s", error->message);
-            CHECK_ERROR(success_right, @3, "error compiling template: %s", error->message);
-
             $$ = fop_cmp_new(left, right, $2);
           }
         ;
@@ -247,6 +196,54 @@ operator
 	| KW_GT         { $$ = yylval.token; }
 	;
 
+filter_re
+        : KW_PROGRAM { last_re_filter = filter_re_new(LM_V_PROGRAM); } filter_re_params
+	| KW_HOST    { last_re_filter = filter_re_new(LM_V_HOST); } filter_re_params
+	| KW_MESSAGE { last_re_filter = filter_re_new(LM_V_MESSAGE); } filter_re_params
+        | KW_SOURCE  { last_re_filter = filter_source_new();  } filter_re_params
+	| KW_MATCH   { last_re_filter = filter_match_new(); } filter_match_params
+	;
+
+filter_re_params
+	: '(' string filter_re_opts ')'
+          {
+            GError *error = NULL;
+
+            CHECK_ERROR_GERROR(filter_re_compile_pattern(last_re_filter, configuration, $2, &error), @2, error, "error compiling search pattern");
+            free($2);
+          }
+	;
+
+filter_re_opts
+        : filter_re_opt filter_re_opts
+        |
+        ;
+
+filter_re_opt
+	: { last_matcher_options = &last_re_filter->matcher_options; } matcher_option
+        ;
+
+
+filter_match_params
+        : '(' string filter_match_opts ')'
+          {
+            GError *error = NULL;
+
+            CHECK_ERROR_GERROR(filter_re_compile_pattern(last_re_filter, configuration, $2, &error), @2, error, "error compiling search pattern");
+            free($2);
+
+            if (last_re_filter->value_handle == 0)
+              {
+                static gboolean warn_written = FALSE;
+
+                if (!warn_written)
+                  {
+                    msg_warning("WARNING: the match() filter without the use of the value() option is deprecated and hinders performance, please use a more specific filter like message() and/or program() instead.");
+                    warn_written = TRUE;
+                  }
+              }
+          }
+
 filter_match_opts
         : filter_match_opt filter_match_opts
         |
@@ -260,8 +257,7 @@ filter_match_opt
             if (p[0] == '$')
               {
                 msg_warning("Value references in filters should not use the '$' prefix, those are only needed in templates",
-                            evt_tag_str("value", $3),
-                            NULL);
+                            evt_tag_str("value", $3));
                 p++;
               }
             last_re_filter->value_handle = log_msg_get_value_handle(p);
@@ -269,19 +265,7 @@ filter_match_opt
           }
         ;
 
-filter_re_opts
-        : filter_re_opt filter_re_opts
-        |
-        ;
 
-filter_re_opt
-        : KW_TYPE '(' string ')'
-          {
-            filter_re_set_matcher(last_re_filter, log_matcher_new($3));
-            free($3);
-          }
-        | KW_FLAGS '(' regexp_option_flags ')' { filter_re_set_flags(last_re_filter, $3); }
-        ;
 
 
 filter_fac_list

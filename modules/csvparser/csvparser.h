@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 1998-2010 Balázs Scheidler
+ * Copyright (c) 2002-2015 Balabit
+ * Copyright (c) 1998-2015 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published
@@ -25,22 +25,15 @@
 #define CSVPARSER_H_INCLUDED
 
 #include "parser/parser-expr.h"
+#include "scanner/csv-scanner/csv-scanner.h"
 
-#define LOG_CSV_PARSER_ESCAPE_NONE        0x0001
-#define LOG_CSV_PARSER_ESCAPE_BACKSLASH   0x0002
-#define LOG_CSV_PARSER_ESCAPE_DOUBLE_CHAR 0x0004
-#define LOG_CSV_PARSER_ESCAPE_MASK        0x0007
-#define LOG_CSV_PARSER_STRIP_WHITESPACE   0x0008
-#define LOG_CSV_PARSER_GREEDY             0x0010
-#define LOG_CSV_PARSER_DROP_INVALID       0x0020
+CSVScannerOptions *csv_parser_get_scanner_options(LogParser *s);
+gboolean csv_parser_set_flags(LogParser *s, guint32 flags);
+void csv_parser_set_prefix(LogParser *s, const gchar *prefix);
+LogParser *csv_parser_new(GlobalConfig *cfg);
 
+guint32 csv_parser_lookup_flag(const gchar *flag);
+gint csv_parser_lookup_dialect(const gchar *flag);
 
-void log_csv_parser_set_flags(LogColumnParser *s, guint32 flags);
-void log_csv_parser_set_delimiters(LogColumnParser *s, const gchar *delimiters);
-void log_csv_parser_set_quotes(LogColumnParser *s, const gchar *quotes);
-void log_csv_parser_set_quote_pairs(LogColumnParser *s, const gchar *quote_pairs);
-void log_csv_parser_set_null_value(LogColumnParser *s, const gchar *null_value);
-LogColumnParser *log_csv_parser_new(void);
-gint log_csv_parser_lookup_flag(const gchar *flag);
 
 #endif

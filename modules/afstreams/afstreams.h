@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2011 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2011 Balabit
  * Copyright (c) 1998-2011 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -26,7 +26,7 @@
 
 #include "driver.h"
 
-LogDriver *afstreams_sd_new(gchar *filename);
+LogDriver *afstreams_sd_new(gchar *filename, GlobalConfig *cfg);
 void afstreams_sd_set_sundoor(LogDriver *self, gchar *filename);
 
 #endif

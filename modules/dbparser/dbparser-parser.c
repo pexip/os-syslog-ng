@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2011 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2011 Balabit
  * Copyright (c) 1998-2011 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -31,14 +31,26 @@ int dbparser_parse(CfgLexer *lexer, LogParser **instance, gpointer arg);
 
 static CfgLexerKeyword dbparser_keywords[] =
 {
-  { "db_parser",          KW_DB_PARSER, 0x0300 },
-  { "inject_mode",        KW_INJECT_MODE, 0x0303 },
+  { "db_parser",          KW_DB_PARSER },
+  { "grouping_by",        KW_GROUPING_BY },
+
+  /* correllate options */
+  { "inject_mode",        KW_INJECT_MODE },
+  { "key",                KW_KEY },
+  { "scope",              KW_SCOPE },
+  { "timeout",            KW_TIMEOUT },
+  { "aggregate",          KW_AGGREGATE },
+  { "inherit_mode",       KW_INHERIT_MODE },
+  { "where",              KW_WHERE },
+  { "having",             KW_HAVING },
+  { "trigger",            KW_TRIGGER },
+  { "value",              KW_VALUE },
   { NULL }
 };
 
 CfgParser dbparser_parser =
 {
-#if ENABLE_DEBUG
+#if SYSLOG_NG_ENABLE_DEBUG
   .debug_flag = &dbparser_debug,
 #endif
   .name = "dbparser",

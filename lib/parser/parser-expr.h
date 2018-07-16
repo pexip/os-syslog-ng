@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -25,14 +25,13 @@
 #ifndef LOGPARSER_H_INCLUDED
 #define LOGPARSER_H_INCLUDED
 
-#include "logmsg.h"
+#include "logmsg/logmsg.h"
 #include "messages.h"
 #include "logpipe.h"
 #include "template/templates.h"
 #include <string.h>
 
 typedef struct _LogParser LogParser;
-typedef struct _LogColumnParser LogColumnParser;
 
 struct _LogParser
 {
@@ -43,7 +42,8 @@ struct _LogParser
 };
 
 void log_parser_set_template(LogParser *self, LogTemplate *template);
-void log_parser_init_instance(LogParser *self);
+gboolean log_parser_init_method(LogPipe *s);
+void log_parser_init_instance(LogParser *self, GlobalConfig *cfg);
 void log_parser_free_method(LogPipe *self);
 
 static inline gboolean
@@ -54,14 +54,6 @@ log_parser_process(LogParser *self, LogMessage **pmsg, const LogPathOptions *pat
   return self->process(self, pmsg, path_options, input, input_len);
 }
 
-struct _LogColumnParser
-{
-  LogParser super;
-  GList *columns;
-};
-
-void log_column_parser_set_columns(LogColumnParser *s, GList *fields);
-void log_column_parser_init_instance(LogColumnParser *self);
-void log_column_parser_free_method(LogPipe *s);
+gboolean log_parser_process_message(LogParser *self, LogMessage **pmsg, const LogPathOptions *path_options);
 
 #endif

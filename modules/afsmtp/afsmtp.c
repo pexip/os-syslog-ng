@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2011-2013 BalaBit IT Ltd, Budapest, Hungary
- * Copyright (c) 2011-2013 Gergely Nagy <algernon@balabit.hu>
+ * Copyright (c) 2011-2014 Balabit
+ * Copyright (c) 2011-2014 Gergely Nagy <algernon@balabit.hu>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published
@@ -21,13 +21,11 @@
  *
  */
 
-
 #include "afsmtp.h"
 #include "afsmtp-parser.h"
 #include "plugin.h"
 #include "messages.h"
-#include "misc.h"
-#include "stats.h"
+#include "stats/stats-registry.h"
 #include "logqueue.h"
 #include "plugin-types.h"
 #include "logthrdestdrv.h"
@@ -38,14 +36,13 @@
 typedef struct
 {
   gchar *name;
-  gchar *template;
-  LogTemplate *value;
+  LogTemplate *template;
 } AFSMTPHeader;
 
 typedef struct
 {
   gchar *phrase;
-  gchar *address;
+  LogTemplate *template;
   afsmtp_rcpt_type_t type;
 } AFSMTPRecipient;
 
@@ -58,19 +55,23 @@ typedef struct
   gchar *host;
   gint port;
 
-  gchar *subject;
   AFSMTPRecipient *mail_from;
   GList *rcpt_tos;
   GList *headers;
-  gchar *body;
 
-  LogTemplate *subject_tmpl;
-  LogTemplate *body_tmpl;
+  LogTemplate *subject_template;
+  LogTemplate *body_template;
 
   /* Writer-only stuff */
-  gint32 seq_num;
   GString *str;
+  LogTemplateOptions template_options;
 } AFSMTPDriver;
+
+typedef struct
+{
+  gboolean success;
+  AFSMTPDriver *driver;
+} LogRcptStatusData;
 
 static gchar *
 afsmtp_wash_string (gchar *str)
@@ -83,6 +84,13 @@ afsmtp_wash_string (gchar *str)
       str[i] = ' ';
 
   return str;
+}
+
+LogTemplateOptions *
+afsmtp_dd_get_template_options(LogDriver *d)
+{
+  AFSMTPDriver *self = (AFSMTPDriver *)d;
+  return &self->template_options;
 }
 
 /*
@@ -107,51 +115,52 @@ afsmtp_dd_set_port(LogDriver *d, gint port)
 }
 
 void
-afsmtp_dd_set_subject(LogDriver *d, const gchar *subject)
+afsmtp_dd_set_subject(LogDriver *d, LogTemplate *subject)
 {
   AFSMTPDriver *self = (AFSMTPDriver *)d;
 
-  g_free(self->subject);
-  self->subject = g_strdup(subject);
+  log_template_unref(self->subject_template);
+  self->subject_template = log_template_ref(subject);
 }
 
 void
-afsmtp_dd_set_from(LogDriver *d, const gchar *phrase, const gchar *mbox)
+afsmtp_dd_set_from(LogDriver *d, LogTemplate *phrase, LogTemplate *mbox)
 {
   AFSMTPDriver *self = (AFSMTPDriver *)d;
 
   g_free(self->mail_from->phrase);
-  g_free(self->mail_from->address);
-  self->mail_from->phrase = afsmtp_wash_string(g_strdup(phrase));
-  self->mail_from->address = afsmtp_wash_string(g_strdup(mbox));
+  self->mail_from->phrase = afsmtp_wash_string(g_strdup(phrase->template));
+  log_template_unref(self->mail_from->template);
+  self->mail_from->template = log_template_ref(mbox);
 }
 
 void
-afsmtp_dd_add_rcpt(LogDriver *d, afsmtp_rcpt_type_t type, const gchar *phrase,
-                   const gchar *mbox)
+afsmtp_dd_add_rcpt(LogDriver *d, afsmtp_rcpt_type_t type, LogTemplate *phrase,
+                   LogTemplate *mbox)
 {
   AFSMTPDriver *self = (AFSMTPDriver *)d;
   AFSMTPRecipient *rcpt;
 
   rcpt = g_new0(AFSMTPRecipient, 1);
-  rcpt->phrase = afsmtp_wash_string(g_strdup(phrase));
-  rcpt->address = afsmtp_wash_string(g_strdup(mbox));
+  rcpt->phrase = afsmtp_wash_string(g_strdup(phrase->template));
+  log_template_unref(rcpt->template);
+  rcpt->template = log_template_ref(mbox);
   rcpt->type = type;
 
   self->rcpt_tos = g_list_append(self->rcpt_tos, rcpt);
 }
 
 void
-afsmtp_dd_set_body(LogDriver *d, const gchar *body)
+afsmtp_dd_set_body(LogDriver *d, LogTemplate *body)
 {
   AFSMTPDriver *self = (AFSMTPDriver *)d;
 
-  g_free(self->body);
-  self->body = g_strdup(body);
+  log_template_unref(self->body_template);
+  self->body_template = log_template_ref(body);
 }
 
 gboolean
-afsmtp_dd_add_header(LogDriver *d, const gchar *header, const gchar *value)
+afsmtp_dd_add_header(LogDriver *d, const gchar *header, LogTemplate *value)
 {
   AFSMTPDriver *self = (AFSMTPDriver *)d;
   AFSMTPHeader *h;
@@ -167,7 +176,8 @@ afsmtp_dd_add_header(LogDriver *d, const gchar *header, const gchar *value)
 
   h = g_new0(AFSMTPHeader, 1);
   h->name = g_strdup(header);
-  h->template = g_strdup(value);
+  log_template_unref(h->template);
+  h->template = log_template_ref(value);
 
   self->headers = g_list_append(self->headers, h);
 
@@ -194,32 +204,36 @@ afsmtp_dd_format_stats_instance(LogThrDestDriver *d)
   AFSMTPDriver *self = (AFSMTPDriver *)d;
   static gchar persist_name[1024];
 
-  g_snprintf(persist_name, sizeof(persist_name),
-             "smtp,%s,%u", self->host, self->port);
+  if (d->super.super.super.persist_name)
+    g_snprintf(persist_name, sizeof(persist_name), "smtp,%s", d->super.super.super.persist_name);
+  else
+    g_snprintf(persist_name, sizeof(persist_name), "smtp,%s,%u", self->host, self->port);
+
   return persist_name;
 }
 
-static gchar *
-afsmtp_dd_format_persist_name(LogThrDestDriver *d)
+static const gchar *
+afsmtp_dd_format_persist_name(const LogPipe *s)
 {
-  AFSMTPDriver *self = (AFSMTPDriver *)d;
+  const AFSMTPDriver *self = (const AFSMTPDriver *)s;
   static gchar persist_name[1024];
 
-  g_snprintf(persist_name, sizeof(persist_name),
-             "smtp(%s,%u)", self->host, self->port);
+  if (s->persist_name)
+    g_snprintf(persist_name, sizeof(persist_name), "smtp.%s", s->persist_name);
+  else
+    g_snprintf(persist_name, sizeof(persist_name), "smtp(%s,%u)", self->host, self->port);
+
   return persist_name;
 }
 
 /*
  * Worker thread
  */
+
 static void
-afsmtp_dd_msg_add_recipient(AFSMTPRecipient *rcpt, smtp_message_t message)
+_smtp_message_add_recipient_header(smtp_message_t self, AFSMTPRecipient *rcpt, AFSMTPDriver *driver) 
 {
   gchar *hdr;
-
-  smtp_add_recipient(message, rcpt->address);
-
   switch (rcpt->type)
     {
     case AFSMTP_RCPT_TYPE_TO:
@@ -234,9 +248,29 @@ afsmtp_dd_msg_add_recipient(AFSMTPRecipient *rcpt, smtp_message_t message)
     default:
       return;
     }
-  smtp_set_header(message, hdr, rcpt->phrase, rcpt->address);
-  smtp_set_header_option(message, hdr, Hdr_OVERRIDE, 1);
+
+  smtp_set_header(self, hdr, rcpt->phrase, afsmtp_wash_string (driver->str->str));
+  smtp_set_header_option(self, hdr, Hdr_OVERRIDE, 1);
 }
+
+static void
+_smtp_message_add_recipient_from_template(smtp_message_t self, AFSMTPDriver *driver, LogTemplate *template, LogMessage *msg)
+{
+  log_template_format(template, msg, &driver->template_options, LTZ_SEND,
+                      driver->super.seq_num, NULL, driver->str);
+  smtp_add_recipient(self, afsmtp_wash_string (driver->str->str));
+}
+
+static void
+afsmtp_dd_msg_add_recipient(AFSMTPRecipient *rcpt, gpointer user_data)
+{
+  AFSMTPDriver *self = ((gpointer *)user_data)[0];
+  LogMessage *msg = ((gpointer *)user_data)[1];
+  smtp_message_t message = ((gpointer *)user_data)[2];
+
+  _smtp_message_add_recipient_from_template(message, self, rcpt->template, msg);
+  _smtp_message_add_recipient_header(message, rcpt, self);
+ }
 
 static void
 afsmtp_dd_msg_add_header(AFSMTPHeader *hdr, gpointer user_data)
@@ -245,7 +279,8 @@ afsmtp_dd_msg_add_header(AFSMTPHeader *hdr, gpointer user_data)
   LogMessage *msg = ((gpointer *)user_data)[1];
   smtp_message_t message = ((gpointer *)user_data)[2];
 
-  log_template_format(hdr->value, msg, NULL, LTZ_SEND, self->seq_num, NULL, self->str);
+  log_template_format(hdr->template, msg, &self->template_options, LTZ_LOCAL,
+                      self->super.seq_num, NULL, self->str);
 
   smtp_set_header(message, hdr->name, afsmtp_wash_string (self->str->str), NULL);
   smtp_set_header_option(message, hdr->name, Hdr_OVERRIDE, 1);
@@ -256,13 +291,26 @@ afsmtp_dd_log_rcpt_status(smtp_recipient_t rcpt, const char *mailbox,
                           gpointer user_data)
 {
   const smtp_status_t *status;
+  LogRcptStatusData *status_data = (LogRcptStatusData *)user_data;
 
   status = smtp_recipient_status(rcpt);
-  msg_debug("SMTP recipient result",
+  if (status->code != 250)
+    {
+      status_data->success = FALSE;
+      msg_error("SMTP recipient result",
+            evt_tag_str("driver", status_data->driver->super.super.super.id),
             evt_tag_str("recipient", mailbox),
             evt_tag_int("code", status->code),
-            evt_tag_str("text", status->text),
-            NULL);
+            evt_tag_str("text", status->text));
+    }
+  else
+    {
+      msg_debug("SMTP recipient result",
+            evt_tag_str("driver", status_data->driver->super.super.super.id),
+            evt_tag_str("recipient", mailbox),
+            evt_tag_int("code", status->code),
+            evt_tag_str("text", status->text));
+    }
 }
 
 static void
@@ -274,8 +322,7 @@ afsmtp_dd_cb_event(smtp_session_t session, int event, AFSMTPDriver *self)
       msg_verbose("Connected to SMTP server",
                   evt_tag_str("driver", self->super.super.super.id),
                   evt_tag_str("host", self->host),
-                  evt_tag_int("port", self->port),
-                  NULL);
+                  evt_tag_int("port", self->port));
       break;
     case SMTP_EV_MAILSTATUS:
     case SMTP_EV_RCPTSTATUS:
@@ -287,14 +334,12 @@ afsmtp_dd_cb_event(smtp_session_t session, int event, AFSMTPDriver *self)
       msg_verbose("Disconnected from SMTP server",
                   evt_tag_str("driver", self->super.super.super.id),
                   evt_tag_str("host", self->host),
-                  evt_tag_int("port", self->port),
-                  NULL);
+                  evt_tag_int("port", self->port));
       break;
     default:
       msg_verbose("Unknown SMTP event",
                   evt_tag_str("driver", self->super.super.super.id),
-                  evt_tag_int("event_id", event),
-                  NULL);
+                  evt_tag_int("event_id", event));
       break;
     }
 }
@@ -312,118 +357,173 @@ afsmtp_dd_cb_monitor(const gchar *buf, gint buflen, gint writing,
     case SMTP_CB_READING:
       msg_debug ("SMTP Session: SERVER",
                  evt_tag_str("driver", self->super.super.super.id),
-                 evt_tag_printf("message", fmt, buf),
-                 NULL);
+                 evt_tag_printf("message", fmt, buf));
       break;
     case SMTP_CB_WRITING:
       msg_debug("SMTP Session: CLIENT",
                 evt_tag_str("driver", self->super.super.super.id),
-                evt_tag_printf("message", fmt, buf),
-                NULL);
+                evt_tag_printf("message", fmt, buf));
       break;
     case SMTP_CB_HEADERS:
       msg_debug("SMTP Session: HEADERS",
                 evt_tag_str("driver", self->super.super.super.id),
-                evt_tag_printf("data", fmt, buf),
-                NULL);
+                evt_tag_printf("data", fmt, buf));
       break;
     }
 }
 
-static gboolean
-afsmtp_worker_insert(LogThrDestDriver *s)
+static smtp_session_t
+__build_session(AFSMTPDriver *self, LogMessage *msg)
 {
-  AFSMTPDriver *self = (AFSMTPDriver *)s;
-  gboolean success;
-  LogMessage *msg;
-  LogPathOptions path_options = LOG_PATH_OPTIONS_INIT;
   smtp_session_t session;
-  smtp_message_t message;
-  gpointer args[] = { self, NULL, NULL };
-
-  success = log_queue_pop_head(s->queue, &msg, &path_options, FALSE, FALSE);
-  if (!success)
-    return TRUE;
-
-  msg_set_context(msg);
 
   session = smtp_create_session();
-  message = smtp_add_message(session);
 
   g_string_printf(self->str, "%s:%d", self->host, self->port);
   smtp_set_server(session, self->str->str);
 
-  smtp_set_eventcb(session, (smtp_eventcb_t)afsmtp_dd_cb_event, (void *)self);
-  smtp_set_monitorcb(session, (smtp_monitorcb_t)afsmtp_dd_cb_monitor,
-                     (void *)self, 1);
+  smtp_set_eventcb(session, (smtp_eventcb_t) afsmtp_dd_cb_event, (void *) self);
+  smtp_set_monitorcb(session, (smtp_monitorcb_t) afsmtp_dd_cb_monitor, (void *) self, 1);
 
-  smtp_set_reverse_path(message, self->mail_from->address);
+  return session;
+}
+
+static smtp_message_t
+__build_message(AFSMTPDriver *self, LogMessage *msg, smtp_session_t session)
+{
+  smtp_message_t message;
+  gpointer args[] = { self, NULL, NULL };
+
+  message = smtp_add_message(session);
+
+  log_template_format(self->mail_from->template, msg, &self->template_options, LTZ_SEND,
+                      self->super.seq_num, NULL, self->str);
+  smtp_set_reverse_path(message, afsmtp_wash_string(self->str->str));
 
   /* Defaults */
   smtp_set_header(message, "To", NULL, NULL);
   smtp_set_header(message, "From", NULL, NULL);
 
-  log_template_format(self->subject_tmpl, msg, NULL, LTZ_SEND,
-                      self->seq_num, NULL, self->str);
+  log_template_format(self->subject_template, msg, &self->template_options, LTZ_SEND,
+                      self->super.seq_num, NULL, self->str);
   smtp_set_header(message, "Subject", afsmtp_wash_string(self->str->str));
   smtp_set_header_option(message, "Subject", Hdr_OVERRIDE, 1);
 
   /* Add recipients */
-  g_list_foreach(self->rcpt_tos, (GFunc)afsmtp_dd_msg_add_recipient, message);
-
-  /* Add custom header (overrides anything set before, or in the
-     body). */
   args[1] = msg;
   args[2] = message;
-  g_list_foreach(self->headers, (GFunc)afsmtp_dd_msg_add_header, args);
+  g_list_foreach(self->rcpt_tos, (GFunc) afsmtp_dd_msg_add_recipient, args);
+
+  /* Add custom header (overrides anything set before, or in the
+   body). */
+
+  g_list_foreach(self->headers, (GFunc) afsmtp_dd_msg_add_header, args);
 
   /* Set the body.
    *
    * We add a header to the body, otherwise libesmtp will not
    * recognise headers, and will append them to the end of the body.
    */
-  g_string_assign(self->str, "X-Mailer: syslog-ng " VERSION "\r\n\r\n");
-  log_template_append_format(self->body_tmpl, msg, NULL, LTZ_SEND,
-                             self->seq_num, NULL, self->str);
+  g_string_assign(self->str, "X-Mailer: syslog-ng " SYSLOG_NG_VERSION "\r\n\r\n");
+  log_template_append_format(self->body_template, msg, &self->template_options,
+                             LTZ_SEND, self->super.seq_num,
+                             NULL, self->str);
   smtp_set_message_str(message, self->str->str);
+  return message;
+}
 
-  if (!smtp_start_session(session))
+static gboolean
+__check_transfer_status(AFSMTPDriver *self, smtp_message_t message)
+{
+  LogRcptStatusData status_data;
+  const smtp_status_t *status = smtp_message_transfer_status(message);
+
+  status_data.success = TRUE;
+  status_data.driver = self;
+
+  if (status->code != 250)
     {
-      gchar error[1024];
+      status_data.success = FALSE;
+      msg_error("Failed to send message",
+                evt_tag_str("driver", self->super.super.super.id),
+                evt_tag_int("code", status->code),
+                evt_tag_str("text", status->text));
+    }
+  else
+    {
+      msg_debug("SMTP result",
+                evt_tag_str("driver", self->super.super.super.id),
+                evt_tag_int("code", status->code),
+                evt_tag_str("text", status->text));
+      smtp_enumerate_recipients(message, afsmtp_dd_log_rcpt_status, &status_data);
+    }
+
+  return status_data.success;
+}
+
+static gboolean
+__send_message(AFSMTPDriver *self, smtp_session_t session)
+{
+  gboolean success = smtp_start_session(session);
+
+  if (!(success))
+    {
+      gchar error[1024] = {0};
+
       smtp_strerror(smtp_errno(), error, sizeof (error) - 1);
 
       msg_error("SMTP server error, suspending",
                 evt_tag_str("driver", self->super.super.super.id),
                 evt_tag_str("error", error),
-                evt_tag_int("time_reopen", self->super.time_reopen),
-                NULL);
+                evt_tag_int("time_reopen", self->super.time_reopen));
       success = FALSE;
     }
-  else
+  return success;
+}
+
+static void
+__worker_message_retry_over(LogThrDestDriver *self, LogMessage *msg)
+{
+  msg_error("Multiple failures while sending message in email to the server, "
+            "message dropped",
+            evt_tag_str("driver", self->super.super.id),
+            evt_tag_int("attempts", self->retries.counter),
+            evt_tag_int("max-attempts", self->retries.max));
+}
+
+static worker_insert_result_t
+afsmtp_worker_insert(LogThrDestDriver *s, LogMessage *msg)
+{
+  AFSMTPDriver *self = (AFSMTPDriver *)s;
+  gboolean success = TRUE;
+  gboolean message_sent = TRUE;
+  smtp_session_t session = NULL;
+  smtp_message_t message;
+
+  if (msg->flags & LF_MARK)
     {
-      const smtp_status_t *status = smtp_message_transfer_status(message);
-      msg_debug("SMTP result",
-                evt_tag_str("driver", self->super.super.super.id),
-                evt_tag_int("code", status->code),
-                evt_tag_str("text", status->text),
-                NULL);
-      smtp_enumerate_recipients(message, afsmtp_dd_log_rcpt_status, NULL);
+      msg_debug("Mark messages are dropped by SMTP destination",
+                evt_tag_str("driver", self->super.super.super.id));
+      return WORKER_INSERT_RESULT_SUCCESS;
     }
+
+  session = __build_session(self, msg);
+  message = __build_message(self, msg, session);
+
+  message_sent = __send_message(self, session);
+  success = message_sent && __check_transfer_status(self, message);
+
   smtp_destroy_session(session);
 
-  msg_set_context(NULL);
-
-  if (success)
+  if (!success)
     {
-      stats_counter_inc(s->stored_messages);
-      step_sequence_number(&self->seq_num);
-      log_msg_ack(msg, &path_options);
-      log_msg_unref(msg);
+      if (!message_sent)
+        return WORKER_INSERT_RESULT_NOT_CONNECTED;
+      else
+        return WORKER_INSERT_RESULT_ERROR;
     }
-  else
-    log_queue_push_head(s->queue, msg, &path_options);
 
-  return success;
+  return WORKER_INSERT_RESULT_SUCCESS;
 }
 
 static void
@@ -448,14 +548,61 @@ afsmtp_worker_thread_deinit(LogThrDestDriver *d)
  * Main thread
  */
 
-static void
-afsmtp_dd_init_header(AFSMTPHeader *hdr, GlobalConfig *cfg)
+static gboolean
+__check_rcpt_tos(AFSMTPDriver *self)
 {
-  if (!hdr->value)
+  gboolean result = FALSE;
+  GList *l = self->rcpt_tos;
+
+  while (l)
     {
-      hdr->value = log_template_new(cfg, hdr->name);
-      log_template_compile(hdr->value, hdr->template, NULL);
+      AFSMTPRecipient *rcpt = (AFSMTPRecipient *)l->data;
+      gboolean rcpt_type_accepted = rcpt->type == AFSMTP_RCPT_TYPE_BCC ||
+                                    rcpt->type == AFSMTP_RCPT_TYPE_CC  ||
+                                    rcpt->type == AFSMTP_RCPT_TYPE_TO;
+
+      if (rcpt->template && rcpt_type_accepted)
+        {
+          result = TRUE;
+          break;
+        }
+      l = l->next;
     }
+
+  return result;
+}
+
+static gboolean
+__check_required_options(AFSMTPDriver *self)
+{
+  if (!self->mail_from->template)
+    {
+      msg_error("Error: from or sender option is required",
+                evt_tag_str("driver", self->super.super.super.id));
+      return FALSE;
+    }
+
+  if (!__check_rcpt_tos(self))
+    {
+      msg_error("Error: to or bcc option is required",
+                evt_tag_str("driver", self->super.super.super.id));
+      return FALSE;
+    }
+
+  if (!self->subject_template)
+    {
+      msg_error("Error: subject is required option",
+                evt_tag_str("driver", self->super.super.super.id));
+      return FALSE;
+    }
+
+  if (!self->body_template)
+    {
+      msg_error("Error: body is required option",
+                evt_tag_str("driver", self->super.super.super.id));
+      return FALSE;
+    }
+  return TRUE;
 }
 
 static gboolean
@@ -470,37 +617,12 @@ afsmtp_dd_init(LogPipe *s)
   msg_verbose("Initializing SMTP destination",
               evt_tag_str("driver", self->super.super.super.id),
               evt_tag_str("host", self->host),
-              evt_tag_int("port", self->port),
-              NULL);
+              evt_tag_int("port", self->port));
 
-  if (!self->subject)
-    {
-      msg_error("Error subject is required option",
-                evt_tag_str("driver", self->super.super.super.id),
-                NULL);
-      return FALSE;
-    }
+  if (!__check_required_options(self))
+    return FALSE;
 
-  if (!self->body)
-    {
-      msg_error("Error Body is required option",
-                evt_tag_str("driver", self->super.super.super.id),
-                NULL);
-      return FALSE;
-    }
-
-  g_list_foreach(self->headers, (GFunc)afsmtp_dd_init_header, cfg);
-  if (!self->subject_tmpl)
-    {
-      self->subject_tmpl = log_template_new(cfg, "subject");
-      log_template_compile(self->subject_tmpl, self->subject, NULL);
-    }
-  if (!self->body_tmpl)
-    {
-      self->body_tmpl = log_template_new(cfg, "body");
-      log_template_compile(self->body_tmpl, self->body, NULL);
-    }
-
+  log_template_options_init(&self->template_options, cfg);
   return log_threaded_dest_driver_start(s);
 }
 
@@ -512,19 +634,17 @@ afsmtp_dd_free(LogPipe *d)
 
   g_free(self->host);
   g_free(self->mail_from->phrase);
-  g_free(self->mail_from->address);
+  log_template_unref(self->mail_from->template);
   g_free(self->mail_from);
-  log_template_unref(self->subject_tmpl);
-  log_template_unref(self->body_tmpl);
-  g_free(self->body);
-  g_free(self->subject);
+  log_template_unref(self->subject_template);
+  log_template_unref(self->body_template);
 
   l = self->rcpt_tos;
   while (l)
     {
       AFSMTPRecipient *rcpt = (AFSMTPRecipient *)l->data;
-      g_free(rcpt->address);
       g_free(rcpt->phrase);
+      log_template_unref(rcpt->template);
       g_free(rcpt);
       l = g_list_delete_link(l, l);
     }
@@ -533,13 +653,13 @@ afsmtp_dd_free(LogPipe *d)
   while (l)
     {
       AFSMTPHeader *hdr = (AFSMTPHeader *)l->data;
+
       g_free(hdr->name);
-      g_free(hdr->template);
-      log_template_unref(hdr->value);
+      log_template_unref(hdr->template);
       g_free(hdr);
       l = g_list_delete_link(l, l);
     }
-
+  log_template_options_destroy(&self->template_options);
   log_threaded_dest_driver_free(d);
 }
 
@@ -548,28 +668,30 @@ afsmtp_dd_free(LogPipe *d)
  */
 
 LogDriver *
-afsmtp_dd_new(void)
+afsmtp_dd_new(GlobalConfig *cfg)
 {
   AFSMTPDriver *self = g_new0(AFSMTPDriver, 1);
 
-  log_threaded_dest_driver_init_instance(&self->super);
+  log_threaded_dest_driver_init_instance(&self->super, cfg);
   self->super.super.super.super.init = afsmtp_dd_init;
   self->super.super.super.super.free_fn = afsmtp_dd_free;
+  self->super.super.super.super.generate_persist_name = afsmtp_dd_format_persist_name;
 
   self->super.worker.thread_init = afsmtp_worker_thread_init;
   self->super.worker.thread_deinit = afsmtp_worker_thread_deinit;
   self->super.worker.insert = afsmtp_worker_insert;
 
   self->super.format.stats_instance = afsmtp_dd_format_stats_instance;
-  self->super.format.persist_name = afsmtp_dd_format_persist_name;
   self->super.stats_source = SCS_SMTP;
+
+  self->super.messages.retry_over = __worker_message_retry_over;
 
   afsmtp_dd_set_host((LogDriver *)self, "127.0.0.1");
   afsmtp_dd_set_port((LogDriver *)self, 25);
 
   self->mail_from = g_new0(AFSMTPRecipient, 1);
 
-  init_sequence_number(&self->seq_num);
+  log_template_options_defaults(&self->template_options);
 
   return (LogDriver *)self;
 }
@@ -593,9 +715,9 @@ afsmtp_module_init(GlobalConfig *cfg, CfgArgs *args)
 const ModuleInfo module_info =
 {
   .canonical_name = "afsmtp",
-  .version = VERSION,
+  .version = SYSLOG_NG_VERSION,
   .description = "The afsmtp module provides SMTP destination support for syslog-ng.",
-  .core_revision = SOURCE_REVISION,
+  .core_revision = SYSLOG_NG_SOURCE_REVISION,
   .plugins = &afsmtp_plugin,
   .plugins_len = 1,
 };

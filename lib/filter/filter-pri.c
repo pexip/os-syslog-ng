@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2013 Balabit
  * Copyright (c) 1998-2013 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -24,7 +24,7 @@
 
 #include "filter/filter-pri.h"
 #include "syslog-names.h"
-#include "logmsg.h"
+#include "logmsg/logmsg.h"
 
 typedef struct _FilterPri
 {
@@ -56,7 +56,7 @@ filter_facility_new(guint32 facilities)
 {
   FilterPri *self = g_new0(FilterPri, 1);
 
-  filter_expr_node_init(&self->super);
+  filter_expr_node_init_instance(&self->super);
   self->super.eval = filter_facility_eval;
   self->valid = facilities;
   self->super.type = "facility";
@@ -79,7 +79,7 @@ filter_level_new(guint32 levels)
 {
   FilterPri *self = g_new0(FilterPri, 1);
 
-  filter_expr_node_init(&self->super);
+  filter_expr_node_init_instance(&self->super);
   self->super.eval = filter_level_eval;
   self->valid = levels;
   self->super.type = "level";

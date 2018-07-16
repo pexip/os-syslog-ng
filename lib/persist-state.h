@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -35,6 +35,7 @@ void persist_state_unmap_entry(PersistState *self, PersistEntryHandle handle);
 
 PersistEntryHandle persist_state_alloc_entry(PersistState *self, const gchar *persist_name, gsize alloc_size);
 PersistEntryHandle persist_state_lookup_entry(PersistState *self, const gchar *persist_name, gsize *size, guint8 *version);
+gboolean persist_state_remove_entry(PersistState *self, const gchar *persist_name);
 
 gchar *persist_state_lookup_string(PersistState *self, const gchar *key, gsize *length, guint8 *version);
 gboolean persist_state_rename_entry(PersistState *self, const gchar *old_key, const gchar *new_key);
@@ -42,7 +43,15 @@ void persist_state_alloc_string(PersistState *self, const gchar *persist_name, c
 
 void persist_state_free_entry(PersistEntryHandle handle);
 
+typedef void (*PersistStateForeachFunc)(gchar* name, gint entry_size, gpointer entry, gpointer userdata);
+void persist_state_foreach_entry(PersistState *self, PersistStateForeachFunc func, gpointer userdata);
+
 gboolean persist_state_start(PersistState *self);
+gboolean persist_state_start_edit(PersistState *self);
+gboolean persist_state_start_dump(PersistState *self);
+
+const gchar *persist_state_get_filename(PersistState *self);
+
 gboolean persist_state_commit(PersistState *self);
 void persist_state_cancel(PersistState *self);
 

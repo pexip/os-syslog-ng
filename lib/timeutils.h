@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2014 Balabit
  * Copyright (c) 1998-2010 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -26,14 +26,14 @@
 #define TIMEUTILS_H_INCLUDED
 
 #include "syslog-ng.h"
-#include <time.h>
+#include "compat/time.h"
 
 time_t cached_mktime(struct tm *tm);
 void cached_localtime(time_t *when, struct tm *tm);
 void cached_gmtime(time_t *when, struct tm *tm);
 
 long get_local_timezone_ofs(time_t when);
-void clean_time_cache();
+void clean_time_cache(void);
 
 
 void invalidate_cached_time(void);
@@ -43,11 +43,11 @@ time_t cached_g_current_time_sec(void);
 gboolean check_nanosleep(void);
 
 int format_zone_info(gchar *buf, size_t buflen, long gmtoff);
-long get_local_timezone_ofs(time_t when);
 glong g_time_val_diff(GTimeVal *t1, GTimeVal *t2);
 void timespec_add_msec(struct timespec *ts, glong msec);
 glong timespec_diff_msec(struct timespec *t1, struct timespec *t2);
 glong timespec_diff_nsec(struct timespec *t1, struct timespec *t2);
+gint determine_year_for_month(gint month, const struct tm *now);
 
 typedef struct _ZoneInfo ZoneInfo;
 typedef struct _TimeZoneInfo TimeZoneInfo;

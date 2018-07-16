@@ -1,22 +1,52 @@
+
 DIST_SUBDIRS				= lib/ivykis
 
+include lib/transport/Makefile.am
 include lib/logproto/Makefile.am
 include lib/rewrite/Makefile.am
 include lib/parser/Makefile.am
 include lib/filter/Makefile.am
 include lib/template/Makefile.am
+include lib/value-pairs/Makefile.am
+include lib/stats/Makefile.am
+include lib/control/Makefile.am
+include lib/debugger/Makefile.am
+include lib/compat/Makefile.am
+include lib/logmsg/Makefile.am
+include lib/scanner/csv-scanner/Makefile.am
+
+LSNG_RELEASE		= $(shell echo @PACKAGE_VERSION@ | cut -d. -f1,2)
+
+# * Start with version information of ‘0:0:0’ for each libtool
+#   library.
+# * Update the version information only immediately before a public
+#   release of your software. More frequent updates are unnecessary,
+#   and only guarantee that the current interface number gets larger
+#   faster.
+# * If the library source code has changed at all since the last
+#   update, then increment revision (‘c:r:a’ becomes ‘c:r+1:a’).
+# * If any interfaces have been added, removed, or changed since the
+#   last update, increment current, and set revision to 0.
+# * If any interfaces have been added since the last public release,
+#   then increment age.
+# * If any interfaces have been removed or changed since the last
+#   public release, then set age to 0.
+LSNG_CURRENT		= 0
+LSNG_REVISION		= 0
+LSNG_AGE		= 0
 
 lib_LTLIBRARIES				+= lib/libsyslog-ng.la
-lib_libsyslog_ng_la_LIBADD		= @CORE_DEPS_LIBS@ $(libsystemd_daemon_LIBS)
-lib_libsyslog_ng_la_LDFLAGS		= -no-undefined -release @VERSION@
+lib_libsyslog_ng_la_LIBADD		= @CORE_DEPS_LIBS@ $(libsystemd_LIBS)
+lib_libsyslog_ng_la_LDFLAGS		= -no-undefined -release ${LSNG_RELEASE} \
+					  -version-info ${LSNG_CURRENT}:${LSNG_REVISION}:${LSNG_AGE}
 
-lib_test_subdirs			= lib_filter lib_logproto lib_parser lib_rewrite lib_template
+lib_test_subdirs			= lib_filter lib_logproto lib_parser lib_rewrite lib_template lib_stats lib_control
 
 if IVYKIS_INTERNAL
 lib_libsyslog_ng_la_DEPENDENCIES	= lib/ivykis/src/libivykis.la
 
 lib/ivykis/src/libivykis.la:
-	${MAKE} -C lib/ivykis
+	${MAKE} CFLAGS="${CFLAGS} -Wno-error" -C lib/ivykis
 
 CLEAN_SUBDIRS				+= @IVYKIS_SUBDIRS@
 
@@ -36,6 +66,13 @@ INSTALL_EXEC_HOOKS			+= install-ivykis
 UNINSTALL_HOOKS				+= uninstall-ivykis
 endif
 
+if JSON_INTERNAL
+lib/jsonc/libjson-c.la:
+	${MAKE} -C lib/jsonc
+
+CLEAN_SUBDIRS				+= @JSON_SUBDIRS@
+endif
+
 # this is intentionally formatted so conflicts are less likely to arise. one name in every line.
 pkginclude_HEADERS			+= \
 	lib/afinter.h			\
@@ -43,6 +80,7 @@ pkginclude_HEADERS			+= \
 	lib/apphook.h			\
 	lib/atomic.h			\
 	lib/block-ref-parser.h		\
+	lib/cache.h			\
 	lib/cfg.h			\
 	lib/cfg-grammar.h		\
 	lib/cfg-lexer.h			\
@@ -51,18 +89,19 @@ pkginclude_HEADERS			+= \
 	lib/cfg-parser.h		\
 	lib/cfg-tree.h			\
 	lib/children.h			\
-	lib/compat.h			\
-	lib/control.h			\
 	lib/crypto.h			\
 	lib/dnscache.h			\
 	lib/driver.h			\
+	lib/fdhelpers.h			\
 	lib/file-perms.h		\
+	lib/find-crlf.h			\
 	lib/gprocess.h			\
 	lib/gsockaddr.h			\
 	lib/gsocket.h			\
+	lib/hostname.h			\
+	lib/host-resolve.h		\
 	lib/logmatcher.h		\
 	lib/logmpx.h			\
-	lib/logmsg.h			\
 	lib/logpipe.h			\
 	lib/logqueue-fifo.h		\
 	lib/logqueue.h			\
@@ -70,46 +109,53 @@ pkginclude_HEADERS			+= \
 	lib/logsource.h			\
 	lib/logstamp.h			\
 	lib/logthrdestdrv.h		\
-	lib/logtransport.h		\
 	lib/logwriter.h			\
 	lib/mainloop.h			\
+	lib/mainloop-call.h		\
+	lib/mainloop-worker.h		\
+	lib/mainloop-io-worker.h	\
+	lib/module-config.h		\
 	lib/memtrace.h			\
 	lib/messages.h			\
-	lib/misc.h			\
 	lib/ml-batched-timer.h		\
 	lib/msg-format.h		\
-	lib/nvtable.h			\
 	lib/parse-number.h		\
+	lib/pathutils.h         \
 	lib/persist-state.h		\
+	lib/persistable-state-header.h  \
+	lib/persistable-state-presenter.h		\
 	lib/plugin.h			\
 	lib/plugin-types.h		\
 	lib/poll-events.h		\
 	lib/poll-fd-events.h		\
 	lib/pragma-parser.h		\
+	lib/presented-persistable-state.h			\
+	lib/reloc.h			\
+	lib/rcptid.h			\
+	lib/run-id.h			\
 	lib/scratch-buffers.h		\
 	lib/serialize.h			\
-	lib/stats.h			\
+	lib/service-management.h	\
+	lib/seqnum.h			\
 	lib/str-format.h		\
+	lib/str-utils.h			\
 	lib/syslog-names.h		\
 	lib/syslog-ng.h			\
-	lib/tags.h			\
+	lib/string-list.h		\
 	lib/timeutils.h			\
 	lib/tls-support.h		\
+	lib/thread-utils.h		\
 	lib/tlscontext.h  		\
-	lib/tlstransport.h		\
 	lib/type-hinting.h		\
-	lib/utils.h			\
 	lib/uuid.h			\
-	lib/value-pairs.h		\
-	lib/vptransform.h		\
-	lib/versioning.h
-
-# this is intentionally formatted so conflicts are less likely to arise. one name in every line.
-lib_libsyslog_ng_crypto_la_sources	= \
-	lib/crypto.c			\
-	lib/tlscontext.c		\
-	lib/tlstransport.c		\
-	lib/uuid.c
+	lib/userdb.h			\
+	lib/utf8utils.h			\
+	lib/versioning.h		\
+	lib/bookmark.h			\
+	lib/ringbuffer.h		\
+	lib/ack_tracker.h		\
+	lib/host-id.h			\
+	lib/resolved-configurable-paths.h
 
 # this is intentionally formatted so conflicts are less likely to arise. one name in every line.
 lib_libsyslog_ng_la_SOURCES		= \
@@ -117,25 +163,27 @@ lib_libsyslog_ng_la_SOURCES		= \
 	lib/alarms.c			\
 	lib/apphook.c			\
 	lib/block-ref-parser.c		\
+	lib/cache.c			\
 	lib/cfg.c			\
-	lib/cfg-args.c		\
+	lib/cfg-args.c			\
 	lib/cfg-lexer.c			\
 	lib/cfg-lexer-subst.c		\
 	lib/cfg-parser.c		\
 	lib/cfg-tree.c			\
 	lib/children.c			\
-	lib/compat.c			\
-	lib/control.c			\
 	lib/dnscache.c			\
 	lib/driver.c			\
+	lib/fdhelpers.c			\
 	lib/file-perms.c		\
+	lib/find-crlf.c			\
 	lib/globals.c			\
 	lib/gprocess.c			\
 	lib/gsockaddr.c			\
 	lib/gsocket.c			\
+	lib/hostname.c			\
+	lib/host-resolve.c		\
 	lib/logmatcher.c		\
 	lib/logmpx.c			\
-	lib/logmsg.c			\
 	lib/logpipe.c			\
 	lib/logqueue.c			\
 	lib/logqueue-fifo.c		\
@@ -143,55 +191,70 @@ lib_libsyslog_ng_la_SOURCES		= \
 	lib/logsource.c			\
 	lib/logstamp.c			\
 	lib/logthrdestdrv.c		\
-	lib/logtransport.c		\
 	lib/logwriter.c			\
 	lib/mainloop.c			\
+	lib/mainloop-call.c		\
+	lib/mainloop-worker.c		\
+	lib/mainloop-io-worker.c	\
+	lib/module-config.c		\
 	lib/memtrace.c			\
 	lib/messages.c			\
-	lib/misc.c			\
 	lib/ml-batched-timer.c		\
 	lib/msg-format.c		\
-	lib/nvtable.c			\
 	lib/parse-number.c		\
+	lib/pathutils.c         \
 	lib/persist-state.c		\
 	lib/plugin.c			\
 	lib/poll-events.c		\
 	lib/poll-fd-events.c		\
 	lib/pragma-parser.c		\
+	lib/persistable-state-presenter.c		\
+	lib/rcptid.c			\
+	lib/reloc.c			\
+	lib/run-id.c			\
 	lib/scratch-buffers.c		\
 	lib/serialize.c			\
-	lib/stats.c			\
+	lib/service-management.c	\
 	lib/str-format.c		\
+	lib/str-utils.c			\
 	lib/syslog-names.c		\
-	lib/tags.c			\
+	lib/string-list.c		\
 	lib/timeutils.c			\
 	lib/type-hinting.c		\
-	lib/utils.c			\
-	lib/value-pairs.c		\
-	lib/vptransform.c		\
+	lib/ringbuffer.c		\
+	lib/late_ack_tracker.c		\
+	lib/early_ack_tracker.c		\
+	lib/crypto.c			\
+	lib/tlscontext.c		\
+	lib/uuid.c			\
+	lib/userdb.c			\
+	lib/utf8utils.c			\
+	$(transport_crypto_sources)	\
+	lib/host-id.c			\
+	lib/resolved-configurable-paths.c \
 					\
 	lib/cfg-lex.l			\
 	lib/cfg-grammar.y		\
 	lib/block-ref-grammar.y		\
 	lib/pragma-grammar.y		\
+	$(csvscanner_sources)		\
+	$(transport_sources)		\
 	$(logproto_sources)		\
 	$(filter_sources)		\
 	$(parser_sources)		\
 	$(rewrite_sources)		\
-	$(template_sources)
+	$(template_sources)		\
+	$(value_pairs_sources)		\
+	$(stats_sources)		\
+	$(control_sources)		\
+	$(debugger_sources)		\
+	$(compat_sources)     \
+	$(logmsg_sources)
 
-if WITH_EMBEDDED_CRYPTO
-lib_libsyslog_ng_la_CFLAGS		= @UUID_CFLAGS@ $(libsystemd_daemon_CFLAGS)
+lib_libsyslog_ng_la_CFLAGS		= \
+	$(AM_CFLAGS) \
+	@UUID_CFLAGS@ $(libsystemd_CFLAGS)
 lib_libsyslog_ng_la_LIBADD		+= @OPENSSL_LIBS@ @UUID_LIBS@
-lib_libsyslog_ng_la_SOURCES		+= ${lib_libsyslog_ng_crypto_la_sources}
-else
-module_LTLIBRARIES			+= lib/libsyslog-ng-crypto.la
-lib_libsyslog_ng_crypto_la_CFLAGS	= @UUID_CFLAGS@ $(libsystemd_daemon_CFLAGS)
-lib_libsyslog_ng_crypto_la_LIBADD	= @MODULE_DEPS_LIBS@ @OPENSSL_LIBS@ @UUID_LIBS@
-lib_libsyslog_ng_crypto_la_LDFLAGS	= -no-undefined -avoid-version
-lib_libsyslog_ng_crypto_la_DEPENDENCIES	= lib/libsyslog-ng.la
-lib_libsyslog_ng_crypto_la_SOURCES	= ${lib_libsyslog_ng_crypto_la_sources}
-endif
 
 # each line with closely related files (e.g. the ones generated from the same source)
 BUILT_SOURCES += lib/cfg-lex.c lib/cfg-lex.h						\
@@ -203,15 +266,20 @@ EXTRA_DIST += \
 	lib/block-ref-grammar.ym	\
 	lib/pragma-grammar.ym		\
 	lib/merge-grammar.pl		\
+	lib/hostname-unix.c		\
 	lib/ivykis/configure.gnu
 
 lib/plugin-types.h: lib/cfg-grammar.h
 
-lib/ libsyslog-ng: lib/libsyslog-ng.la lib/libsyslog-ng-crypto.la
+lib/ libsyslog-ng: lib/libsyslog-ng.la
 if IVYKIS_INTERNAL
 lib/ivykis/ ivykis: lib/ivykis/src/libivykis.la
 endif
 
-.PHONY: lib/ libsyslog-ng ivykis lib/ivykis/
+if JSON_INTERNAL
+lib/jsonc/ jsonc: lib/jsonc/libjson-c.la
+endif
+
+.PHONY: lib/ libsyslog-ng ivykis lib/ivykis/ lib/jsonc/ jsonc
 
 include lib/tests/Makefile.am

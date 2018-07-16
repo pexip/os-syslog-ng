@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2013 Balabit
  * Copyright (c) 1998-2013 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -53,7 +53,7 @@ fop_free(FilterExprNode *s)
 static void
 fop_init_instance(FilterOp *self)
 {
-  filter_expr_node_init(&self->super);
+  filter_expr_node_init_instance(&self->super);
   self->super.init = fop_init;
   self->super.free_fn = fop_free;
 }

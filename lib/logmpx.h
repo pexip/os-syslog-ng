@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2010 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2010 Balabit
  * Copyright (c) 1998-2010 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -43,7 +43,7 @@ typedef struct _LogMultiplexer
   gboolean fallback_exists;
 } LogMultiplexer;
 
-LogMultiplexer *log_multiplexer_new(guint32 flags);
+LogMultiplexer *log_multiplexer_new(GlobalConfig *cfg);
 void log_multiplexer_add_next_hop(LogMultiplexer *self, LogPipe *next_hop);
 
 

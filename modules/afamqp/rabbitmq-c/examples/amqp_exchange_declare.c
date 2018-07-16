@@ -1,6 +1,10 @@
+/* vim:set ft=c ts=2 sw=2 sts=2 et cindent: */
 /*
  * ***** BEGIN LICENSE BLOCK *****
  * Version: MIT
+ *
+ * Portions created by Alan Antonuk are Copyright (c) 2012-2013
+ * Alan Antonuk. All Rights Reserved.
  *
  * Portions created by VMware are Copyright (c) 2007-2012 VMware, Inc.
  * All Rights Reserved.
@@ -35,18 +39,19 @@
 #include <string.h>
 
 #include <stdint.h>
+#include <amqp_tcp_socket.h>
 #include <amqp.h>
 #include <amqp_framing.h>
 
 #include "utils.h"
 
-int main(int argc, char const * const *argv) {
+int main(int argc, char const *const *argv)
+{
   char const *hostname;
-  int port;
+  int port, status;
   char const *exchange;
   char const *exchangetype;
-
-  int sockfd;
+  amqp_socket_t *socket = NULL;
   amqp_connection_state_t conn;
 
   if (argc < 5) {
@@ -61,15 +66,23 @@ int main(int argc, char const * const *argv) {
 
   conn = amqp_new_connection();
 
-  die_on_error(sockfd = amqp_open_socket(hostname, port), "Opening socket");
-  amqp_set_sockfd(conn, sockfd);
+  socket = amqp_tcp_socket_new(conn);
+  if (!socket) {
+    die("creating TCP socket");
+  }
+
+  status = amqp_socket_open(socket, hostname, port);
+  if (status) {
+    die("opening TCP socket");
+  }
+
   die_on_amqp_error(amqp_login(conn, "/", 0, 131072, 0, AMQP_SASL_METHOD_PLAIN, "guest", "guest"),
-		    "Logging in");
+                    "Logging in");
   amqp_channel_open(conn, 1);
   die_on_amqp_error(amqp_get_rpc_reply(conn), "Opening channel");
 
   amqp_exchange_declare(conn, 1, amqp_cstring_bytes(exchange), amqp_cstring_bytes(exchangetype),
-			0, 0, amqp_empty_table);
+                        0, 0, 0, 0, amqp_empty_table);
   die_on_amqp_error(amqp_get_rpc_reply(conn), "Declaring exchange");
 
   die_on_amqp_error(amqp_channel_close(conn, 1, AMQP_REPLY_SUCCESS), "Closing channel");

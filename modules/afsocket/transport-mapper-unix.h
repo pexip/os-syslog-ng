@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2013 Balabit
  * Copyright (c) 1998-2013 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -25,7 +25,10 @@
 
 #include "transport-mapper.h"
 
+typedef struct _TransportMapperUnix TransportMapperUnix;
+
 TransportMapper *transport_mapper_unix_dgram_new(void);
 TransportMapper *transport_mapper_unix_stream_new(void);
+void transport_mapper_unix_set_pass_unix_credentials(TransportMapper *self, gboolean pass);
 
 #endif

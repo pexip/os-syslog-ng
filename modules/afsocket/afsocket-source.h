@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -29,9 +29,6 @@
 #include "transport-mapper.h"
 #include "driver.h"
 #include "logreader.h"
-#if BUILD_WITH_SSL
-#include "tlscontext.h"
-#endif
 
 #include <iv.h>
 
@@ -58,7 +55,6 @@ struct _AFSocketSourceDriver
   SocketOptions *socket_options;
   TransportMapper *transport_mapper;
 
-  LogTransport *(*construct_transport)(AFSocketSourceDriver *self, gint fd);
   /*
    * Apply transport options, set up bind_addr based on the
    * information processed during parse time. This used to be
@@ -87,12 +83,6 @@ afsocket_sd_acquire_socket(AFSocketSourceDriver *s, gint *fd)
   return TRUE;
 }
 
-static inline LogTransport *
-afsocket_sd_construct_transport(AFSocketSourceDriver *self, gint fd)
-{
-  return self->construct_transport(self, fd);
-}
-
 static inline gboolean
 afsocket_sd_setup_addresses(AFSocketSourceDriver *s)
 {
@@ -106,6 +96,6 @@ gboolean afsocket_sd_init_method(LogPipe *s);
 gboolean afsocket_sd_deinit_method(LogPipe *s);
 void afsocket_sd_free_method(LogPipe *self);
 
-void afsocket_sd_init_instance(AFSocketSourceDriver *self, SocketOptions *socket_options, TransportMapper *transport_mapper);
+void afsocket_sd_init_instance(AFSocketSourceDriver *self, SocketOptions *socket_options, TransportMapper *transport_mapper, GlobalConfig *cfg);
 
 #endif

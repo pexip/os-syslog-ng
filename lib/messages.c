@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -23,7 +23,7 @@
  */
   
 #include "messages.h"
-#include "logmsg.h"
+#include "logmsg/logmsg.h"
 
 #include <stdio.h>
 #include <unistd.h>
@@ -51,10 +51,12 @@ typedef struct _MsgContext
   gchar recurse_trigger[128];
 } MsgContext;
 
+gboolean startup_debug_flag = 0;
 gboolean debug_flag = 0;
 gboolean verbose_flag = 0;
 gboolean trace_flag = 0;
 gboolean log_stderr = FALSE;
+gboolean skip_timestamp_on_stderr = FALSE;
 static MsgPostFunc msg_post_func;
 static EVTCONTEXT *evt_context;
 static GStaticPrivate msg_context_private = G_STATIC_PRIVATE_INIT;
@@ -118,15 +120,42 @@ msg_limit_internal_message(const gchar *msg)
   return TRUE;
 }
 
+static gchar *
+msg_format_timestamp(gchar *buf, gsize buflen)
+{
+  struct tm tm;
+  GTimeVal now;
+  gint len;
+  time_t now_sec;
+
+  g_get_current_time(&now);
+  now_sec = now.tv_sec;
+  cached_localtime(&now_sec, &tm);
+  len = strftime(buf, buflen, "%Y-%m-%dT%H:%M:%S", &tm);
+  if (len < buflen)
+    g_snprintf(buf + len, buflen - len, ".%06ld", now.tv_usec);
+  return buf;
+}
 
 static void
+msg_send_formatted_message_to_stderr(const char *msg)
+{
+  gchar tmtime[128];
+
+  if (skip_timestamp_on_stderr)
+    fprintf(stderr, "%s\n", msg);
+  else
+    fprintf(stderr, "[%s] %s\n", msg_format_timestamp(tmtime, sizeof(tmtime)), msg);
+}
+
+void
 msg_send_formatted_message(int prio, const char *msg)
 {
   if (G_UNLIKELY(log_stderr || (msg_post_func == NULL && (prio & 0x7) <= EVT_PRI_WARNING)))
     {
-      fprintf(stderr, "%s\n", msg);
+      msg_send_formatted_message_to_stderr(msg);
     }
-  else
+  else if (msg_post_func)
     {
       LogMessage *m;
       
@@ -186,6 +215,12 @@ msg_event_create(gint prio, const gchar *desc, EVTTAG *tag1, ...)
   return e;
 }
 
+EVTREC*
+msg_event_create_from_desc(gint prio, const char *desc)
+{
+  return msg_event_create(prio, desc, NULL);
+}
+
 void
 msg_event_free(EVTREC *e)
 {
@@ -239,13 +274,14 @@ msg_init(gboolean interactive)
   else
     {
       log_stderr = TRUE;
+      skip_timestamp_on_stderr = TRUE;
     }
   evt_context = evt_ctx_init("syslog-ng", EVT_FAC_SYSLOG);
 }
 
 
 void
-msg_deinit()
+msg_deinit(void)
 {
   evt_ctx_free(evt_context);
   log_stderr = TRUE;
@@ -253,6 +289,7 @@ msg_deinit()
 
 static GOptionEntry msg_option_entries[] =
 {
+  { "startup-debug",     'r',         0, G_OPTION_ARG_NONE, &startup_debug_flag, "Enable debug logging during startup", NULL},
   { "verbose",           'v',         0, G_OPTION_ARG_NONE, &verbose_flag, "Be a bit more verbose", NULL },
   { "debug",             'd',         0, G_OPTION_ARG_NONE, &debug_flag, "Enable debug messages", NULL},
   { "trace",             't',         0, G_OPTION_ARG_NONE, &trace_flag, "Enable trace messages", NULL },

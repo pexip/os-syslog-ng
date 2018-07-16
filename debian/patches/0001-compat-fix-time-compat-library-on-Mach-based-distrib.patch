@@ -1,0 +1,49 @@
+From: =?utf-8?q?L=C3=A1szl=C3=B3_V=C3=A1rady?= <laszlo.varady@balabit.com>
+Date: Sat, 27 Aug 2016 02:24:43 +0200
+Subject: compat: fix time compat library on Mach based distributions
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 8bit
+
+Fixes #1185
+
+Signed-off-by: László Várady <laszlo.varady@balabit.com>
+---
+ lib/compat/time.c | 2 +-
+ lib/compat/time.h | 4 ++--
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/lib/compat/time.c b/lib/compat/time.c
+index 36927bf..3ce6d19 100644
+--- a/lib/compat/time.c
++++ b/lib/compat/time.c
+@@ -23,7 +23,7 @@
+ 
+ #include "compat/time.h"
+ 
+-#ifdef __MACH__
++#ifdef __APPLE__
+ 
+ int
+ clock_gettime(clock_t clock_id, struct timespec *timestamp)
+diff --git a/lib/compat/time.h b/lib/compat/time.h
+index 8e8a25b..d0f0dc7 100644
+--- a/lib/compat/time.h
++++ b/lib/compat/time.h
+@@ -28,7 +28,7 @@
+ #include "compat/compat.h"
+ #include <time.h>
+ 
+-#ifdef __MACH__
++#ifdef __APPLE__
+ 
+ #include <mach/clock.h>
+ #include <mach/mach.h>
+@@ -44,6 +44,6 @@ int clock_gettime(clock_t clock_id, struct timespec *timestamp);
+ #define CLOCK_MONOTONIC CLOCK_REALTIME
+ #endif
+ 
+-#endif /* __MACH__ */
++#endif /* __APPLE__ */
+ 
+ #endif /* COMPAT_TIME_H_INCLUDED */

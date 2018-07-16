@@ -4,92 +4,100 @@
 
 ## Introduction
 
-This is a C-language AMQP client library for use with AMQP servers
-speaking protocol versions 0-9-1.
+This is a C-language AMQP client library for use with v2.0+ of the
+[RabbitMQ](http://www.rabbitmq.com/) broker.
 
- - <http://www.rabbitmq.com/>
- - <http://www.amqp.org/>
  - <http://github.com/alanxz/rabbitmq-c>
 
 Announcements regarding the library are periodically made on the
-RabbitMQ mailing list and on the RabbitMQ blog.
+rabbitmq-discuss mailing list:
 
- - <http://lists.rabbitmq.com/cgi-bin/mailman/listinfo/rabbitmq-discuss>
- - <http://www.rabbitmq.com/blog/>
+ - <https://groups.google.com/forum/#!forum/rabbitmq-users>
 
-API Documentation (rather incomplete at this point) can be found:
-- <http://alanxz.github.com/rabbitmq-c/docs/0.2/>
+## Latest Stable Version
 
-## Retrieving the code
+The latest stable release of [rabbitmq-c is v0.5.2](https://github.com/alanxz/rabbitmq-c/releases/tag/v0.5.2).
+A complete list of changes can be found in the [Change Log](ChangeLog.md)
 
-In addition to the source code for this library, you will require a
-copy of `rabbitmq-codegen`, which resides in the `codegen` directory
-as a git submodule. To update the submodule(s):
+The v0.5.2 source tarball can be downloaded from:
 
-    git clone git://github.com/alanxz/rabbitmq-c.git
-    cd rabbitmq-c
-    git submodule init
-    git submodule update
+<https://github.com/alanxz/rabbitmq-c/releases/download/v0.5.2/rabbitmq-c-0.5.2.tar.gz>
 
-You will also need a recent python with the simplejson module
-installed, and the GNU autotools (autoconf, automake, libtool etc.),
-or as an alternative CMake.
+## Documentation
 
-## Building the code
+API documentation for v0.5.0+ can viewed from:
 
-### Using autoconf
+<http://alanxz.github.io/rabbitmq-c/docs/0.5.0/>
 
-Once you have all the prerequisites, change to the `rabbitmq-c`
-directory and run
+## Getting started
+
+### Building and installing
+
+#### Prereqs:
+- [CMake v2.6 or better](http://www.cmake.org/)
+- A C compiler (GCC 4.4+, clang, and MSVC are test. Other compilers may also
+  work)
+- *Optionally* [OpenSSL](http://www.openssl.org/) v0.9.8+ to enable support for
+  connecting to RabbitMQ over SSL/TLS
+- *Optionally* [POpt](http://freecode.com/projects/popt) to build some handy
+  command-line tools.
+- *Optionally* [XmlTo](https://fedorahosted.org/xmlto/) to build man pages for
+  the handy command-line tools
+- *Optionally* [Doxygen](http://www.stack.nl/~dimitri/doxygen/) to build
+  developer API documentation.
+
+After downloading and extracting the source from a tarball to a directory.
+([see above][Latest Stable Version]), the commands to build rabbitmq-c on most
+systems are:
+
+    mkdir build && cd build
+    cmake ..
+    cmake --build [--config Release] .
+
+The --config Release flag should be used in multi-configuration generators e.g.,
+Visual Studio or XCode.
+
+It is also possible to point the CMake GUI tool at the CMakeLists.txt in the root of
+the source tree and generate build projects or IDE workspace
+
+Installing the library and optionally specifying a prefix can be done with:
+
+    cmake -DCMAKE_INSTALL_PREFIX=/usr/local ..
+    cmake --build . [--config Release] --target install
+
+More information on CMake can be found on its FAQ (http://www.cmake.org/Wiki/CMake_FAQ)
+
+Other interesting flags that can be passed to CMake:
+
+* `BUILD_EXAMPLES=ON/OFF` toggles building the examples. ON by default.
+* `BUILD_SHARED_LIBS=ON/OFF` toggles building rabbitmq-c as a shared library.
+   ON by default.
+* `BUILD_STATIC_LIBS=ON/OFF` toggles building rabbitmq-c as a static library.
+   OFF by default.
+* `BUILD_TESTS=ON/OFF` toggles building test code. ON by default.
+* `BUILD_TOOLS=ON/OFF` toggles building the command line tools. By default
+   this is ON if the build system can find the POpt header and library.
+* `BUILD_TOOLS_DOCS=ON/OFF` toggles building the man pages for the command line
+   tools. By default this is ON if BUILD_TOOLS is ON and the build system can
+   find the XmlTo utility.
+* `ENABLE_SSL_SUPPORT=ON/OFF` toggles building rabbitmq-c with SSL support. By
+   default this is ON if the OpenSSL headers and library can be found.
+* `ENABLE_THREAD_SAFETY=ON/OFF` toggles OpenSSL thread-safety. By default this
+   is ON
+* `BUILD_API_DOCS=ON/OFF` - toggles building the Doxygen API documentation, by
+   default this is OFF
+
+#### autotools
+
+For legacy purposes, a GNU autotools based build system is also maintained. The required
+utilities you need are autoconf v2.59+, automake v1.9+, libtool v2.2+, and pkg-config.
+
+Then the standard autotools build procedure will build rabbitmq-c:
 
     autoreconf -i
-
-to run the GNU autotools and generate the configure script, followed
-by
-
     ./configure
     make
-
-to build the `librabbitmq` library and the example programs.
-
-### Using cmake
-
-You will need CMake (v2.6 or better): http://cmake.org/
-
-You will need a working python install (2.6+) with the json or simplejson
-modules installed.
-
-You will need to do the git submodule init/update as above.
-Alternatively you can clone the rabbitmq-codegen repository and point
-cmake to it using the RABBITMQ_CODEGEN_DIR cmake variable
-
-Create a binary directory in a sibling directory from the directory
-you cloned the rabbitmq-c repository
-
-    mkdir bin-rabbitmq-c
-
-Run CMake in the binary directory
-
-    cmake /path/to/source/directory
-
-Build it:
-
-* On linux: `make`
-* On win32: `nmake` or `msbuild`, or open it in visual studio and
-  build from there
-
-Things you can pass to cmake to change the build:
-
-* `-DRABBITMQ_CODEGEN_DIR=/path/to/rabbitmq-codegen/checkout` - if you
-   have your codegen directory in a different place [Default is
-   sibiling directory to source]
-* `-DBUILD_TOOLS=OFF` build the programs in the tools directory
-    [Default is ON if the POPT library can be found]
-
-Other interesting flags to pass to CMake (see cmake docs for more info)
-
-* `-DCMAKE_BUILD_TYPE` - specify the type of build (Debug or Release)
-* `-DCMAKE_INSTALL_PREFIX` - specify where the install target puts files
+    make install
 
 ## Running the examples
 
@@ -107,9 +115,6 @@ In another terminal,
 You should see output similar to the following in the listener's
 terminal window:
 
-    Result 1
-    Frame type 1, channel 1
-    Method AMQP_BASIC_DELIVER_METHOD
     Delivery 1, exchange amq.direct routingkey test
     Content-type: text/plain
     ----

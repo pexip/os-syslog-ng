@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -27,8 +27,8 @@
 #include "syslog-ng.h"
 
 typedef struct _TWEntry TWEntry;
-typedef void (*TWCallbackFunc)(guint64 now, gpointer user_data);
 typedef struct _TimerWheel TimerWheel;
+typedef void (*TWCallbackFunc)(TimerWheel *tw, guint64 now, gpointer user_data);
 
 TWEntry *timer_wheel_add_timer(TimerWheel *self, gint timeout, TWCallbackFunc cb, gpointer user_data, GDestroyNotify user_data_free);
 void timer_wheel_del_timer(TimerWheel *self, TWEntry *entry);
@@ -38,6 +38,8 @@ guint64 timer_wheel_get_timer_expiration(TimerWheel *self, TWEntry *entry);
 void timer_wheel_set_time(TimerWheel *self, guint64 new_now);
 guint64 timer_wheel_get_time(TimerWheel *self);
 void timer_wheel_expire_all(TimerWheel *self);
+void timer_wheel_set_associated_data(TimerWheel *self, gpointer assoc_data, GDestroyNotify assoc_data_free);
+gpointer timer_wheel_get_associated_data(TimerWheel *self);
 TimerWheel *timer_wheel_new(void);
 void timer_wheel_free(TimerWheel *self);
 

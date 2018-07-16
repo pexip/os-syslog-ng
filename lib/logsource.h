@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2011 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2011 Balabit
  * Copyright (c) 1998-2011 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -26,8 +26,7 @@
 #define LOGSOURCE_H_INCLUDED
 
 #include "logpipe.h"
-#include "stats.h"
-#include <iv_event.h>
+#include "stats/stats-registry.h"
 
 typedef struct _LogSourceOptions
 {
@@ -36,10 +35,7 @@ typedef struct _LogSourceOptions
   gboolean keep_timestamp;
   gboolean keep_hostname;
   gboolean chain_hostnames;
-  gboolean normalize_hostnames;
-  gboolean use_dns;
-  gboolean use_fqdn;
-  gboolean use_dns_cache;
+  HostResolveOptions host_resolve_options;
   gchar *program_override;
   gint program_override_len;
   gchar *host_override;
@@ -65,15 +61,18 @@ struct _LogSource
   guint16 stats_level;
   guint16 stats_source;
   gboolean threaded;
+  gboolean pos_tracked;
   gchar *stats_id;
   gchar *stats_instance;
   GAtomicCounter window_size;
+  GAtomicCounter suspended_window_size;
   StatsCounterItem *last_message_seen;
   StatsCounterItem *recvd_messages;
   guint32 last_ack_count;
   guint32 ack_count;
   glong window_full_sleep_nsec;
   struct timespec last_ack_rate_time;
+  AckTracker *ack_tracker;
 
   void (*wakeup)(LogSource *s);
 };
@@ -84,19 +83,29 @@ log_source_free_to_send(LogSource *self)
   return g_atomic_counter_get(&self->window_size) > 0;
 }
 
+static inline gint
+log_source_get_init_window_size(LogSource *self)
+{
+  return self->options->init_window_size;
+}
+
 gboolean log_source_init(LogPipe *s);
 gboolean log_source_deinit(LogPipe *s);
 
-void log_source_set_options(LogSource *self, LogSourceOptions *options, gint stats_level, gint stats_source, const gchar *stats_id, const gchar *stats_instance, gboolean threaded);
+void log_source_post(LogSource *self, LogMessage *msg);
+
+void log_source_set_options(LogSource *self, LogSourceOptions *options, gint stats_level, gint stats_source, const gchar *stats_id, const gchar *stats_instance, gboolean threaded, gboolean pos_tracked, LogExprNode *expr_node);
 void log_source_mangle_hostname(LogSource *self, LogMessage *msg);
-void log_source_init_instance(LogSource *self);
+void log_source_init_instance(LogSource *self, GlobalConfig *cfg);
 void log_source_options_defaults(LogSourceOptions *options);
 void log_source_options_init(LogSourceOptions *options, GlobalConfig *cfg, const gchar *group_name);
 void log_source_options_destroy(LogSourceOptions *options);
 void log_source_options_set_tags(LogSourceOptions *options, GList *tags);
 void log_source_free(LogPipe *s);
+void log_source_wakeup(LogSource *self);
+void log_source_flow_control_adjust(LogSource *self, guint32 window_size_increment);
+void log_source_flow_control_suspend(LogSource *self);
 
 void log_source_global_init(void);
-
 
 #endif

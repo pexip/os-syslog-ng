@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -25,9 +25,7 @@
 #include "transport-mapper-inet.h"
 #include "socket-options-inet.h"
 #include "messages.h"
-#include "misc.h"
 #include "gprocess.h"
-#include "tlstransport.h"
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -42,7 +40,7 @@
 #  undef _GNU_SOURCE
 #endif
 
-#if ENABLE_SPOOF_SOURCE
+#if SYSLOG_NG_ENABLE_SPOOF_SOURCE
 #include <libnet.h>
 #endif
 
@@ -84,30 +82,22 @@ afinet_dd_set_destport(LogDriver *s, gchar *service)
 void
 afinet_dd_set_spoof_source(LogDriver *s, gboolean enable)
 {
-#if ENABLE_SPOOF_SOURCE
+#if SYSLOG_NG_ENABLE_SPOOF_SOURCE
   AFInetDestDriver *self = (AFInetDestDriver *) s;
 
   self->spoof_source = enable;
 #else
-  msg_error("Error enabling spoof-source, you need to compile syslog-ng with --enable-spoof-source", NULL);
+  msg_error("Error enabling spoof-source, you need to compile syslog-ng with --enable-spoof-source");
 #endif
-}
-
-#if BUILD_WITH_SSL
-void
-afinet_dd_set_tls_context(LogDriver *s, TLSContext *tls_context)
-{
-  AFInetDestDriver *self = (AFInetDestDriver *) s;
-
-  self->tls_context = tls_context;
 }
 
 static gint
 afinet_dd_verify_callback(gint ok, X509_STORE_CTX *ctx, gpointer user_data)
 {
   AFInetDestDriver *self G_GNUC_UNUSED = (AFInetDestDriver *) user_data;
+  TransportMapperInet *transport_mapper_inet = (TransportMapperInet *) self->super.transport_mapper;
 
-  if (ok && ctx->current_cert == ctx->cert && self->hostname && (self->tls_context->verify_mode & TVM_TRUSTED))
+  if (ok && ctx->current_cert == ctx->cert && self->hostname && (transport_mapper_inet->tls_context->verify_mode & TVM_TRUSTED))
     {
       ok = tls_verify_certificate_name(ctx->cert, self->hostname);
     }
@@ -115,58 +105,21 @@ afinet_dd_verify_callback(gint ok, X509_STORE_CTX *ctx, gpointer user_data)
   return ok;
 }
 
-static gboolean
-afinet_dd_is_tls_required(AFInetDestDriver *self)
-{
-  return ((TransportMapperInet *) (self->super.transport_mapper))->require_tls;
-}
-
-static gboolean
-afinet_dd_is_tls_allowed(AFInetDestDriver *self)
-{
-  TransportMapperInet *transport_mapper_inet = ((TransportMapperInet *) (self->super.transport_mapper));
-
-  return transport_mapper_inet->allow_tls || transport_mapper_inet->require_tls;
-}
-
-static LogTransport *
-afinet_dd_construct_tls_transport(AFInetDestDriver *self, TLSContext *tls_context, gint fd)
-{
-  TLSSession *tls_session;
-
-  tls_session = tls_context_setup_session(self->tls_context);
-  if (!tls_session)
-    return NULL;
-
-  tls_session_set_verify(tls_session, afinet_dd_verify_callback, self, NULL);
-  return log_transport_tls_new(tls_session, fd);
-}
-
-static LogTransport *
-afinet_dd_construct_transport(AFSocketDestDriver *s, gint fd)
+void
+afinet_dd_set_tls_context(LogDriver *s, TLSContext *tls_context)
 {
   AFInetDestDriver *self = (AFInetDestDriver *) s;
-
-  if (self->tls_context)
-    return afinet_dd_construct_tls_transport(self, self->tls_context, fd);
-  else
-    return afsocket_dd_construct_transport_method(s, fd);
+  transport_mapper_inet_set_tls_context((TransportMapperInet *) self->super.transport_mapper, tls_context, afinet_dd_verify_callback, self);
 }
-
-#else
-
-#define afinet_dd_construct_transport afsocket_dd_construct_transport_method
-
-#endif
 
 static LogWriter *
 afinet_dd_construct_writer(AFSocketDestDriver *s)
 {
   AFInetDestDriver *self G_GNUC_UNUSED = (AFInetDestDriver *) s;
   LogWriter *writer;
+  TransportMapperInet *transport_mapper_inet G_GNUC_UNUSED = ((TransportMapperInet *) (self->super.transport_mapper));
 
   writer = afsocket_dd_construct_writer_method(s);
-#if BUILD_WITH_SSL
   /* SSL is duplex, so we can certainly expect input from the server, which
    * would cause the LogWriter to close this connection.  In a better world
    * LW_DETECT_EOF would be implemented by the LogProto class and would
@@ -174,10 +127,23 @@ afinet_dd_construct_writer(AFSocketDestDriver *s)
    * (and possibly for all eternity :)
    */
 
-  if (((self->super.transport_mapper->sock_type == SOCK_STREAM) && self->tls_context))
+  if (((self->super.transport_mapper->sock_type == SOCK_STREAM) && transport_mapper_inet->tls_context))
     log_writer_set_flags(writer, log_writer_get_flags(writer) & ~LW_DETECT_EOF);
-#endif
+
   return writer;
+}
+
+static const gint
+_determine_port(const AFInetDestDriver *self)
+{
+  gint port = 0;
+
+  if (!self->dest_port)
+    port = transport_mapper_inet_get_server_port(self->super.transport_mapper);
+  else
+    port = afinet_lookup_service(self->super.transport_mapper, self->dest_port);
+
+  return port;
 }
 
 static gboolean
@@ -191,31 +157,13 @@ afinet_dd_setup_addresses(AFSocketDestDriver *s)
   g_sockaddr_unref(self->super.bind_addr);
   g_sockaddr_unref(self->super.dest_addr);
 
-  if (self->super.transport_mapper->address_family == AF_INET)
-    {
-      self->super.bind_addr = g_sockaddr_inet_new("0.0.0.0", 0);
-      self->super.dest_addr = g_sockaddr_inet_new("0.0.0.0", 0);
-    }
-#if ENABLE_IPV6
-  else if (self->super.transport_mapper->address_family == AF_INET6)
-    {
-      self->super.bind_addr = g_sockaddr_inet6_new("::", 0);
-      self->super.dest_addr = g_sockaddr_inet6_new("::", 0);
-    }
-#endif
-  else
-    {
-      /* address family not known */
-      g_assert_not_reached();
-    }
-
-  if ((self->bind_ip && !resolve_hostname(&self->super.bind_addr, self->bind_ip)))
+  if (!resolve_hostname_to_sockaddr(&self->super.bind_addr, self->super.transport_mapper->address_family, self->bind_ip))
     return FALSE;
 
   if (self->bind_port)
     g_sockaddr_set_port(self->super.bind_addr, afinet_lookup_service(self->super.transport_mapper, self->bind_port));
 
-  if (!resolve_hostname(&self->super.dest_addr, self->hostname))
+  if (!resolve_hostname_to_sockaddr(&self->super.dest_addr, self->super.transport_mapper->address_family, self->hostname))
     return FALSE;
 
   if (!self->dest_port)
@@ -225,27 +173,25 @@ afinet_dd_setup_addresses(AFSocketDestDriver *s)
       if (port_change_warning)
         {
           msg_warning(port_change_warning,
-                      evt_tag_str("id", self->super.super.super.id),
-                      NULL);
+                      evt_tag_str("id", self->super.super.super.id));
         }
-      g_sockaddr_set_port(self->super.dest_addr, transport_mapper_inet_get_server_port(self->super.transport_mapper));
     }
-  else
-    g_sockaddr_set_port(self->super.dest_addr, afinet_lookup_service(self->super.transport_mapper, self->dest_port));
+
+  g_sockaddr_set_port(self->super.dest_addr, _determine_port(self));
 
   return TRUE;
 }
 
 static const gchar *
-afinet_dd_get_dest_name(AFSocketDestDriver *s)
+afinet_dd_get_dest_name(const AFSocketDestDriver *s)
 {
-  AFInetDestDriver *self = (AFInetDestDriver *) s;
+  const AFInetDestDriver *self = (const AFInetDestDriver *)s;
   static gchar buf[256];
 
   if (strchr(self->hostname, ':') != NULL)
-    g_snprintf(buf, sizeof(buf), "[%s]:%d", self->hostname, g_sockaddr_get_port(s->dest_addr));
+    g_snprintf(buf, sizeof(buf), "[%s]:%d", self->hostname, _determine_port(self));
   else
-    g_snprintf(buf, sizeof(buf), "%s:%d", self->hostname, g_sockaddr_get_port(s->dest_addr));
+    g_snprintf(buf, sizeof(buf), "%s:%d", self->hostname, _determine_port(self));
   return buf;
 }
 
@@ -254,7 +200,7 @@ afinet_dd_init(LogPipe *s)
 {
   AFInetDestDriver *self G_GNUC_UNUSED = (AFInetDestDriver *) s;
 
-#if ENABLE_SPOOF_SOURCE
+#if SYSLOG_NG_ENABLE_SPOOF_SOURCE
   if (self->spoof_source)
     self->super.connections_kept_alive_accross_reloads = TRUE;
 #endif
@@ -262,7 +208,7 @@ afinet_dd_init(LogPipe *s)
   if (!afsocket_dd_init(s))
     return FALSE;
 
-#if ENABLE_SPOOF_SOURCE
+#if SYSLOG_NG_ENABLE_SPOOF_SOURCE
   if (self->super.transport_mapper->sock_type == SOCK_DGRAM)
     {
       if (self->spoof_source && !self->lnet_ctx)
@@ -277,35 +223,16 @@ afinet_dd_init(LogPipe *s)
           if (!self->lnet_ctx)
             {
               msg_error("Error initializing raw socket, spoof-source support disabled",
-                        evt_tag_str("error", NULL),
-                        NULL);
+                        evt_tag_str("error", NULL));
             }
         }
-    }
-#endif
-
-#if BUILD_WITH_SSL
-  if (!self->tls_context && afinet_dd_is_tls_required(self))
-    {
-      msg_error("transport(tls) was specified, but tls() options missing",
-                evt_tag_str("id", self->super.super.super.id),
-                NULL);
-      return FALSE;
-    }
-  else if (self->tls_context && !afinet_dd_is_tls_allowed(self))
-    {
-      msg_error("tls() options specified for a transport that doesn't allow TLS encryption",
-                evt_tag_str("id", self->super.super.super.id),
-                evt_tag_str("transport", self->super.transport_mapper->transport),
-                NULL);
-      return FALSE;
     }
 #endif
 
   return TRUE;
 }
 
-#if ENABLE_SPOOF_SOURCE
+#if SYSLOG_NG_ENABLE_SPOOF_SOURCE
 static gboolean
 afinet_dd_construct_ipv4_packet(AFInetDestDriver *self, LogMessage *msg, GString *msg_line)
 {
@@ -350,7 +277,7 @@ afinet_dd_construct_ipv4_packet(AFInetDestDriver *self, LogMessage *msg, GString
   return TRUE;
 }
 
-#if ENABLE_IPV6
+#if SYSLOG_NG_ENABLE_IPV6
 static gboolean
 afinet_dd_construct_ipv6_packet(AFInetDestDriver *self, LogMessage *msg, GString *msg_line)
 {
@@ -422,7 +349,7 @@ afinet_dd_construct_ipv6_packet(AFInetDestDriver *self, LogMessage *msg, GString
 static void
 afinet_dd_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options, gpointer user_data)
 {
-#if ENABLE_SPOOF_SOURCE
+#if SYSLOG_NG_ENABLE_SPOOF_SOURCE
   AFInetDestDriver *self = (AFInetDestDriver *) s;
 
   /* NOTE: this code should probably become a LogTransport instance so that
@@ -435,16 +362,21 @@ afinet_dd_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options,
       g_assert(self->super.transport_mapper->sock_type == SOCK_DGRAM);
 
       g_static_mutex_lock(&self->lnet_lock);
+
       if (!self->lnet_buffer)
-        self->lnet_buffer = g_string_sized_new(256);
+        self->lnet_buffer = g_string_sized_new(self->spoof_source_maxmsglen);
+
       log_writer_format_log(self->super.writer, msg, self->lnet_buffer);
+      
+      if (self->lnet_buffer->len > self->spoof_source_maxmsglen)
+        g_string_truncate(self->lnet_buffer, self->spoof_source_maxmsglen);
 
       switch (self->super.dest_addr->sa.sa_family)
         {
         case AF_INET:
           success = afinet_dd_construct_ipv4_packet(self, msg, self->lnet_buffer);
           break;
-#if ENABLE_IPV6
+#if SYSLOG_NG_ENABLE_IPV6
         case AF_INET6:
           success = afinet_dd_construct_ipv6_packet(self, msg, self->lnet_buffer);
           break;
@@ -457,7 +389,7 @@ afinet_dd_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options,
           if (libnet_write(self->lnet_ctx) >= 0)
             {
               /* we have finished processing msg */
-              log_msg_ack(msg, path_options);
+              log_msg_ack(msg, path_options, AT_PROCESSED);
               log_msg_unref(msg);
 
               g_static_mutex_unlock(&self->lnet_lock);
@@ -466,8 +398,7 @@ afinet_dd_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options,
           else
             {
               msg_error("Error sending raw frame",
-                        evt_tag_str("error", libnet_geterror(self->lnet_ctx)),
-                        NULL);
+                        evt_tag_str("error", libnet_geterror(self->lnet_ctx)));
             }
         }
       g_static_mutex_unlock(&self->lnet_lock);
@@ -485,65 +416,59 @@ afinet_dd_free(LogPipe *s)
   g_free(self->bind_ip);
   g_free(self->bind_port);
   g_free(self->dest_port);
-#if ENABLE_SPOOF_SOURCE
+#if SYSLOG_NG_ENABLE_SPOOF_SOURCE
   if (self->lnet_buffer)
     g_string_free(self->lnet_buffer, TRUE);
   g_static_mutex_free(&self->lnet_lock);
-#endif
-#if BUILD_WITH_SSL
-  if(self->tls_context)
-    {
-      tls_context_free(self->tls_context);
-    }
 #endif
   afsocket_dd_free(s);
 }
 
 
 static AFInetDestDriver *
-afinet_dd_new_instance(TransportMapper *transport_mapper, gchar *hostname)
+afinet_dd_new_instance(TransportMapper *transport_mapper, gchar *hostname, GlobalConfig *cfg)
 {
   AFInetDestDriver *self = g_new0(AFInetDestDriver, 1);
 
-  afsocket_dd_init_instance(&self->super, socket_options_inet_new(), transport_mapper);
+  afsocket_dd_init_instance(&self->super, socket_options_inet_new(), transport_mapper, cfg);
   self->super.super.super.super.init = afinet_dd_init;
   self->super.super.super.super.queue = afinet_dd_queue;
   self->super.super.super.super.free_fn = afinet_dd_free;
-  self->super.construct_transport = afinet_dd_construct_transport;
   self->super.construct_writer = afinet_dd_construct_writer;
   self->super.setup_addresses = afinet_dd_setup_addresses;
   self->super.get_dest_name = afinet_dd_get_dest_name;
 
   self->hostname = g_strdup(hostname);
 
-#if ENABLE_SPOOF_SOURCE
+#if SYSLOG_NG_ENABLE_SPOOF_SOURCE
   g_static_mutex_init(&self->lnet_lock);
+  self->spoof_source_maxmsglen = 1024;
 #endif
   return self;
 }
 
 AFInetDestDriver *
-afinet_dd_new_tcp(gchar *host)
+afinet_dd_new_tcp(gchar *host, GlobalConfig *cfg)
 {
-  return afinet_dd_new_instance(transport_mapper_tcp_new(), host);
+  return afinet_dd_new_instance(transport_mapper_tcp_new(), host, cfg);
 }
 
 AFInetDestDriver *
-afinet_dd_new_tcp6(gchar *host)
+afinet_dd_new_tcp6(gchar *host, GlobalConfig *cfg)
 {
-  return afinet_dd_new_instance(transport_mapper_tcp6_new(), host);
+  return afinet_dd_new_instance(transport_mapper_tcp6_new(), host, cfg);
 }
 
 AFInetDestDriver *
-afinet_dd_new_udp(gchar *host)
+afinet_dd_new_udp(gchar *host, GlobalConfig *cfg)
 {
-  return afinet_dd_new_instance(transport_mapper_udp_new(), host);
+  return afinet_dd_new_instance(transport_mapper_udp_new(), host, cfg);
 }
 
 AFInetDestDriver *
-afinet_dd_new_udp6(gchar *host)
+afinet_dd_new_udp6(gchar *host, GlobalConfig *cfg)
 {
-  return afinet_dd_new_instance(transport_mapper_udp6_new(), host);
+  return afinet_dd_new_instance(transport_mapper_udp6_new(), host, cfg);
 }
 
 static LogWriter *
@@ -559,16 +484,16 @@ afinet_dd_syslog_construct_writer(AFSocketDestDriver *s)
 
 
 AFInetDestDriver *
-afinet_dd_new_syslog(gchar *host)
+afinet_dd_new_syslog(gchar *host, GlobalConfig *cfg)
 {
-  AFInetDestDriver *self = afinet_dd_new_instance(transport_mapper_syslog_new(), host);
+  AFInetDestDriver *self = afinet_dd_new_instance(transport_mapper_syslog_new(), host, cfg);
 
   self->super.construct_writer = afinet_dd_syslog_construct_writer;
   return self;
 }
 
 AFInetDestDriver *
-afinet_dd_new_network(gchar *host)
+afinet_dd_new_network(gchar *host, GlobalConfig *cfg)
 {
-  return afinet_dd_new_instance(transport_mapper_network_new(), host);
+  return afinet_dd_new_instance(transport_mapper_network_new(), host, cfg);
 }

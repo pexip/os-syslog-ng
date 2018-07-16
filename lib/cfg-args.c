@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2013 Balabit
  * Copyright (c) 1998-2013 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -23,6 +23,7 @@
  */
 #include "cfg-args.h"
 #include "messages.h"
+#include "str-utils.h"
 
 struct _CfgArgs
 {
@@ -46,20 +47,25 @@ cfg_args_validate_callback(gpointer k, gpointer v, gpointer user_data)
     }
 }
 
+void
+cfg_args_foreach(CfgArgs *self, GHFunc func, gpointer user_data)
+{
+  g_hash_table_foreach(self->args, func, user_data);
+}
+
 gboolean
 cfg_args_validate(CfgArgs *self, CfgArgs *defs, const gchar *context)
 {
   gpointer validate_params[] = { defs, NULL, NULL };
 
-  g_hash_table_foreach(self->args, cfg_args_validate_callback, validate_params);
+  cfg_args_foreach(self, cfg_args_validate_callback, validate_params);
 
   if (validate_params[1])
     {
       msg_error("Unknown argument",
                 evt_tag_str("context", context),
                 evt_tag_str("arg", validate_params[1]),
-                evt_tag_str("value", validate_params[2]),
-                NULL);
+                evt_tag_str("value", validate_params[2]));
       return FALSE;
     }
   return TRUE;
@@ -68,13 +74,22 @@ cfg_args_validate(CfgArgs *self, CfgArgs *defs, const gchar *context)
 void
 cfg_args_set(CfgArgs *self, const gchar *name, const gchar *value)
 {
-  g_hash_table_insert(self->args, g_strdup(name), g_strdup(value));
+  g_hash_table_insert(self->args, __normalize_key(name), g_strdup(value));
 }
 
 const gchar *
 cfg_args_get(CfgArgs *self, const gchar *name)
 {
-  return g_hash_table_lookup(self->args, name);
+  const gchar *value = g_hash_table_lookup(self->args, name);
+
+  if (!value)
+    {
+      gchar *normalized_name = __normalize_key(name);
+      value = g_hash_table_lookup(self->args, normalized_name);
+      g_free(normalized_name);
+    }
+
+  return value;
 }
 
 CfgArgs *

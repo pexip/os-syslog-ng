@@ -1,16 +1,24 @@
 DIST_SUBDIRS				+= modules/afamqp/rabbitmq-c
 
+if LIBRABBITMQ_INTERNAL
+
 CLEAN_SUBDIRS 				+= @LIBRABBITMQ_SUBDIRS@
+lr_EXTRA_DEPS = modules/afamqp/rabbitmq-c/librabbitmq/librabbitmq.la
+
+$(lr_EXTRA_DEPS):
+	${MAKE} -C modules/afamqp/rabbitmq-c
+
+endif
 
 if ENABLE_AMQP
 module_LTLIBRARIES			+= modules/afamqp/libafamqp.la
 
 modules_afamqp_libafamqp_la_CFLAGS	= 	\
+    $(AM_CFLAGS) \
 	$(LIBRABBITMQ_CFLAGS) 			\
 	-I$(top_srcdir)/modules/afamqp 		\
 	-I$(top_builddir)/modules/afamqp
 modules_afamqp_libafamqp_la_SOURCES	= 	\
-	modules/afamqp/dummy.c			\
 	modules/afamqp/afamqp-grammar.y		\
 	modules/afamqp/afamqp.c			\
 	modules/afamqp/afamqp.h			\
@@ -22,15 +30,8 @@ modules_afamqp_libafamqp_la_LDFLAGS	=	\
 	$(MODULE_LDFLAGS)
 modules_afamqp_libafamqp_la_DEPENDENCIES=	\
 	$(MODULE_DEPS_LIBS)			\
-	modules/afamqp/rabbitmq-c/librabbitmq/librabbitmq.la
+	$(lr_EXTRA_DEPS)
 
-BUILT_SOURCES				+=	\
-		modules/afamqp/dummy.c
-
-modules/afamqp/dummy.c: modules/afamqp/rabbitmq-c/librabbitmq/librabbitmq.la
-	$(AM_V_GEN) touch $@
-modules/afamqp/rabbitmq-c/librabbitmq/librabbitmq.la:
-	${MAKE} -C modules/afamqp/rabbitmq-c
 modules/afamqp modules/afamqp/ mod-afamqp mod-amqp: \
 	modules/afamqp/libafamqp.la
 else
@@ -43,7 +44,7 @@ BUILT_SOURCES				+=	\
 		modules/afamqp/afamqp-grammar.h
 
 EXTRA_DIST				+=	\
-		modules/afamqp/afamqp-grammar.ym \
+		modules/afamqp/afamqp-grammar.ym	\
 		modules/afamqp/rabbitmq-c/configure.gnu
 
 .PHONY: modules/afamqp/ mod-afamqp mod-amqp

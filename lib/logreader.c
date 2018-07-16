@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2012 Balabit
  * Copyright (c) 1998-2012 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -23,6 +23,11 @@
  */
 
 #include "logreader.h"
+#include "mainloop-io-worker.h"
+#include "mainloop-call.h"
+#include "ack_tracker.h"
+
+#include <iv_event.h>
 
 struct _LogReader
 {
@@ -183,7 +188,7 @@ log_reader_io_process_input(gpointer s)
        * Our current understanding is that it doesn't prevent race
        * conditions of any kind.
        */
-      if (!main_loop_io_worker_job_quit())
+      if (!main_loop_worker_job_quit())
         {
           log_reader_work_perform(s);
           log_reader_work_finished(s);
@@ -288,27 +293,31 @@ log_reader_update_watches(LogReader *self)
   poll_events_update_watches(self->poll_events, cond);
 }
 
+static void
+_add_aux_nvpair(const gchar *name, const gchar *value, gsize value_len, gpointer user_data)
+{
+  LogMessage *msg = (LogMessage *) user_data;
+
+  log_msg_set_value_by_name(msg, name, value, value_len);;
+}
+
 static gboolean
-log_reader_handle_line(LogReader *self, const guchar *line, gint length, GSockAddr *saddr)
+log_reader_handle_line(LogReader *self, const guchar *line, gint length, LogTransportAuxData *aux)
 {
   LogMessage *m;
-  LogPathOptions path_options = LOG_PATH_OPTIONS_INIT;
   
   msg_debug("Incoming log entry", 
-            evt_tag_printf("line", "%.*s", length, line),
-            NULL);
+            evt_tag_printf("line", "%.*s", length, line));
   /* use the current time to get the time zone offset */
   m = log_msg_new((gchar *) line, length,
-                  saddr,
+                  aux->peer_addr ? : self->peer_addr,
                   &self->options->parse_options);
 
   log_msg_refcache_start_producer(m);
-  if (!m->saddr && self->peer_addr)
-    {
-      m->saddr = g_sockaddr_ref(self->peer_addr);
-    }
+  
+  log_transport_aux_data_foreach(aux, _add_aux_nvpair, m);
 
-  log_pipe_queue(&self->super.super, m, &path_options);
+  log_source_post(&self->super, m);
   log_msg_refcache_stop();
   return log_source_free_to_send(&self->super);
 }
@@ -317,9 +326,9 @@ log_reader_handle_line(LogReader *self, const guchar *line, gint length, GSockAd
 static gint
 log_reader_fetch_log(LogReader *self)
 {
-  GSockAddr *sa;
   gint msg_count = 0;
   gboolean may_read = TRUE;
+  LogTransportAuxData aux;
 
   if (self->waiting_for_preemption)
     may_read = FALSE;
@@ -328,14 +337,15 @@ log_reader_fetch_log(LogReader *self)
    * to fetch a couple of messages in a single run (but only up to
    * fetch_limit).
    */
-  while (msg_count < self->options->fetch_limit && !main_loop_io_worker_job_quit())
+  log_transport_aux_data_init(&aux);
+  while (msg_count < self->options->fetch_limit && !main_loop_worker_job_quit())
     {
+      Bookmark *bookmark;
       const guchar *msg;
       gsize msg_len;
       LogProtoStatus status;
 
       msg = NULL;
-      sa = NULL;
 
       /* NOTE: may_read is used to implement multi-read checking. It
        * is initialized to TRUE to indicate that the protocol is
@@ -343,12 +353,14 @@ log_reader_fetch_log(LogReader *self)
        * protocol, it resets may_read to FALSE after the first read was issued.
        */
 
-      status = log_proto_server_fetch(self->proto, &msg, &msg_len, &sa, &may_read);
+      log_transport_aux_data_reinit(&aux);
+      bookmark = ack_tracker_request_bookmark(self->super.ack_tracker);
+      status = log_proto_server_fetch(self->proto, &msg, &msg_len, &may_read, &aux, bookmark);
       switch (status)
         {
         case LPS_EOF:
         case LPS_ERROR:
-          g_sockaddr_unref(sa);
+          g_sockaddr_unref(aux.peer_addr);
           return status == LPS_ERROR ? NC_READ_ERROR : NC_CLOSE;
         case LPS_SUCCESS:
           break;
@@ -366,17 +378,14 @@ log_reader_fetch_log(LogReader *self)
         {
           msg_count++;
 
-          if (!log_reader_handle_line(self, msg, msg_len, sa))
+          if (!log_reader_handle_line(self, msg, msg_len, &aux))
             {
               /* window is full, don't generate further messages */
-              log_proto_server_queued(self->proto);
-              g_sockaddr_unref(sa);
               break;
             }
         }
-      log_proto_server_queued(self->proto);
-      g_sockaddr_unref(sa);
     }
+  log_transport_aux_data_destroy(&aux);
   if (self->options->flags & LR_PREEMPT)
     {
       if (log_proto_server_is_preemptable(self->proto))
@@ -408,8 +417,7 @@ log_reader_init(LogPipe *s)
   if (!self->options->parse_options.format_handler)
     {
       msg_error("Unknown format plugin specified",
-                evt_tag_str("format", self->options->parse_options.format),
-                NULL);
+                evt_tag_str("format", self->options->parse_options.format));
       return FALSE;
     }
 
@@ -461,7 +469,9 @@ log_reader_set_options(LogReader *s, LogPipe *control, LogReaderOptions *options
 {
   LogReader *self = (LogReader *) s;
 
-  log_source_set_options(&self->super, &options->super, stats_level, stats_source, stats_id, stats_instance, (options->flags & LR_THREADED));
+  gboolean pos_tracked = ((self->proto != NULL) && log_proto_server_is_position_tracked(self->proto));
+
+  log_source_set_options(&self->super, &options->super, stats_level, stats_source, stats_id, stats_instance, (options->flags & LR_THREADED), pos_tracked, control->expr_node);
 
   log_pipe_unref(self->control);
   log_pipe_ref(control);
@@ -528,11 +538,11 @@ log_reader_set_peer_addr(LogReader *s, GSockAddr *peer_addr)
 }
 
 LogReader *
-log_reader_new(void)
+log_reader_new(GlobalConfig *cfg)
 {
   LogReader *self = g_new0(LogReader, 1);
 
-  log_source_init_instance(&self->super);
+  log_source_init_instance(&self->super, cfg);
   self->super.super.init = log_reader_init;
   self->super.super.deinit = log_reader_deinit;
   self->super.super.free_fn = log_reader_free;
@@ -561,13 +571,7 @@ log_reader_options_defaults(LogReaderOptions *options)
   options->fetch_limit = 10;
   if (configuration && cfg_is_config_version_older(configuration, 0x0300))
     {
-      static gboolean warned;
-      if (!warned)
-        {
-          msg_warning("WARNING: input: sources do not remove new-line characters from messages by default from " VERSION_3_0 ", please add 'no-multi-line' flag to your configuration if you want to retain this functionality",
-                      NULL);
-          warned = TRUE;
-        }
+      msg_warning_once("WARNING: input: sources do not remove new-line characters from messages by default from " VERSION_3_0 ", please add 'no-multi-line' flag to your configuration if you want to retain this functionality");
       options->parse_options.flags |= LP_NO_MULTI_LINE;
     }
 }

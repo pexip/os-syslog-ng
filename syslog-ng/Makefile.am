@@ -1,9 +1,8 @@
 if ENABLE_ENV_WRAPPER
 libexec_PROGRAMS		+= syslog-ng/syslog-ng
-sbin_PROGRAMS			+= syslog-ng/syslog-ng-wrapper \
-				   syslog-ng/syslog-ng-ctl
+sbin_PROGRAMS			+= syslog-ng/syslog-ng-wrapper
 else
-sbin_PROGRAMS			+= syslog-ng/syslog-ng syslog-ng/syslog-ng-ctl
+sbin_PROGRAMS			+= syslog-ng/syslog-ng
 endif
 
 syslog_ng_syslog_ng_SOURCES	= syslog-ng/main.c
@@ -14,16 +13,9 @@ syslog_ng_syslog_ng_SOURCES	= syslog-ng/main.c
 
 syslog_ng_syslog_ng_LDADD		= -L${top_builddir}/lib/.libs -lsyslog-ng @SYSLOGNG_DEPS_LIBS@
 syslog_ng_syslog_ng_LINK		=  @SYSLOGNG_LINK@
-syslog_ng_syslog_ng_DEPENDENCIES	= lib/libsyslog-ng.la lib/libsyslog-ng-crypto.la
+syslog_ng_syslog_ng_DEPENDENCIES	= lib/libsyslog-ng.la
 
 syslog_ng_syslog_ng_wrapper_SOURCES	= syslog-ng/wrapper.c
-
-syslog_ng_syslog_ng_ctl_SOURCES		= \
-	syslog-ng/syslog-ng-ctl.c	  \
-	lib/gsocket.c			  \
-	lib/gsockaddr.c
-syslog_ng_syslog_ng_ctl_LDADD		= @BASE_LIBS@ @GLIB_LIBS@ @RESOLV_LIBS@
-syslog_ng_syslog_ng_ctl_DEPENDENCIES	= lib/libsyslog-ng.la lib/libsyslog-ng-crypto.la
 
 syslog-ng-install-exec-hook:
 if ENABLE_ENV_WRAPPER

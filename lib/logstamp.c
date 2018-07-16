@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2011 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2002-2011 Balabit
  * Copyright (c) 1998-2011 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -28,7 +28,7 @@
 #include "str-format.h"
 
 static void
-log_stamp_append_frac_digits(LogStamp *stamp, GString *target, gint frac_digits)
+log_stamp_append_frac_digits(const LogStamp *stamp, GString *target, gint frac_digits)
 {
   glong usecs;
 
@@ -59,7 +59,7 @@ log_stamp_append_frac_digits(LogStamp *stamp, GString *target, gint frac_digits)
  * @ts_format and @tz_convert. 
  **/
 void
-log_stamp_append_format(LogStamp *stamp, GString *target, gint ts_format, glong zone_offset, gint frac_digits)
+log_stamp_append_format(const LogStamp *stamp, GString *target, gint ts_format, glong zone_offset, gint frac_digits)
 {
   glong target_zone_offset = 0;
   struct tm *tm, tm_storage;
@@ -135,4 +135,12 @@ log_stamp_format(LogStamp *stamp, GString *target, gint ts_format, glong zone_of
 {
   g_string_truncate(target, 0);
   log_stamp_append_format(stamp, target, ts_format, zone_offset, frac_digits);
+}
+
+gboolean
+log_stamp_eq(const LogStamp *a, const LogStamp *b)
+{
+  return a->tv_sec == b->tv_sec &&
+         a->tv_usec == b->tv_usec &&
+         a->zone_offset == b->zone_offset;
 }
