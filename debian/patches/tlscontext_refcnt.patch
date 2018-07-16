@@ -20,9 +20,9 @@ index dc34f2c..2bc48a3 100644
  }
  
 @@ -371,10 +372,11 @@ tls_context_new(TLSMode mode)
- 
    self->mode = mode;
    self->verify_mode = TVM_REQUIRED | TVM_TRUSTED;
+   self->ssl_options = TSO_NOSSLv2;
 +  g_atomic_counter_set(&self->ref_cnt, 1);
    return self;
  }
@@ -72,12 +72,12 @@ index 98a2f85..adfd9ba 100644
  #include "syslog-ng.h"
 +#include "atomic.h"
  
- #if ENABLE_SSL
+ #include <openssl/ssl.h>
  
 @@ -73,6 +74,7 @@ struct _TLSContext
-   SSL_CTX *ssl_ctx;
    GList *trusted_fingerpint_list;
    GList *trusted_dn_list;
+   gint ssl_options;
 +  GAtomicCounter ref_cnt;
  };
  
@@ -91,17 +91,17 @@ index 98a2f85..adfd9ba 100644
 +void tls_context_unref(TLSContext *s);
  
  TLSVerifyMode tls_lookup_verify_mode(const gchar *mode_str);
+ gint tls_lookup_options(GList *options);
+diff --git a/modules/afsocket/transport-mapper-inet.c b/modules/afsocket/transport-mapper-inet.c
+index f3868ee..2677870 100644
+--- a/modules/afsocket/transport-mapper-inet.c
++++ b/modules/afsocket/transport-mapper-inet.c
+@@ -108,7 +108,7 @@ transport_mapper_inet_free_method(TransportMapper *s)
+   TransportMapperInet *self = (TransportMapperInet *) s;
  
-diff --git a/modules/afsocket/afinet-dest.c b/modules/afsocket/afinet-dest.c
-index 2ac76c8..1aeefe4 100644
---- a/modules/afsocket/afinet-dest.c
-+++ b/modules/afsocket/afinet-dest.c
-@@ -493,7 +493,7 @@ afinet_dd_free(LogPipe *s)
- #if BUILD_WITH_SSL
-   if(self->tls_context)
-     {
--      tls_context_free(self->tls_context);
-+      tls_context_unref(self->tls_context);
-     }
- #endif
-   afsocket_dd_free(s);
+   if (self->tls_context)
+-    tls_context_free(self->tls_context);
++    tls_context_unref(self->tls_context);
+   transport_mapper_free_method(s);
+ }
+ 
