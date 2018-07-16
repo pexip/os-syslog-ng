@@ -99,6 +99,7 @@ override_dh_auto_configure:
 		--enable-manpages \
 		--enable-amqp \
 		\
+		--with-mongoc=system \
 		--with-ivykis=system \
 		--with-jsonc=system \
 		--with-librabbitmq-client=system \
