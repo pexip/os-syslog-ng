@@ -4,5 +4,4 @@
 0004-Fixed-OpenSSL-1.1-build.patch
 0005-fix-segfault-in-X509_STORE_CTX_get_app_data.patch
 add_ca_file.patch
-afsocket_retry.patch
 tlscontext_refcnt.patch

@@ -1,6 +1,7 @@
 syslog-ng (3.8.1-10pexip1) pexip; urgency=medium
 
   * Migrate to Stretch
+  * debian/patches/afsocket_retry.patch: drop; merged upstream
 
  -- John-Mark Bell <jmb@pexip.com>  Mon, 16 Jul 2018 14:17:04 +0100
 
