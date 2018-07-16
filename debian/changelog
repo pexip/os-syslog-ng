@@ -1,6 +1,7 @@
 syslog-ng (3.8.1-10pexip1) pexip; urgency=medium
 
   * Migrate to Stretch
+  * debian/patches/add_ca_file.patch: refresh
   * debian/patches/afsocket_retry.patch: drop; merged upstream
   * debian/patches/tlscontext_refcnt.patch: refresh
   * debian/control: Build-Depend on libssl 1.0.x
