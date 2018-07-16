@@ -5,7 +5,7 @@
 description "system logging daemon"
 
 start on filesystem
-stop on sendsigs
+stop on runlevel [06]
 
 expect fork
 respawn
