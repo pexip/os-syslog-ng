@@ -1,0 +1,26 @@
+diff --git a/modules/systemd-journal/journal-reader.c b/modules/systemd-journal/journal-reader.c
+index b4a0bec..abac0dc 100644
+--- a/modules/systemd-journal/journal-reader.c
++++ b/modules/systemd-journal/journal-reader.c
+@@ -40,7 +40,7 @@
+ #define MAX_CURSOR_LENGTH 1024
+ 
+ #define DEFAULT_FIELD_SIZE (64 * 1024)
+-#define DEFAULT_PRIO (LOG_LOCAL0 | LOG_NOTICE)
++#define DEFAULT_PRIO (LOG_SYSLOG | LOG_NOTICE)
+ #define DEFAULT_FETCH_LIMIT 10
+ 
+ static gboolean journal_reader_initialized = FALSE;
+diff --git a/modules/systemd-journal/tests/test_systemd_journal.c b/modules/systemd-journal/tests/test_systemd_journal.c
+index 51b032b..1233571 100644
+--- a/modules/systemd-journal/tests/test_systemd_journal.c
++++ b/modules/systemd-journal/tests/test_systemd_journal.c
+@@ -426,7 +426,7 @@ void
+ _test_default_level_test(TestCase *self, TestSource *src, LogMessage *msg)
+ {
+   gint level = GPOINTER_TO_INT(self->user_data);
+-  assert_gint(msg->pri, LOG_LOCAL0 | level, ASSERTION_ERROR("Bad default prio"));
++  assert_gint(msg->pri, LOG_SYSLOG | level, ASSERTION_ERROR("Bad default prio"));
+   test_source_finish_tc(src);
+ }
+ 

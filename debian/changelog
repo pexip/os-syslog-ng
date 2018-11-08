@@ -1,3 +1,9 @@
+syslog-ng (3.8.1-10pexip2) pexip; urgency=medium
+
+  * debian/patches/systemd_default_prio.patch: default to LOG_SYSLOG
+
+ -- John-Mark Bell <jmb@pexip.com>  Thu, 08 Nov 2018 13:15:37 +0000
+
 syslog-ng (3.8.1-10pexip1) pexip; urgency=medium
 
   * Migrate to Stretch
