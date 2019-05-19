@@ -23,6 +23,8 @@
  */
 
 %code top {
+#pragma GCC diagnostic ignored "-Wswitch-default"
+
 #include "diskq-parser.h"
 
 }
@@ -75,8 +77,8 @@ dest_diskq
         : KW_DISK_BUFFER
           {
             last_plugin = diskq_dest_plugin_new();
-            *instance = &last_plugin->super;
-            last_options = &last_plugin->options;
+            *instance = (LogDriverPlugin*)last_plugin;
+            last_options = diskq_get_options(last_plugin);
           }
           '(' dest_diskq_options ')' { disk_queue_options_check_plugin_settings(last_options); }
         ;
@@ -88,10 +90,10 @@ dest_diskq_options
 
 dest_diskq_option
         : KW_RELIABLE '(' yesno ')'            { disk_queue_options_reliable_set(last_options, $3); }
-        | KW_MEM_BUF_SIZE '(' LL_NUMBER ')'    { disk_queue_options_mem_buf_size_set(last_options, $3); }
-        | KW_MEM_BUF_LENGTH '(' LL_NUMBER ')'  { disk_queue_options_mem_buf_length_set(last_options, $3); }
-        | KW_DISK_BUF_SIZE '(' LL_NUMBER ')'   { disk_queue_options_disk_buf_size_set(last_options, $3); }
-        | KW_QOUT_SIZE '(' LL_NUMBER ')'       { disk_queue_options_qout_size_set(last_options, $3); }
+        | KW_MEM_BUF_SIZE '(' nonnegative_integer ')'    { disk_queue_options_mem_buf_size_set(last_options, $3); }
+        | KW_MEM_BUF_LENGTH '(' nonnegative_integer ')'  { disk_queue_options_mem_buf_length_set(last_options, $3); }
+        | KW_DISK_BUF_SIZE '(' nonnegative_integer64 ')'   { disk_queue_options_disk_buf_size_set(last_options, $3); }
+        | KW_QOUT_SIZE '(' nonnegative_integer ')'       { disk_queue_options_qout_size_set(last_options, $3); }
         | KW_DIR '(' string ')'                { disk_queue_options_set_dir(last_options, $3); free($3); }
         ;
 

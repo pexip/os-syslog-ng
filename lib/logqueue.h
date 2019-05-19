@@ -21,7 +21,7 @@
  * COPYING for details.
  *
  */
-  
+
 #ifndef LOGQUEUE_H_INCLUDED
 #define LOGQUEUE_H_INCLUDED
 
@@ -34,14 +34,12 @@ typedef void (*LogQueuePushNotifyFunc)(gpointer user_data);
 
 typedef struct _LogQueue LogQueue;
 
-typedef char *QueueType;
+typedef const char *QueueType;
 
 struct _LogQueue
 {
   QueueType type;
-  /* this object is reference counted, but it is _not_ thread safe to
-     acquire/release references in code executing in parallel */
-  gint ref_cnt;
+  GAtomicCounter ref_cnt;
   gboolean use_backlog;
 
   gint throttle;
@@ -49,8 +47,15 @@ struct _LogQueue
   GTimeVal last_throttle_check;
 
   gchar *persist_name;
-  StatsCounterItem *stored_messages;
+  StatsCounterItem *queued_messages;
   StatsCounterItem *dropped_messages;
+  StatsCounterItem *memory_usage;
+
+  struct
+  {
+    atomic_gssize memory_usage;
+    atomic_gssize queued_messages;
+  } stats_cache;
 
   GStaticMutex lock;
   LogQueuePushNotifyFunc parallel_push_notify;
@@ -67,6 +72,8 @@ struct _LogQueue
   void (*ack_backlog)(LogQueue *self, gint n);
   void (*rewind_backlog)(LogQueue *self, guint rewind_count);
   void (*rewind_backlog_all)(LogQueue *self);
+  void (*register_stats_counters)(LogQueue *self, gint stats_level, const StatsClusterKey *sc_key);
+  void (*unregister_stats_counters)(LogQueue *self, const StatsClusterKey *sc_key);
 
   void (*free_fn)(LogQueue *self);
 };
@@ -158,10 +165,11 @@ log_queue_ack_backlog(LogQueue *self, guint rewind_count)
 static inline LogQueue *
 log_queue_ref(LogQueue *self)
 {
+  g_assert(!self || g_atomic_counter_get(&self->ref_cnt) > 0);
+
   if (self)
     {
-      g_assert(self->ref_cnt > 0);
-      ++self->ref_cnt;
+      g_atomic_counter_inc(&self->ref_cnt);
     }
   return self;
 }
@@ -169,10 +177,11 @@ log_queue_ref(LogQueue *self)
 static inline void
 log_queue_unref(LogQueue *self)
 {
-  if (self)
+  g_assert(!self || g_atomic_counter_get(&self->ref_cnt) > 0);
+
+  if (self && g_atomic_counter_dec_and_test(&self->ref_cnt))
     {
-      g_assert(self->ref_cnt > 0);
-      if (--self->ref_cnt == 0)
+      if (self->free_fn)
         self->free_fn(self);
     }
 }
@@ -191,12 +200,24 @@ log_queue_set_use_backlog(LogQueue *self, gboolean use_backlog)
     self->use_backlog = use_backlog;
 }
 
+void log_queue_memory_usage_add(LogQueue *self, gsize value);
+void log_queue_memory_usage_sub(LogQueue *self, gsize value);
+
+void log_queue_queued_messages_add(LogQueue *self, gsize value);
+void log_queue_queued_messages_sub(LogQueue *self, gsize value);
+void log_queue_queued_messages_inc(LogQueue *self);
+void log_queue_queued_messages_dec(LogQueue *self);
+
 void log_queue_push_notify(LogQueue *self);
 void log_queue_reset_parallel_push(LogQueue *self);
-void log_queue_set_parallel_push(LogQueue *self, LogQueuePushNotifyFunc parallel_push_notify, gpointer user_data, GDestroyNotify user_data_destroy);
-gboolean log_queue_check_items(LogQueue *self, gint *timeout, LogQueuePushNotifyFunc parallel_push_notify, gpointer user_data, GDestroyNotify user_data_destroy);
-void log_queue_set_counters(LogQueue *self, StatsCounterItem *stored_messages, StatsCounterItem *dropped_messages);
+void log_queue_set_parallel_push(LogQueue *self, LogQueuePushNotifyFunc parallel_push_notify, gpointer user_data,
+                                 GDestroyNotify user_data_destroy);
+gboolean log_queue_check_items(LogQueue *self, gint *timeout, LogQueuePushNotifyFunc parallel_push_notify,
+                               gpointer user_data, GDestroyNotify user_data_destroy);
 void log_queue_init_instance(LogQueue *self, const gchar *persist_name);
+void log_queue_register_stats_counters(LogQueue *self, gint stats_level, const StatsClusterKey *sc_key);
+void log_queue_unregister_stats_counters(LogQueue *self, const StatsClusterKey *sc_key);
+
 void log_queue_free_method(LogQueue *self);
 
 void log_queue_set_max_threads(gint max_threads);

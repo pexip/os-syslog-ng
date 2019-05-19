@@ -32,18 +32,20 @@
 #include <stdio.h>
 
 
-struct _Journald {
-    int fds[2];
-    GList *entries;
-    GList *current_pos;
-    GList *next_element;
-    gboolean opened;
+struct _Journald
+{
+  int fds[2];
+  GList *entries;
+  GList *current_pos;
+  GList *next_element;
+  gboolean opened;
 };
 
-struct _MockEntry {
-    GPtrArray *data;
-    gint index;
-    gchar *cursor;
+struct _MockEntry
+{
+  GPtrArray *data;
+  gint index;
+  gchar *cursor;
 };
 
 int
@@ -146,6 +148,12 @@ journald_seek_cursor(Journald *self, const gchar *cursor)
 }
 
 int
+journald_test_cursor(Journald *self, const gchar *cursor)
+{
+  return 1;
+}
+
+int
 journald_get_fd(Journald *self)
 {
   g_assert(self->opened);
@@ -177,7 +185,7 @@ journald_get_realtime_usec(Journald *self, guint64 *usec)
 }
 
 Journald *
-journald_mock_new()
+journald_mock_new(void)
 {
   Journald *self = g_new0(Journald, 1);
 

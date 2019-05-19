@@ -29,13 +29,12 @@
 %code {
 
 #include "add-contextual-data.h"
-#include "cfg-parser.h"
 #include "cfg-grammar.h"
-#include "add-contextual-data-grammar.h"
+#include "add-contextual-data-selector.h"
 #include "syslog-names.h"
 #include "messages.h"
-
 }
+
 
 %name-prefix "add_contextual_data_"
 
@@ -50,10 +49,12 @@
 /* INCLUDE_DECLS */
 
 %token KW_ADD_CONTEXTUAL_DATA
-%token KW_ADD_CONTEXTUAL_DATA_DATABASE
-%token KW_ADD_CONTEXTUAL_DATA_SELECTOR
-%token KW_ADD_CONTEXTUAL_DATA_DEFAULT_SELECTOR
-%token KW_ADD_CONTEXTUAL_DATA_PREFIX
+%token KW_DATABASE
+%token KW_SELECTOR
+%token KW_DEFAULT_SELECTOR
+%token KW_PREFIX
+%token KW_FILTERS
+%token KW_IGNORE_CASE
 
 %type	<ptr> parser_expr_add_contextual_data
 
@@ -81,22 +82,35 @@ parser_add_contextual_data_opts
         ;
 
 parser_add_contextual_data_opt
-        : KW_ADD_CONTEXTUAL_DATA_DATABASE '(' string ')'
+        : KW_DATABASE '(' string ')'
         {
             add_contextual_data_set_filename(last_parser, $3);
             free($3);
-        } | KW_ADD_CONTEXTUAL_DATA_SELECTOR '(' string ')'
-        {
-            add_contextual_data_set_database_selector_template(last_parser, $3);
-            free($3);
-        } | KW_ADD_CONTEXTUAL_DATA_DEFAULT_SELECTOR '(' string ')'
+        } 
+        | KW_SELECTOR '(' parser_add_contextual_data_selector_opt ')'
+        | KW_DEFAULT_SELECTOR '(' string ')'
         {
             add_contextual_data_set_database_default_selector(last_parser, $3);
             free($3);
-        } | KW_ADD_CONTEXTUAL_DATA_PREFIX '(' string ')'
+        } | KW_PREFIX '(' string ')'
         {
             add_contextual_data_set_prefix(last_parser, $3);
             free($3);
+        } | KW_IGNORE_CASE '(' yesno ')'
+        {
+          add_contextual_data_set_ignore_case(last_parser, $3);
+        };
+
+parser_add_contextual_data_selector_opt
+        : KW_FILTERS '(' string ')'
+          {
+            add_contextual_data_set_selector_filter(last_parser, $3);
+            free($3);
+          }
+        | LL_STRING
+        {
+            add_contextual_data_set_database_selector_template(last_parser, $1);
+            free($1);
         };
 
 /* INCLUDE_RULES */

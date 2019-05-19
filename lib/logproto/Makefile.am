@@ -1,5 +1,7 @@
 logprotoincludedir			= ${pkgincludedir}/logproto
 
+EXTRA_DIST += lib/logproto/CMakeLists.txt
+
 logprotoinclude_HEADERS = \
 	lib/logproto/logproto-client.h	\
 	lib/logproto/logproto-server.h	\
@@ -11,6 +13,7 @@ logprotoinclude_HEADERS = \
 	lib/logproto/logproto-text-server.h	\
 	lib/logproto/logproto-indented-multiline-server.h \
 	lib/logproto/logproto-regexp-multiline-server.h \
+	lib/logproto/logproto-multiline-server.h \
 	lib/logproto/logproto-record-server.h \
 	lib/logproto/logproto-builtins.h	\
 	lib/logproto/logproto.h
@@ -26,6 +29,7 @@ logproto_sources = \
 	lib/logproto/logproto-text-server.c	\
 	lib/logproto/logproto-indented-multiline-server.c \
 	lib/logproto/logproto-regexp-multiline-server.c \
+	lib/logproto/logproto-multiline-server.c \
 	lib/logproto/logproto-record-server.c \
 	lib/logproto/logproto-builtins.c
 

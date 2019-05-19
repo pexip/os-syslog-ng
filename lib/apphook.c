@@ -35,11 +35,15 @@
 #include "afinter.h"
 #include "template/templates.h"
 #include "hostname.h"
-#include "scratch-buffers.h"
 #include "mainloop-call.h"
 #include "service-management.h"
 #include "crypto.h"
 #include "value-pairs/value-pairs.h"
+#include "scratch-buffers.h"
+#include "mainloop.h"
+#include "secret-storage/nondumpable-allocator.h"
+#include "secret-storage/secret-storage.h"
+#include "transport/transport-factory-id.h"
 
 #include <iv.h>
 #include <iv_work.h>
@@ -55,47 +59,68 @@ typedef struct _ApplicationHookEntry
 static GList *application_hooks = NULL;
 static gint current_state = AH_STARTUP;
 
-void 
+gboolean
+app_is_starting_up(void)
+{
+  return current_state < AH_PRE_CONFIG_LOADED;
+}
+
+gboolean
+app_is_shutting_down(void)
+{
+  return current_state >= AH_PRE_SHUTDOWN;
+}
+
+void
 register_application_hook(gint type, ApplicationHookFunc func, gpointer user_data)
 {
   if (current_state < type)
     {
       ApplicationHookEntry *entry = g_new0(ApplicationHookEntry, 1);
-      
+
       entry->type = type;
       entry->func = func;
       entry->user_data = user_data;
-      
+
       application_hooks = g_list_append(application_hooks, entry);
     }
   else
     {
       /* the requested hook has already passed, call the requested function immediately */
-      msg_debug("Application hook registered after the given point passed", 
-                evt_tag_int("current", current_state), 
+      msg_debug("Application hook registered after the given point passed",
+                evt_tag_int("current", current_state),
                 evt_tag_int("hook", type));
       func(type, user_data);
     }
 }
 
 static void
+_update_current_state(gint type)
+{
+  if (AH_REOPEN == type)
+    return;
+
+  g_assert(current_state <= type);
+  current_state = type;
+}
+
+static void
 run_application_hook(gint type)
 {
   GList *l, *l_next;
-  
-  g_assert(current_state <= type);
-  
+
+  _update_current_state(type);
+
   msg_debug("Running application hooks", evt_tag_int("hook", type));
-  current_state = type;
   for (l = application_hooks; l; l = l_next)
     {
       ApplicationHookEntry *e = l->data;
-      
+
       if (e->type == type)
         {
           l_next = l->next;
-          application_hooks = g_list_remove_link(application_hooks, l);
           e->func(type, e->user_data);
+          application_hooks = g_list_remove_link(application_hooks, l);
           g_free(e);
           g_list_free_1(l);
         }
@@ -113,7 +138,17 @@ app_fatal(const char *msg)
   fprintf(stderr, "%s\n", msg);
 }
 
-void 
+#define construct_nondumpable_logger(logger) \
+void \
+nondumpable_allocator_ ## logger (gchar *summary, gchar *reason) \
+{ \
+  logger(summary, evt_tag_str("reason", reason)); \
+}
+
+construct_nondumpable_logger(msg_debug);
+construct_nondumpable_logger(msg_fatal);
+
+void
 app_startup(void)
 {
   msg_init(FALSE);
@@ -135,6 +170,19 @@ app_startup(void)
   log_template_global_init();
   value_pairs_global_init();
   service_management_init();
+  scratch_buffers_allocator_init();
+  main_loop_thread_resource_init();
+  nondumpable_setlogger(nondumpable_allocator_msg_debug, nondumpable_allocator_msg_fatal);
+  secret_storage_init();
+  transport_factory_id_global_init();
+}
+
+void
+app_finish_app_startup_after_cfg_init(void)
+{
+  log_tags_reinit_stats();
+  log_msg_stats_global_init();
+  scratch_buffers_global_init();
 }
 
 void
@@ -156,15 +204,26 @@ app_post_config_loaded(void)
   res_init();
 }
 
-void 
+void
+app_pre_shutdown(void)
+{
+  run_application_hook(AH_PRE_SHUTDOWN);
+}
+
+void
 app_shutdown(void)
 {
   run_application_hook(AH_SHUTDOWN);
+  main_loop_thread_resource_deinit();
+  secret_storage_deinit();
+  scratch_buffers_allocator_deinit();
+  scratch_buffers_global_deinit();
   value_pairs_global_deinit();
   log_template_global_deinit();
   log_tags_global_deinit();
   log_msg_global_deinit();
 
+  afinter_global_deinit();
   stats_destroy();
   child_manager_deinit();
   g_list_foreach(application_hooks, (GFunc) g_free, NULL);
@@ -174,11 +233,12 @@ app_shutdown(void)
   hostname_global_deinit();
   crypto_deinit();
   msg_deinit();
+  transport_factory_id_global_deinit();
 
-  
+
   /* NOTE: the iv_deinit() call should come here, but there's some exit
    * synchronization issue in libivykis that causes use-after-free with the
-   * thread-local-state for the main thread and iv_work_pool worker threads. 
+   * thread-local-state for the main thread and iv_work_pool worker threads.
    * I've dropped a mail to Lennert about the issue, but I'm commenting this
    * out for now to avoid it biting someone. Bazsi, 2013/12/23.
    *
@@ -190,9 +250,15 @@ app_shutdown(void)
 }
 
 void
+app_reopen(void)
+{
+  run_application_hook(AH_REOPEN);
+}
+
+void
 app_thread_start(void)
 {
-  scratch_buffers_init();
+  scratch_buffers_allocator_init();
   dns_caching_thread_init();
   main_loop_call_thread_init();
 }
@@ -200,7 +266,7 @@ app_thread_start(void)
 void
 app_thread_stop(void)
 {
-  dns_caching_thread_deinit();
-  scratch_buffers_free();
   main_loop_call_thread_deinit();
+  dns_caching_thread_deinit();
+  scratch_buffers_allocator_deinit();
 }

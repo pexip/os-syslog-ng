@@ -28,6 +28,33 @@
 
 #include <string.h>
 
+static void _log_expr_node_free(LogExprNode *self);
+
+LogExprNode *
+log_expr_node_ref(LogExprNode *self)
+{
+  g_assert(!self || g_atomic_counter_get(&self->ref_cnt) > 0);
+
+  if (self)
+    {
+      g_atomic_counter_inc(&self->ref_cnt);
+    }
+  return self;
+}
+
+LogExprNode *
+log_expr_node_unref(LogExprNode *self)
+{
+  g_assert(!self || g_atomic_counter_get(&self->ref_cnt));
+
+  if (self && (g_atomic_counter_dec_and_test(&self->ref_cnt)))
+    {
+      _log_expr_node_free(self);
+      return NULL;
+    }
+  return self;
+}
+
 /*
  * Return the textual representation of a node content type.
  */
@@ -143,7 +170,7 @@ log_expr_node_format_location(LogExprNode *self, gchar *buf, gsize buf_len)
     {
       if (node->line || node->column)
         {
-          g_snprintf(buf, buf_len, "%s:%d:%d", self->filename ? : "#buffer", self->line, self->column);
+          g_snprintf(buf, buf_len, "%s:%d:%d", self->filename ? : "#buffer", node->line, node->column);
           break;
         }
       node = node->parent;
@@ -232,6 +259,8 @@ log_expr_node_new(gint layout, gint content, const gchar *name, LogExprNode *chi
 {
   LogExprNode *self = g_new0(LogExprNode, 1);
 
+  g_atomic_counter_set(&self->ref_cnt, 1);
+
   self->layout = layout;
   self->content = content;
   self->name = g_strdup(name);
@@ -253,15 +282,15 @@ log_expr_node_new(gint layout, gint content, const gchar *name, LogExprNode *chi
  * This function frees the LogExprNode object encapsulating a log
  * expression node pointed to by @self.
  **/
-void
-log_expr_node_free(LogExprNode *self)
+static void
+_log_expr_node_free(LogExprNode *self)
 {
   LogExprNode *next, *p;
 
   for (p = self->children ; p; p = next)
     {
       next = p->next;
-      log_expr_node_free(p);
+      log_expr_node_unref(p);
     }
   if (self->object && self->object_destroy)
     self->object_destroy(self->object);
@@ -280,7 +309,6 @@ log_expr_node_new_pipe(LogPipe *pipe, YYLTYPE *yylloc)
   log_expr_node_set_object(node, pipe, (GDestroyNotify) log_pipe_unref);
   return node;
 }
-
 
 LogExprNode *
 log_expr_node_new_source(const gchar *name, LogExprNode *children, YYLTYPE *yylloc)
@@ -360,17 +388,229 @@ log_expr_node_new_junction(LogExprNode *children, YYLTYPE *yylloc)
   return log_expr_node_new(ENL_JUNCTION, ENC_PIPE, NULL, children, 0, yylloc);
 }
 
+/****************************************************************************
+ * Functions related to conditional nodes
+ *
+ * These are higher-level functions that map if-elif-else structure to
+ * LogExprNode instances.  Rather than using a higher level data struct
+ * which then generates LogExprNode instances, we represent/manipulate the
+ * if-elif-else structure right within LogExprNode.
+ *
+ * A conditional node is simply a junction with two children:
+ *
+ *     1) the first child is the "TRUE" branch, with the filter expression
+ *     attached and the final flag
+ *
+ *     2) the second child is the "FALSE" branch, possibly empty, but also
+ *     the final flag.
+ *
+ * Basically this is the equivalent to:
+ *
+ *     junction {
+ *       channel {
+ *         filter { EXPRESSION; };
+ *         flags(final);
+ *       };
+ *       channel {
+ *         flags(final);
+ *       };
+ *     };
+ *
+ * When parsing an if block, we generate both children immediately, with the
+ * empty 2nd channel, and then if an elif or else comes, the FALSE branch
+ * gets replaced.
+ *
+ * The series of if-elif-else sequences is represented by its first
+ * LogExprNode (e.g.  the first if).  When we need to add an else or elif,
+ * we would have to locate the last dangling if statement based on this
+ * first LogExprNode.  The alternative would have been to store the last if
+ * statement in a variable, however that becomes pretty complicated if we
+ * need to handle nesting.
+ *
+ ****************************************************************************/
+
+static LogExprNode *
+log_expr_node_conditional_get_true_branch(LogExprNode *node)
+{
+  g_assert(node->layout == ENL_JUNCTION);
+
+  LogExprNode *branches = node->children;
+
+  g_assert(branches != NULL);
+  g_assert(branches->next != NULL);
+  g_assert(branches->next->next == NULL);
+
+  /* first child */
+  return branches;
+}
+
+static LogExprNode *
+log_expr_node_conditional_get_false_branch(LogExprNode *node)
+{
+  g_assert(node->layout == ENL_JUNCTION);
+
+  LogExprNode *branches = node->children;
+  g_assert(branches != NULL);
+  g_assert(branches->next != NULL);
+  g_assert(branches->next->next == NULL);
+
+  /* second child */
+  return branches->next;
+}
+
+static gboolean
+log_expr_node_conditional_is_branch_empty(LogExprNode *node)
+{
+  return node->children == NULL;
+}
+
+/* this function locates the last dangling if, based on the very first if
+ * statement in a series of ifs at the same level */
+static LogExprNode *
+_locate_last_conditional_along_nested_else_blocks(LogExprNode *head)
+{
+  while (1)
+    {
+      g_assert(log_expr_node_conditional_get_true_branch(head) != NULL);
+      g_assert(log_expr_node_conditional_get_false_branch(head) != NULL);
+
+      LogExprNode *false_branch = log_expr_node_conditional_get_false_branch(head);
+
+      /* check if this is the last else */
+      if (log_expr_node_conditional_is_branch_empty(false_branch))
+        return head;
+      head = false_branch->children;
+    }
+  g_assert_not_reached();
+}
+
+/* change the FALSE branch (e.g. the else case) of the last dangling if, specified by the head element */
+void
+log_expr_node_conditional_set_false_branch_of_the_last_if(LogExprNode *conditional_head_node, LogExprNode *false_expr)
+{
+  LogExprNode *conditional_node = _locate_last_conditional_along_nested_else_blocks(conditional_head_node);
+  LogExprNode *branches = conditional_node->children;
+
+  /* a conditional branch always have two children (see the constructor
+   * below), the first one is the "true" branch and the second one is the
+   * "false" branch, as they are constructed as final log channels with
+   * filter statement in the first one as the "if" expression.  */
+
+  /* assert that we only have two children */
+  g_assert(branches != NULL);
+  g_assert(branches->next != NULL);
+  g_assert(branches->next->next == NULL);
+
+
+  /* construct the new false branch */
+  LogExprNode *false_branch = log_expr_node_new_log(
+                                false_expr,
+                                log_expr_node_lookup_flag("final"),
+                                NULL
+                              );
+
+  /* unlink and free the old one */
+  LogExprNode *old_false_branch = branches->next;
+  branches->next = false_branch;
+  false_branch->parent = conditional_node;
+  log_expr_node_unref(old_false_branch);
+}
+
+/*
+ */
+LogExprNode *
+log_expr_node_new_conditional_with_filter(LogExprNode *filter_pipe, LogExprNode *true_expr, YYLTYPE *yylloc)
+{
+  LogExprNode *filter_node = log_expr_node_new_filter(NULL, filter_pipe, NULL);
+
+  /*
+   *  channel {
+   *    filter { EXPRESSION };
+   *    true_expr;
+   *    flags(final);
+   *  };
+   */
+  LogExprNode *true_branch = log_expr_node_new_log(
+                               log_expr_node_append_tail(
+                                 filter_node,
+                                 log_expr_node_new_log(true_expr, LC_DROP_UNMATCHED, NULL)
+                               ),
+                               LC_FINAL,
+                               NULL
+                             );
+
+  /*
+   *  channel {
+   *    flags(final);
+   *  };
+   *
+   * NOTE: the false branch may be modified later, once an else or elif is
+   * encountered in the configuration, see
+   * log_expr_node_conditional_set_false_branch_of_the_last_if() function
+   * above.
+   */
+  LogExprNode *false_branch = log_expr_node_new_log(
+                                NULL,
+                                LC_FINAL,
+                                NULL
+                              );
+  return log_expr_node_new_junction(
+           log_expr_node_append_tail(true_branch, false_branch),
+           yylloc
+         );
+}
+
+LogExprNode *
+log_expr_node_new_conditional_with_block(LogExprNode *block, YYLTYPE *yylloc)
+{
+  /*
+   *  channel {
+   *    filtering_and_parsing_expr;
+   *    flags(final);
+   *  };
+   */
+  LogExprNode *true_branch = log_expr_node_new_log(
+                               block,
+                               LC_FINAL,
+                               NULL
+                             );
+
+  /*
+   *  channel {
+   *    flags(final);
+   *  };
+   *
+   * NOTE: the false branch may be modified later, once an else or elif is
+   * encountered in the configuration, see
+   * log_expr_node_conditional_set_false_branch_of_the_last_if() function
+   * above.
+   */
+  LogExprNode *false_branch = log_expr_node_new_log(
+                                NULL,
+                                LC_FINAL,
+                                NULL
+                              );
+  return log_expr_node_new_junction(
+           log_expr_node_append_tail(true_branch, false_branch),
+           yylloc
+         );
+}
+
+/****************************************************************************/
+
 gint
 log_expr_node_lookup_flag(const gchar *flag)
 {
-  if (strcmp(flag, "catch-all") == 0 || strcmp(flag, "catchall") == 0 || strcmp(flag, "catch_all") == 0)
+  if (strcmp(flag, "catch-all") == 0 || strcmp(flag, "catchall") == 0)
     return LC_CATCHALL;
   else if (strcmp(flag, "fallback") == 0)
     return LC_FALLBACK;
   else if (strcmp(flag, "final") == 0)
     return LC_FINAL;
-  else if (strcmp(flag, "flow_control") == 0 || strcmp(flag, "flow-control") == 0)
+  else if (strcmp(flag, "flow-control") == 0)
     return LC_FLOW_CONTROL;
+  else if (strcmp(flag, "drop-unmatched") == 0)
+    return LC_DROP_UNMATCHED;
   msg_error("Unknown log statement flag", evt_tag_str("flag", flag));
   return 0;
 }
@@ -393,6 +633,12 @@ cfg_tree_new_mpx(CfgTree *self, LogExprNode *related_expr)
   return pipe;
 }
 
+static gchar *
+_format_anon_rule_name(CfgTree *self, gint content)
+{
+  return g_strdup_printf("#anon-%s%d", log_expr_node_get_content_name(content), self->anon_counters[content]++);
+}
+
 /*
  * Return the name of the rule that contains a LogExprNode. Generates
  * one automatically for anonymous log expressions.
@@ -402,11 +648,21 @@ cfg_tree_new_mpx(CfgTree *self, LogExprNode *related_expr)
 gchar *
 cfg_tree_get_rule_name(CfgTree *self, gint content, LogExprNode *node)
 {
-  LogExprNode *rule = log_expr_node_get_container_rule(node, content);
+  gchar *rule_name;
 
-  if (!rule->name)
-    rule->name = g_strdup_printf("#anon-%s%d", log_expr_node_get_content_name(content), self->anon_counters[content]++);
-  return g_strdup(rule->name);
+  if (node)
+    {
+      LogExprNode *rule = log_expr_node_get_container_rule(node, content);
+      if (!rule->name)
+        rule->name = _format_anon_rule_name(self, content);
+      rule_name = g_strdup(rule->name);
+    }
+  else
+    {
+      rule_name = _format_anon_rule_name(self, content);
+    }
+
+  return rule_name;
 }
 
 /*
@@ -418,11 +674,18 @@ cfg_tree_get_rule_name(CfgTree *self, gint content, LogExprNode *node)
 gchar *
 cfg_tree_get_child_id(CfgTree *self, gint content, LogExprNode *node)
 {
-  LogExprNode *rule = log_expr_node_get_container_rule(node, content);
   gchar *rule_name = cfg_tree_get_rule_name(self, content, node);
+  gint cur_child_id;
   gchar *res;
 
-  res = g_strdup_printf("%s#%d", rule_name, rule->child_id++);
+  if (node)
+    {
+      LogExprNode *rule = log_expr_node_get_container_rule(node, content);
+      cur_child_id = rule->child_id++;
+    }
+  else
+    cur_child_id = 0;
+  res = g_strdup_printf("%s#%d", rule_name, cur_child_id);
   g_free(rule_name);
   return res;
 }
@@ -439,7 +702,8 @@ cfg_tree_add_all_sources(gpointer key, gpointer value, gpointer user_data)
     return;
 
   /* prepend a source reference */
-  referring_rule->children = log_expr_node_append_tail(log_expr_node_new_source_reference(rule->name, NULL), referring_rule->children);
+  referring_rule->children = log_expr_node_append_tail(log_expr_node_new_source_reference(rule->name, NULL),
+                                                       referring_rule->children);
 }
 
 static gboolean
@@ -463,6 +727,8 @@ cfg_tree_compile_single(CfgTree *self, LogExprNode *node,
     {
       /* first reference to the pipe uses the same instance, further ones will get cloned */
       pipe->flags |= PIF_INLINED;
+      /* The pipe object is borrowed, so the reference counter must be increased. */
+      log_pipe_ref(pipe);
     }
   else
     {
@@ -476,7 +742,7 @@ cfg_tree_compile_single(CfgTree *self, LogExprNode *node,
         }
       pipe->flags |= PIF_INLINED;
     }
-  g_ptr_array_add(self->initialized_pipes, log_pipe_ref(pipe));
+  g_ptr_array_add(self->initialized_pipes, pipe);
   pipe->expr_node = node;
 
   if ((pipe->flags & PIF_SOURCE) == 0)
@@ -484,7 +750,7 @@ cfg_tree_compile_single(CfgTree *self, LogExprNode *node,
   *outer_pipe_tail = pipe;
   return TRUE;
 
- error:
+error:
   return FALSE;
 }
 
@@ -516,89 +782,89 @@ cfg_tree_compile_reference(CfgTree *self, LogExprNode *node,
   switch (referenced_node->content)
     {
     case ENC_SOURCE:
-      {
-        LogMultiplexer *mpx;
-        LogPipe *sub_pipe_head = NULL, *sub_pipe_tail = NULL;
-        LogPipe *attach_pipe = NULL;
+    {
+      LogMultiplexer *mpx;
+      LogPipe *sub_pipe_head = NULL, *sub_pipe_tail = NULL;
+      LogPipe *attach_pipe = NULL;
 
-        if (!referenced_node->aux)
-          {
-            if (!cfg_tree_compile_node(self, referenced_node, &sub_pipe_head, &sub_pipe_tail))
-              goto error;
-            log_expr_node_set_aux(referenced_node, log_pipe_ref(sub_pipe_tail), (GDestroyNotify) log_pipe_unref);
-          }
-        else
-          {
-            sub_pipe_tail = referenced_node->aux;
-          }
+      if (!referenced_node->aux)
+        {
+          if (!cfg_tree_compile_node(self, referenced_node, &sub_pipe_head, &sub_pipe_tail))
+            goto error;
+          log_expr_node_set_aux(referenced_node, log_pipe_ref(sub_pipe_tail), (GDestroyNotify) log_pipe_unref);
+        }
+      else
+        {
+          sub_pipe_tail = referenced_node->aux;
+        }
 
-        attach_pipe = cfg_tree_new_pipe(self, node);
+      attach_pipe = cfg_tree_new_pipe(self, node);
 
-        if (sub_pipe_tail)
-          {
-            /* when the source is empty, we'll get a NULL tail in
-             * sub_pipe_tail.  We handle that by simply not connecting
-             * anything to the attachment point */
+      if (sub_pipe_tail)
+        {
+          /* when the source is empty, we'll get a NULL tail in
+           * sub_pipe_tail.  We handle that by simply not connecting
+           * anything to the attachment point */
 
-            if (!sub_pipe_tail->pipe_next)
-              {
-                mpx = cfg_tree_new_mpx(self, referenced_node);
-                log_pipe_append(sub_pipe_tail, &mpx->super);
-              }
-            else
-              {
-                mpx = (LogMultiplexer *) sub_pipe_tail->pipe_next;
-              }
-            log_multiplexer_add_next_hop(mpx, attach_pipe);
-          }
-        *outer_pipe_head = NULL;
-        *outer_pipe_tail = attach_pipe;
-        break;
-      }
+          if (!sub_pipe_tail->pipe_next)
+            {
+              mpx = cfg_tree_new_mpx(self, referenced_node);
+              log_pipe_append(sub_pipe_tail, &mpx->super);
+            }
+          else
+            {
+              mpx = (LogMultiplexer *) sub_pipe_tail->pipe_next;
+            }
+          log_multiplexer_add_next_hop(mpx, attach_pipe);
+        }
+      *outer_pipe_head = NULL;
+      *outer_pipe_tail = attach_pipe;
+      break;
+    }
     case ENC_DESTINATION:
-      {
-        LogMultiplexer *mpx;
-        LogPipe *sub_pipe_head = NULL, *sub_pipe_tail = NULL;
+    {
+      LogMultiplexer *mpx;
+      LogPipe *sub_pipe_head = NULL, *sub_pipe_tail = NULL;
 
-        if (!referenced_node->aux)
-          {
-            if (!cfg_tree_compile_node(self, referenced_node, &sub_pipe_head, &sub_pipe_tail))
-              goto error;
-            log_expr_node_set_aux(referenced_node, log_pipe_ref(sub_pipe_head), (GDestroyNotify) log_pipe_unref);
-          }
-        else
-          {
-            sub_pipe_head = referenced_node->aux;
-          }
+      if (!referenced_node->aux)
+        {
+          if (!cfg_tree_compile_node(self, referenced_node, &sub_pipe_head, &sub_pipe_tail))
+            goto error;
+          log_expr_node_set_aux(referenced_node, log_pipe_ref(sub_pipe_head), (GDestroyNotify) log_pipe_unref);
+        }
+      else
+        {
+          sub_pipe_head = referenced_node->aux;
+        }
 
-        /* We need a new LogMultiplexer instance for two reasons:
+      /* We need a new LogMultiplexer instance for two reasons:
 
-           1) we need to link something into the sequence, all
-           reference based destination invocations need a separate
-           LogPipe
+         1) we need to link something into the sequence, all
+         reference based destination invocations need a separate
+         LogPipe
 
-           2) we have to fork downwards to the destination, it may
-           change the message but we need the original one towards
-           our next chain
-        */
+         2) we have to fork downwards to the destination, it may
+         change the message but we need the original one towards
+         our next chain
+      */
 
-        mpx = cfg_tree_new_mpx(self, node);
+      mpx = cfg_tree_new_mpx(self, node);
 
-        if (sub_pipe_head)
-          {
-            /* when the destination is empty */
-            log_multiplexer_add_next_hop(mpx, sub_pipe_head);
-          }
-        *outer_pipe_head = &mpx->super;
-        *outer_pipe_tail = NULL;
-        break;
-      }
+      if (sub_pipe_head)
+        {
+          /* when the destination is empty */
+          log_multiplexer_add_next_hop(mpx, sub_pipe_head);
+        }
+      *outer_pipe_head = &mpx->super;
+      *outer_pipe_tail = NULL;
+      break;
+    }
     default:
       return cfg_tree_compile_node(self, referenced_node, outer_pipe_head, outer_pipe_tail);
     }
   return TRUE;
 
- error:
+error:
   return FALSE;
 }
 
@@ -613,6 +879,9 @@ cfg_tree_propagate_expr_node_properties_to_pipe(LogExprNode *node, LogPipe *pipe
 
   if (node->flags & LC_FLOW_CONTROL)
     pipe->flags |= PIF_HARD_FLOW_CONTROL;
+
+  if (node->flags & LC_DROP_UNMATCHED)
+    pipe->flags |= PIF_DROP_UNMATCHED;
 
   if (!pipe->expr_node)
     pipe->expr_node = node;
@@ -653,8 +922,8 @@ cfg_tree_compile_sequence(CfgTree *self, LogExprNode *node,
 {
   LogExprNode *ep;
   LogPipe
-    *first_pipe,   /* the head of the constructed pipeline */
-    *last_pipe;    /* the current tail of the constructed pipeline */
+  *first_pipe,   /* the head of the constructed pipeline */
+  *last_pipe;    /* the current tail of the constructed pipeline */
   LogPipe *source_join_pipe = NULL;
   gboolean node_properties_propagated = FALSE;
 
@@ -758,17 +1027,17 @@ cfg_tree_compile_sequence(CfgTree *self, LogExprNode *node,
    */
 
   g_assert(((node->flags & LC_FLOW_CONTROL) && (first_pipe || source_join_pipe)) ||
-            !(node->flags & LC_FLOW_CONTROL));
+           !(node->flags & LC_FLOW_CONTROL));
 
   if (!first_pipe && !last_pipe)
     {
       /* this is an empty sequence, insert a do-nothing LogPipe */
       first_pipe = last_pipe = cfg_tree_new_pipe(self, node);
     }
-  
+
   if (!node_properties_propagated)
     {
-      /* we never encountered anything that would produce a head_pipe, e.g. 
+      /* we never encountered anything that would produce a head_pipe, e.g.
        * this sequence only contains a source and nothing else.  In that
        * case, apply node flags to the last pipe.  It should be picked up
        * when LogMultiplexer iterates over the branch in
@@ -783,7 +1052,7 @@ cfg_tree_compile_sequence(CfgTree *self, LogExprNode *node,
   *outer_pipe_tail = last_pipe;
   *outer_pipe_head = first_pipe;
   return TRUE;
- error:
+error:
 
   /* we don't need to free anything, everything we allocated is recorded in
    * @self, thus will be freed whenever cfg_tree_free is called */
@@ -839,6 +1108,7 @@ cfg_tree_compile_junction(CfgTree *self,
           if (!fork_mpx)
             {
               fork_mpx = cfg_tree_new_mpx(self, node);
+              *outer_pipe_head = &fork_mpx->super;
             }
           log_multiplexer_add_next_hop(fork_mpx, sub_pipe_head);
         }
@@ -865,11 +1135,10 @@ cfg_tree_compile_junction(CfgTree *self,
         }
     }
 
-  *outer_pipe_head = &fork_mpx->super;
   if (outer_pipe_tail)
     *outer_pipe_tail = join_pipe;
   return TRUE;
- error:
+error:
 
   /* we don't need to free anything, everything we allocated is recorded in
    * @self, thus will be freed whenever cfg_tree_free is called */
@@ -890,7 +1159,7 @@ cfg_tree_compile_node(CfgTree *self, LogExprNode *node,
   gboolean result = FALSE;
   static gint indent = -1;
 
-  if (debug_flag)
+  if (trace_flag)
     {
       gchar buf[128];
       gchar compile_message[256];
@@ -898,11 +1167,11 @@ cfg_tree_compile_node(CfgTree *self, LogExprNode *node,
       indent++;
       g_snprintf(compile_message, sizeof(compile_message),
                  "%-*sCompiling %s %s [%s] at [%s]",
-                  indent * 2, "",
-                  node->name ? : "#unnamed",
-                  log_expr_node_get_layout_name(node->layout),
-                  log_expr_node_get_content_name(node->content),
-                  log_expr_node_format_location(node, buf, sizeof(buf)));
+                 indent * 2, "",
+                 node->name ? : "#unnamed",
+                 log_expr_node_get_layout_name(node->layout),
+                 log_expr_node_get_content_name(node->content),
+                 log_expr_node_format_location(node, buf, sizeof(buf)));
       msg_send_formatted_message(EVT_PRI_DEBUG, compile_message);
     }
 
@@ -993,6 +1262,12 @@ cfg_tree_get_object(CfgTree *self, gint content, const gchar *name)
   lookup_node.name = (gchar *) name;
 
   return g_hash_table_lookup(self->objects, &lookup_node);
+}
+
+GList *
+cfg_tree_get_objects(CfgTree *self)
+{
+  return g_hash_table_get_values(self->objects);
 }
 
 gboolean
@@ -1116,7 +1391,9 @@ cfg_tree_start(CfgTree *self)
 
       if (!log_pipe_init(pipe))
         {
-          msg_error("Error initializing message pipeline");
+          msg_error("Error initializing message pipeline",
+                    evt_tag_str("plugin_name", pipe->plugin_name ? pipe->plugin_name : "not a plugin"),
+                    log_pipe_location_tag(pipe));
           return FALSE;
         }
     }
@@ -1144,7 +1421,8 @@ cfg_tree_init_instance(CfgTree *self, GlobalConfig *cfg)
 {
   memset(self, 0, sizeof(*self));
   self->initialized_pipes = g_ptr_array_new();
-  self->objects = g_hash_table_new_full(cfg_tree_objects_hash, cfg_tree_objects_equal, NULL, (GDestroyNotify) log_expr_node_free);
+  self->objects = g_hash_table_new_full(cfg_tree_objects_hash, cfg_tree_objects_equal, NULL,
+                                        (GDestroyNotify) log_expr_node_unref);
   self->templates = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, (GDestroyNotify) log_template_unref);
   self->rules = g_ptr_array_new();
   self->cfg = cfg;
@@ -1156,7 +1434,7 @@ cfg_tree_free_instance(CfgTree *self)
   g_ptr_array_foreach(self->initialized_pipes, (GFunc) log_pipe_unref, NULL);
   g_ptr_array_free(self->initialized_pipes, TRUE);
 
-  g_ptr_array_foreach(self->rules, (GFunc) log_expr_node_free, NULL);
+  g_ptr_array_foreach(self->rules, (GFunc) log_expr_node_unref, NULL);
   g_ptr_array_free(self->rules, TRUE);
 
   g_hash_table_destroy(self->objects);

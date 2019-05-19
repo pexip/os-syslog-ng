@@ -21,7 +21,7 @@
  * COPYING for details.
  *
  */
-  
+
 #ifndef LOGMSG_H_INCLUDED
 #define LOGMSG_H_INCLUDED
 
@@ -56,6 +56,8 @@ typedef enum
 
 #define IS_SUSPENDFLAG_ON(x) ((x) == 1 ? TRUE : FALSE)
 
+#define STRICT_ROUND_TO_NEXT_EIGHT(x)  ((x + 8) & ~7)
+
 typedef struct _LogPathOptions LogPathOptions;
 
 typedef void (*LMAckFunc)(LogMessage *lm, AckType ack_type);
@@ -66,6 +68,7 @@ typedef enum
 {
   LM_TS_STAMP = 0,
   LM_TS_RECVD = 1,
+  LM_TS_PROCESSED = 2,
   LM_TS_MAX
 } LogMessageTimeStamp;
 
@@ -110,7 +113,6 @@ enum
   LF_LOCAL             = 0x0004,
   /* message is a MARK mode */
   LF_MARK              = 0x0008,
-
   /* state flags that only matter during syslog-ng runtime and never
    * when a message is serialized */
   LF_STATE_MASK        = 0xFFF0,
@@ -120,14 +122,23 @@ enum
   LF_STATE_OWN_SDATA   = 0x0080,
   LF_STATE_OWN_MASK    = 0x00F0,
 
+  /* In the log header the hostname shall be printed individually (no group name, no chain hosts)*/
+  LF_SIMPLE_HOSTNAME = 0x0100,
+
   LF_CHAINED_HOSTNAME  = 0x00010000,
 
-  /* originally parsed from RFC 3164 format and the legacy message header
-   * was saved in $LEGACY_MSGHDR. This flag is a hack to avoid a hash lookup
-   * in the fast path and indicates that the parser has saved the legacy
-   * message header intact in a value named LEGACY_MSGHDR.
+  /* NOTE: this flag is now unused.  The original intent was to save whether
+   * LEGACY_MSGHDR was saved by the parser code.  Now we simply check
+   * whether the length of ${LEGACY_MSGHDR} is non-zero.  This used to be a
+   * slow operation (when name-value pairs were stored in a hashtable), now
+   * it is much faster.  Also, this makes it possible to reproduce a message
+   * entirely based on name-value pairs.  Without this change, even if
+   * LEGACY_MSGHDR was transferred (e.g.  ewmm), the other side couldn't
+   * reproduce the original message, as this flag was not transferred.
+   *
+   * The flag remains here for documentation, and also because it is serialized in disk-buffers
    */
-  LF_LEGACY_MSGHDR    = 0x00020000,
+  __UNUSED_LF_LEGACY_MSGHDR    = 0x00020000,
 };
 
 typedef struct _LogMessageQueueNode
@@ -138,7 +149,7 @@ typedef struct _LogMessageQueueNode
 } LogMessageQueueNode;
 
 
-/* NOTE: the members are ordered according to the presumed use frequency. 
+/* NOTE: the members are ordered according to the presumed use frequency.
  * The structure itself is 2 cachelines, the border is right after the "msg"
  * member */
 struct _LogMessage
@@ -162,9 +173,10 @@ struct _LogMessage
   AckRecord *ack_record;
   LMAckFunc ack_func;
   LogMessage *original;
+  gsize allocated_bytes;
 
-  /* message parts */ 
-  
+  /* message parts */
+
   /* the contents of the members below is directly copied into another
    * LogMessage with pointer values.  To change any of the fields please use
    * log_msg_set_*() functions, which will handle borrowed data members
@@ -182,7 +194,7 @@ struct _LogMessage
   guint32 flags;
   guint16 pri;
   guint8 initial_parse:1,
-    recursed:1;
+         recursed:1;
   guint8 num_matches;
   guint8 num_tags;
   guint8 alloc_sdata;
@@ -198,7 +210,7 @@ struct _LogMessage
   /* preallocated LogQueueNodes used to insert this message into a LogQueue */
   LogMessageQueueNode nodes[0];
 
-  /* a preallocated space for the inital NVTable (payload) may follow */
+  /* a preallocated space for the initial NVTable (payload) may follow */
 };
 
 extern NVRegistry *logmsg_registry;
@@ -210,6 +222,13 @@ LogMessage *log_msg_ref(LogMessage *m);
 void log_msg_unref(LogMessage *m);
 void log_msg_write_protect(LogMessage *m);
 void log_msg_write_unprotect(LogMessage *m);
+
+static inline gboolean
+log_msg_is_write_protected(const LogMessage *self)
+{
+  return self->protect_cnt > 0;
+}
+
 LogMessage *log_msg_clone_cow(LogMessage *msg, const LogPathOptions *path_options);
 LogMessage *log_msg_make_writable(LogMessage **pmsg, const LogPathOptions *path_options);
 
@@ -269,15 +288,18 @@ log_msg_get_value_name(NVHandle handle, gssize *name_len)
   return nv_registry_get_handle_name(logmsg_registry, handle, name_len);
 }
 
-typedef gboolean (*LogMessageTagsForeachFunc)(const LogMessage *self, LogTagId tag_id, const gchar *name, gpointer user_data);
+typedef gboolean (*LogMessageTagsForeachFunc)(const LogMessage *self, LogTagId tag_id, const gchar *name,
+                                              gpointer user_data);
 
 void log_msg_set_value(LogMessage *self, NVHandle handle, const gchar *new_value, gssize length);
-void log_msg_set_value_indirect(LogMessage *self, NVHandle handle, NVHandle ref_handle, guint8 type, guint16 ofs, guint16 len);
+void log_msg_set_value_indirect(LogMessage *self, NVHandle handle, NVHandle ref_handle, guint8 type, guint16 ofs,
+                                guint16 len);
 void log_msg_unset_value(LogMessage *self, NVHandle handle);
 void log_msg_unset_value_by_name(LogMessage *self, const gchar *name);
 gboolean log_msg_values_foreach(const LogMessage *self, NVTableForeachFunc func, gpointer user_data);
 void log_msg_set_match(LogMessage *self, gint index, const gchar *value, gssize value_len);
-void log_msg_set_match_indirect(LogMessage *self, gint index, NVHandle ref_handle, guint8 type, guint16 ofs, guint16 len);
+void log_msg_set_match_indirect(LogMessage *self, gint index, NVHandle ref_handle, guint8 type, guint16 ofs,
+                                guint16 len);
 void log_msg_clear_matches(LogMessage *self);
 
 static inline void
@@ -318,7 +340,8 @@ LogMessage *log_msg_new_local(void);
 void log_msg_add_ack(LogMessage *msg, const LogPathOptions *path_options);
 void log_msg_ack(LogMessage *msg, const LogPathOptions *path_options, AckType ack_type);
 void log_msg_drop(LogMessage *msg, const LogPathOptions *path_options, AckType ack_type);
-const LogPathOptions *log_msg_break_ack(LogMessage *msg, const LogPathOptions *path_options, LogPathOptions *local_options);
+const LogPathOptions *log_msg_break_ack(LogMessage *msg, const LogPathOptions *path_options,
+                                        LogPathOptions *local_options);
 
 void log_msg_refcache_start_producer(LogMessage *self);
 void log_msg_refcache_start_consumer(LogMessage *self, const LogPathOptions *path_options);
@@ -328,8 +351,11 @@ void log_msg_registry_init(void);
 void log_msg_registry_deinit(void);
 void log_msg_global_init(void);
 void log_msg_global_deinit(void);
+void log_msg_stats_global_init(void);
 void log_msg_registry_foreach(GHFunc func, gpointer user_data);
 
 gint log_msg_lookup_time_stamp_name(const gchar *name);
+
+gssize log_msg_get_size(LogMessage *self);
 
 #endif

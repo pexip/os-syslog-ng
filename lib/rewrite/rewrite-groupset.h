@@ -25,11 +25,14 @@
 #include "rewrite/rewrite-expr.h"
 #include "value-pairs/value-pairs.h"
 
-typedef struct _LogRewriteGroupSet {
+typedef struct _LogRewriteGroupSet
+{
   LogRewrite super;
   ValuePairs *query;
   LogTemplate *replacement;
+  VPForeachFunc vp_func;
 } LogRewriteGroupSet;
 
 LogRewrite *log_rewrite_groupset_new(LogTemplate *template, GlobalConfig *cfg);
+LogRewrite *log_rewrite_groupunset_new(GlobalConfig *cfg);
 void log_rewrite_groupset_add_fields(LogRewrite *rewrite, GList *fields);

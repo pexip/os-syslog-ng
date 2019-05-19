@@ -24,27 +24,25 @@
 #include "cfg-args.h"
 #include "messages.h"
 #include "str-utils.h"
+#include "str-repr/encode.h"
 
 struct _CfgArgs
 {
   gint ref_cnt;
   GHashTable *args;
+  gboolean accept_varargs;
 };
 
-/* token block args */
-
-static void
-cfg_args_validate_callback(gpointer k, gpointer v, gpointer user_data)
+gboolean
+cfg_args_is_accepting_varargs(CfgArgs *self)
 {
-  CfgArgs *defs = ((gpointer *) user_data)[0];
-  gchar **bad_key = (gchar **) &((gpointer *) user_data)[1];
-  gchar **bad_value = (gchar **) &((gpointer *) user_data)[2];
+  return self->accept_varargs;
+}
 
-  if ((*bad_key == NULL) && (!defs || cfg_args_get(defs, k) == NULL))
-    {
-      *bad_key = k;
-      *bad_value = v;
-    }
+void
+cfg_args_accept_varargs(CfgArgs *self)
+{
+  self->accept_varargs = TRUE;
 }
 
 void
@@ -53,22 +51,26 @@ cfg_args_foreach(CfgArgs *self, GHFunc func, gpointer user_data)
   g_hash_table_foreach(self->args, func, user_data);
 }
 
-gboolean
-cfg_args_validate(CfgArgs *self, CfgArgs *defs, const gchar *context)
+static void
+_resolve_unknown_blockargs_as_varargs(gpointer key, gpointer value, gpointer user_data)
 {
-  gpointer validate_params[] = { defs, NULL, NULL };
+  CfgArgs *defaults = ((gpointer *) user_data)[0];
+  GString *varargs = ((gpointer *) user_data)[1];
 
-  cfg_args_foreach(self, cfg_args_validate_callback, validate_params);
-
-  if (validate_params[1])
+  if (!defaults || !cfg_args_contains(defaults, key))
     {
-      msg_error("Unknown argument",
-                evt_tag_str("context", context),
-                evt_tag_str("arg", validate_params[1]),
-                evt_tag_str("value", validate_params[2]));
-      return FALSE;
+      g_string_append_printf(varargs, "%s(%s) ", (gchar *)key, (gchar *)value);
     }
-  return TRUE;
+}
+
+gchar *
+cfg_args_format_varargs(CfgArgs *self, CfgArgs *defaults)
+{
+  GString *varargs = g_string_new("");
+  gpointer user_data[] = { defaults, varargs };
+
+  cfg_args_foreach(self, _resolve_unknown_blockargs_as_varargs, user_data);
+  return g_string_free(varargs, FALSE);
 }
 
 void
@@ -90,6 +92,33 @@ cfg_args_get(CfgArgs *self, const gchar *name)
     }
 
   return value;
+}
+
+gboolean
+cfg_args_contains(CfgArgs *self, const gchar *name)
+{
+  gchar *normalized_name = __normalize_key(name);
+  gboolean contains = g_hash_table_lookup_extended(self->args, normalized_name, NULL, NULL);
+  g_free(normalized_name);
+  return contains;
+}
+
+void
+cfg_args_remove_normalized(CfgArgs *self, const gchar *normalized_name)
+{
+  gpointer orig_key;
+  if (g_hash_table_lookup_extended(self->args, normalized_name, &orig_key, NULL))
+    {
+      g_hash_table_remove(self->args, orig_key);
+    }
+}
+
+void
+cfg_args_remove(CfgArgs *self, const gchar *name)
+{
+  gchar *normalized_name = __normalize_key(name);
+  cfg_args_remove_normalized(self, normalized_name);
+  g_free(normalized_name);
 }
 
 CfgArgs *

@@ -29,7 +29,8 @@ extern int afsql_debug;
 
 int afsql_parse(CfgLexer *lexer, LogDriver **instance, gpointer arg);
 
-static CfgLexerKeyword afsql_keywords[] = {
+static CfgLexerKeyword afsql_keywords[] =
+{
   { "sql",                KW_SQL },
   { "username",           KW_USERNAME },
   { "password",           KW_PASSWORD },
@@ -49,9 +50,11 @@ static CfgLexerKeyword afsql_keywords[] = {
   { "local_time_zone",    KW_LOCAL_TIME_ZONE },
   { "null",               KW_NULL },
   { "retry_sql_inserts",  KW_RETRIES },
-  { "flush_lines",        KW_FLUSH_LINES },
-  { "flush_timeout",      KW_FLUSH_TIMEOUT },
+  { "flush_lines",        KW_BATCH_LINES, KWS_OBSOLETE, "The flush-lines() option is deprecated, use batch-lines() instead." },
+  { "flush_timeout",      KW_BATCH_TIMEOUT, KWS_OBSOLETE, "The flush-timeout() option is deprecated, use batch-timeout() instead." },
   { "flags",              KW_FLAGS },
+  { "create_statement_append", KW_CREATE_STATEMENT_APPEND },
+  { "ignore_tns_config",  KW_IGNORE_TNS_CONFIG },
 
   { "dbd_option",         KW_DBD_OPTION },
   { NULL }

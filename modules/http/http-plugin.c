@@ -20,11 +20,9 @@
  *
  */
 
-#include "http-plugin.h"
+#include "http-parser.h"
 #include "plugin.h"
 #include "plugin-types.h"
-
-extern CfgParser http_parser;
 
 static Plugin http_plugins[] =
 {
@@ -36,9 +34,9 @@ static Plugin http_plugins[] =
 };
 
 gboolean
-http_module_init(GlobalConfig *cfg, CfgArgs *args)
+http_module_init(PluginContext *context, CfgArgs *args)
 {
-  plugin_register(cfg, http_plugins, G_N_ELEMENTS(http_plugins));
+  plugin_register(context, http_plugins, G_N_ELEMENTS(http_plugins));
   return TRUE;
 }
 

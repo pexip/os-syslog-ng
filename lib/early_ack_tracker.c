@@ -29,7 +29,7 @@
 typedef struct _EarlyAckRecord
 {
   AckRecord super;
-  void* padding;
+  void *padding;
   /* bookmark contains a binary container which has to be aligned */
   Bookmark bookmark;
 } EarlyAckRecord;
@@ -61,28 +61,42 @@ early_ack_tracker_manage_msg_ack(AckTracker *s, LogMessage *msg, AckType ack_typ
 {
   EarlyAckTracker *self = (EarlyAckTracker *)s;
 
+  log_source_flow_control_adjust(self->super.source, 1);
+
   if (ack_type == AT_SUSPENDED)
     log_source_flow_control_suspend(self->super.source);
-  else
-    log_source_flow_control_adjust(self->super.source, 1);
 
   log_msg_unref(msg);
   log_pipe_unref((LogPipe *)self->super.source);
 }
 
 static void
-early_ack_tracker_init_instance(EarlyAckTracker *self, LogSource *source)
+early_ack_tracker_free(AckTracker *s)
 {
-  self->super.late = FALSE;
-  self->super.source = source;
-  source->ack_tracker = (AckTracker *)self;
+  EarlyAckTracker *self = (EarlyAckTracker *)s;
+
+  g_free(self);
+}
+
+static void
+_setup_callbacks(EarlyAckTracker *self)
+{
   self->super.request_bookmark = early_ack_tracker_request_bookmark;
   self->super.track_msg = early_ack_tracker_track_msg;
   self->super.manage_msg_ack = early_ack_tracker_manage_msg_ack;
-  self->ack_record_storage.super.tracker = (AckTracker *)self;
+  self->super.free_fn = early_ack_tracker_free;
 }
 
-AckTracker*
+static void
+early_ack_tracker_init_instance(EarlyAckTracker *self, LogSource *source)
+{
+  self->super.source = source;
+  source->ack_tracker = (AckTracker *)self;
+  self->ack_record_storage.super.tracker = (AckTracker *)self;
+  _setup_callbacks(self);
+}
+
+AckTracker *
 early_ack_tracker_new(LogSource *source)
 {
   EarlyAckTracker *self = (EarlyAckTracker *)g_new0(EarlyAckTracker, 1);
@@ -92,10 +106,3 @@ early_ack_tracker_new(LogSource *source)
   return (AckTracker *)self;
 }
 
-void
-early_ack_tracker_free(AckTracker *s)
-{
-  EarlyAckTracker *self = (EarlyAckTracker *)s;
-
-  g_free(self);
-}

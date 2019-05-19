@@ -96,10 +96,11 @@ struct _AFInterSource
   struct iv_event schedule_wakeup;
   struct iv_timer mark_timer;
   struct iv_task restart_task;
-  gboolean watches_running:1;
+  gboolean watches_running:1, free_to_send:1;
 };
 
 static void afinter_source_update_watches(AFInterSource *self);
+void afinter_message_posted(LogMessage *msg);
 
 static void
 afinter_source_post(gpointer s)
@@ -125,8 +126,6 @@ static void
 afinter_source_mark(gpointer s)
 {
   AFInterSource *self = (AFInterSource *) s;
-  LogMessage *msg;
-  LogPathOptions path_options = LOG_PATH_OPTIONS_INIT;
   struct timespec nmt;
 
   main_loop_assert_main_thread();
@@ -135,18 +134,14 @@ afinter_source_mark(gpointer s)
   nmt = next_mark_target;
   g_static_mutex_unlock(&internal_mark_target_lock);
 
-  if (log_source_free_to_send(&self->super) && nmt.tv_sec <= self->mark_timer.expires.tv_sec)
+  if (nmt.tv_sec <= self->mark_timer.expires.tv_sec)
     {
       /* the internal_mark_target has not been overwritten by an incoming message in afinter_postpone_mark
          (there was no msg in the meantime) -> the mark msg can be sent */
-      msg = log_msg_new_mark();
-      path_options.ack_needed = FALSE;
-
-      log_pipe_queue(&self->super.super, msg, &path_options);
+      afinter_message_posted(log_msg_new_mark());
 
       /* the next_mark_target will be increased in afinter_postpone_mark */
     }
-  afinter_source_update_watches(self);
 }
 
 static void
@@ -219,7 +214,7 @@ afinter_source_update_watches(AFInterSource *self)
        * current_internal_source to NULL.  Messages get accumulated into
        * internal_msg_queue.  */
       g_static_mutex_lock(&internal_msg_lock);
-      current_internal_source = NULL;
+      self->free_to_send = FALSE;
       g_static_mutex_unlock(&internal_msg_lock);
 
       /* Possible race:
@@ -263,7 +258,7 @@ afinter_source_update_watches(AFInterSource *self)
       g_static_mutex_lock(&internal_msg_lock);
       if (internal_msg_queue && g_queue_get_length(internal_msg_queue) > 0)
         iv_task_register(&self->restart_task);
-      current_internal_source = self;
+      self->free_to_send = TRUE;
       g_static_mutex_unlock(&internal_msg_lock);
     }
 }
@@ -273,7 +268,7 @@ afinter_source_init(LogPipe *s)
 {
   AFInterSource *self = (AFInterSource *) s;
   GlobalConfig *cfg = log_pipe_get_config(s);
-  
+
   if (!log_source_init(s))
     return FALSE;
 
@@ -290,6 +285,7 @@ afinter_source_init(LogPipe *s)
 
   g_static_mutex_lock(&internal_msg_lock);
   current_internal_source = self;
+  self->free_to_send = TRUE;
   g_static_mutex_unlock(&internal_msg_lock);
 
   return TRUE;
@@ -299,7 +295,7 @@ static gboolean
 afinter_source_deinit(LogPipe *s)
 {
   AFInterSource *self = (AFInterSource *) s;
-  
+
   g_static_mutex_lock(&internal_msg_lock);
   current_internal_source = NULL;
   g_static_mutex_unlock(&internal_msg_lock);
@@ -318,9 +314,10 @@ static LogSource *
 afinter_source_new(AFInterSourceDriver *owner, LogSourceOptions *options)
 {
   AFInterSource *self = g_new0(AFInterSource, 1);
-  
+
   log_source_init_instance(&self->super, owner->super.super.super.cfg);
-  log_source_set_options(&self->super, options, 0, SCS_INTERNAL, owner->super.super.id, NULL, FALSE, FALSE, owner->super.super.super.expr_node);
+  log_source_set_options(&self->super, options, owner->super.super.id, NULL, FALSE, FALSE,
+                         owner->super.super.super.expr_node);
   afinter_source_init_watches(self);
   self->super.super.init = afinter_source_init;
   self->super.super.deinit = afinter_source_deinit;
@@ -345,6 +342,8 @@ afinter_sd_init(LogPipe *s)
     }
 
   log_source_options_init(&self->source_options, cfg, self->super.super.group);
+  self->source_options.stats_level = STATS_LEVEL0;
+  self->source_options.stats_source = SCS_INTERNAL;
   self->source = afinter_source_new(self, &self->source_options);
   log_pipe_append(&self->source->super, s);
 
@@ -381,7 +380,7 @@ static void
 afinter_sd_free(LogPipe *s)
 {
   AFInterSourceDriver *self = (AFInterSourceDriver *) s;
-  
+
   g_assert(!self->source);
   log_src_driver_free(s);
 }
@@ -417,28 +416,56 @@ afinter_postpone_mark(gint mark_freq)
     }
   else
     {
+      g_static_mutex_lock(&internal_mark_target_lock);
       next_mark_target.tv_sec = -1;
+      g_static_mutex_unlock(&internal_mark_target_lock);
     }
+}
+
+static void
+_release_internal_msg_queue(void)
+{
+  LogMessage *internal_message = g_queue_pop_head(internal_msg_queue);
+  while (internal_message)
+    {
+      log_msg_unref(internal_message);
+      internal_message = g_queue_pop_head(internal_msg_queue);
+    }
+  g_queue_free(internal_msg_queue);
+  internal_msg_queue = NULL;
 }
 
 void
 afinter_message_posted(LogMessage *msg)
 {
   g_static_mutex_lock(&internal_msg_lock);
+  if (!current_internal_source)
+    {
+      if (internal_msg_queue)
+        {
+          _release_internal_msg_queue();
+        }
+      log_msg_unref(msg);
+      goto exit;
+    }
+
   if (!internal_msg_queue)
     {
       internal_msg_queue = g_queue_new();
 
       stats_lock();
-      stats_register_counter(0, SCS_GLOBAL, "internal_queue_length", NULL, SC_TYPE_PROCESSED, &internal_queue_length);
+      StatsClusterKey sc_key;
+      stats_cluster_logpipe_key_set(&sc_key, SCS_GLOBAL, "internal_queue_length", NULL );
+      stats_register_counter(0, &sc_key, SC_TYPE_PROCESSED, &internal_queue_length);
       stats_unlock();
     }
 
   g_queue_push_tail(internal_msg_queue, msg);
   stats_counter_inc(internal_queue_length);
 
-  if (current_internal_source)
+  if (current_internal_source->free_to_send)
     iv_event_post(&current_internal_source->post);
+exit:
   g_static_mutex_unlock(&internal_msg_lock);
 }
 
@@ -452,4 +479,20 @@ void
 afinter_global_init(void)
 {
   register_application_hook(AH_POST_CONFIG_LOADED, afinter_register_posted_hook, NULL);
+}
+
+void
+afinter_global_deinit(void)
+{
+  if (internal_msg_queue)
+    {
+      stats_lock();
+      StatsClusterKey sc_key;
+      stats_cluster_logpipe_key_set(&sc_key, SCS_GLOBAL, "internal_queue_length", NULL );
+      stats_unregister_counter(&sc_key, SC_TYPE_PROCESSED, &internal_queue_length);
+      stats_unlock();
+      g_queue_free_full(internal_msg_queue, (GDestroyNotify)log_msg_unref);
+      internal_msg_queue = NULL;
+    }
+  current_internal_source = NULL;
 }

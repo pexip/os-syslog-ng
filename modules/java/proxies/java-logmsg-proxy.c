@@ -25,6 +25,7 @@
 #include "java-logmsg-proxy.h"
 #include "java_machine.h"
 #include "messages.h"
+#include "str-utils.h"
 #include "logmsg/logmsg.h"
 
 
@@ -49,6 +50,7 @@ Java_org_syslog_1ng_LogMessage_getValue(JNIEnv *env, jobject obj, jlong handle, 
 {
   LogMessage *msg = (LogMessage *)handle;
   const gchar *value;
+  gssize value_len;
 
   const char *name_str = (*env)->GetStringUTFChars(env, name, NULL);
   if (name_str == NULL)
@@ -56,12 +58,13 @@ Java_org_syslog_1ng_LogMessage_getValue(JNIEnv *env, jobject obj, jlong handle, 
       return NULL;
     }
 
-  value = log_msg_get_value_by_name(msg, name_str, NULL);
+  value = log_msg_get_value_by_name(msg, name_str, &value_len);
 
   (*env)->ReleaseStringUTFChars(env, name, name_str);
 
   if (value)
     {
+      APPEND_ZERO(value, value, value_len);
       return (*env)->NewStringUTF(env, value);
     }
   else
@@ -73,21 +76,22 @@ Java_org_syslog_1ng_LogMessage_getValue(JNIEnv *env, jobject obj, jlong handle, 
 static gboolean
 __load_object(JavaLogMessageProxy *self)
 {
-  JNIEnv *java_env = NULL;
-  java_env = java_machine_get_env(self->java_machine, &java_env);
+  JNIEnv *java_env = java_machine_get_env(self->java_machine);
   self->loaded_class = java_machine_load_class(self->java_machine, LOG_MESSAGE, NULL);
-  if (!self->loaded_class) {
+  if (!self->loaded_class)
+    {
       msg_error("Can't find class",
                 evt_tag_str("class_name", LOG_MESSAGE));
       return FALSE;
-  }
+    }
 
   self->mi_constructor = CALL_JAVA_FUNCTION(java_env, GetMethodID, self->loaded_class, "<init>", "(J)V");
-  if (!self->mi_constructor) {
+  if (!self->mi_constructor)
+    {
       msg_error("Can't find default constructor for class",
                 evt_tag_str("class_name", LOG_MESSAGE));
       return FALSE;
-  }
+    }
 
   return TRUE;
 }
@@ -95,7 +99,7 @@ __load_object(JavaLogMessageProxy *self)
 jobject
 java_log_message_proxy_create_java_object(JavaLogMessageProxy *self, LogMessage *msg)
 {
-  JNIEnv *java_env = java_machine_get_env(self->java_machine, &java_env);
+  JNIEnv *java_env = java_machine_get_env(self->java_machine);
   jobject jmsg = CALL_JAVA_FUNCTION(java_env, NewObject, self->loaded_class, self->mi_constructor, log_msg_ref(msg));
   if (!jmsg)
     {
@@ -108,8 +112,7 @@ java_log_message_proxy_create_java_object(JavaLogMessageProxy *self, LogMessage 
 void
 java_log_message_proxy_free(JavaLogMessageProxy *self)
 {
-  JNIEnv *env = NULL;
-  env = java_machine_get_env(self->java_machine, &env);
+  JNIEnv *env = java_machine_get_env(self->java_machine);
 
   if (self->loaded_class)
     {
@@ -120,7 +123,7 @@ java_log_message_proxy_free(JavaLogMessageProxy *self)
 }
 
 JavaLogMessageProxy *
-java_log_message_proxy_new(LogMessage *msg)
+java_log_message_proxy_new(void)
 {
   JavaLogMessageProxy *self = g_new0(JavaLogMessageProxy, 1);
   self->java_machine = java_machine_ref();

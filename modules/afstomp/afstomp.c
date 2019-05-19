@@ -37,8 +37,9 @@
 #include <stomp.h>
 #include "logthrdestdrv.h"
 
-typedef struct {
-  LogThrDestDriver super;
+typedef struct
+{
+  LogThreadedDestDriver super;
 
   gchar *destination;
   LogTemplate *body_template;
@@ -156,8 +157,8 @@ afstomp_dd_get_template_options(LogDriver *s)
  * Utilities
  */
 
-static gchar *
-afstomp_dd_format_stats_instance(LogThrDestDriver *s)
+static const gchar *
+afstomp_dd_format_stats_instance(LogThreadedDestDriver *s)
 {
   STOMPDestDriver *self = (STOMPDestDriver *) s;
   static gchar persist_name[1024];
@@ -187,7 +188,7 @@ afstomp_dd_format_persist_name(const LogPipe *s)
 }
 
 static void
-afstomp_create_connect_frame(STOMPDestDriver *self, stomp_frame* frame)
+afstomp_create_connect_frame(STOMPDestDriver *self, stomp_frame *frame)
 {
   stomp_frame_init(frame, "CONNECT", sizeof("CONNECT"));
   stomp_frame_add_header(frame, "login", self->user);
@@ -200,7 +201,7 @@ static gboolean afstomp_try_connect(STOMPDestDriver *self)
 };
 
 static gboolean
-afstomp_send_frame(STOMPDestDriver *self, stomp_frame* frame)
+afstomp_send_frame(STOMPDestDriver *self, stomp_frame *frame)
 {
   return stomp_write(self->conn, frame);
 }
@@ -230,7 +231,7 @@ afstomp_dd_connect(STOMPDestDriver *self, gboolean reconnect)
       stomp_frame_deinit(&frame);
 
       return FALSE;
-  }
+    }
   msg_debug("Connecting to STOMP succeeded",
             evt_tag_str("driver", self->super.super.super.id));
 
@@ -240,7 +241,7 @@ afstomp_dd_connect(STOMPDestDriver *self, gboolean reconnect)
 }
 
 static void
-afstomp_dd_disconnect(LogThrDestDriver *s)
+afstomp_dd_disconnect(LogThreadedDestDriver *s)
 {
   STOMPDestDriver *self = (STOMPDestDriver *)s;
 
@@ -261,13 +262,13 @@ afstomp_vp_foreach(const gchar *name, TypeHint type, const gchar *value, gsize v
 }
 
 static void
-afstomp_set_frame_body(STOMPDestDriver *self, SBGString *body, stomp_frame* frame, LogMessage* msg)
+afstomp_set_frame_body(STOMPDestDriver *self, GString *body, stomp_frame *frame, LogMessage *msg)
 {
   if (self->body_template)
     {
-      log_template_format(self->body_template, msg, NULL, LTZ_LOCAL,
-                          self->super.seq_num, NULL, sb_gstring_string(body));
-      stomp_frame_set_body(frame, sb_gstring_string(body)->str, sb_gstring_string(body)->len);
+      log_template_format(self->body_template, msg, &self->template_options, LTZ_LOCAL,
+                          self->super.worker.instance.seq_num, NULL, body);
+      stomp_frame_set_body(frame, body->str, body->len);
     }
 }
 
@@ -275,7 +276,7 @@ static gboolean
 afstomp_worker_publish(STOMPDestDriver *self, LogMessage *msg)
 {
   gboolean success = TRUE;
-  SBGString *body = NULL;
+  GString *body = NULL;
   stomp_frame frame;
   stomp_frame recv_frame;
   gchar seq_num[16];
@@ -286,7 +287,7 @@ afstomp_worker_publish(STOMPDestDriver *self, LogMessage *msg)
       return FALSE;
     }
 
-  body = sb_gstring_acquire();
+  body = scratch_buffers_alloc();
   stomp_frame_init(&frame, "SEND", sizeof("SEND"));
 
   if (self->persistent)
@@ -295,12 +296,12 @@ afstomp_worker_publish(STOMPDestDriver *self, LogMessage *msg)
   stomp_frame_add_header(&frame, "destination", self->destination);
   if (self->ack_needed)
     {
-      g_snprintf(seq_num, sizeof(seq_num), "%i", self->super.seq_num);
+      g_snprintf(seq_num, sizeof(seq_num), "%i", self->super.worker.instance.seq_num);
       stomp_frame_add_header(&frame, "receipt", seq_num);
     };
 
   value_pairs_foreach(self->vp, afstomp_vp_foreach, msg,
-                      self->super.seq_num, LTZ_SEND,
+                      self->super.worker.instance.seq_num, LTZ_SEND,
                       &self->template_options, &frame);
 
   afstomp_set_frame_body(self, body, &frame, msg);
@@ -314,13 +315,11 @@ afstomp_worker_publish(STOMPDestDriver *self, LogMessage *msg)
   if (success && self->ack_needed)
     success = stomp_receive_frame(self->conn, &recv_frame);
 
-  sb_gstring_release(body);
-
   return success;
 }
 
 static worker_insert_result_t
-afstomp_worker_insert(LogThrDestDriver *s, LogMessage *msg)
+afstomp_worker_insert(LogThreadedDestDriver *s, LogMessage *msg)
 {
   STOMPDestDriver *self = (STOMPDestDriver *)s;
 
@@ -334,9 +333,9 @@ afstomp_worker_insert(LogThrDestDriver *s, LogMessage *msg)
 }
 
 static void
-afstomp_worker_thread_init(LogThrDestDriver *s)
+afstomp_worker_thread_init(LogThreadedDestDriver *s)
 {
-  STOMPDestDriver *self = (STOMPDestDriver*) s;
+  STOMPDestDriver *self = (STOMPDestDriver *) s;
 
   afstomp_dd_connect(self, FALSE);
 }
@@ -347,7 +346,7 @@ afstomp_dd_init(LogPipe *s)
   STOMPDestDriver *self = (STOMPDestDriver *) s;
   GlobalConfig *cfg = log_pipe_get_config(s);
 
-  if (!log_dest_driver_init_method(s))
+  if (!log_threaded_dest_driver_init_method(s))
     return FALSE;
 
   log_template_options_init(&self->template_options, cfg);
@@ -359,7 +358,7 @@ afstomp_dd_init(LogPipe *s)
               evt_tag_int("port", self->port),
               evt_tag_str("destination", self->destination));
 
-  return log_threaded_dest_driver_start(s);
+  return log_threaded_dest_driver_start_workers(&self->super);
 }
 
 static void
@@ -392,7 +391,7 @@ afstomp_dd_new(GlobalConfig *cfg)
   self->super.worker.disconnect = afstomp_dd_disconnect;
   self->super.worker.insert = afstomp_worker_insert;
 
-  self->super.format.stats_instance = afstomp_dd_format_stats_instance;
+  self->super.format_stats_instance = afstomp_dd_format_stats_instance;
   self->super.stats_source = SCS_STOMP;
 
   afstomp_dd_set_host((LogDriver *) self, "127.0.0.1");
@@ -417,9 +416,9 @@ static Plugin afstomp_plugin =
 };
 
 gboolean
-afstomp_module_init(GlobalConfig *cfg, CfgArgs *args)
+afstomp_module_init(PluginContext *context, CfgArgs *args)
 {
-  plugin_register(cfg, &afstomp_plugin, 1);
+  plugin_register(context, &afstomp_plugin, 1);
   return TRUE;
 }
 

@@ -24,6 +24,7 @@
 #include "csvparser.h"
 #include "scanner/csv-scanner/csv-scanner.h"
 #include "parser/parser-expr.h"
+#include "scratch-buffers.h"
 
 #include <string.h>
 
@@ -31,18 +32,20 @@ typedef struct _CSVParser
 {
   LogParser super;
   CSVScannerOptions options;
-  CSVScanner scanner;
-  GString *formatted_key;
+  gboolean drop_invalid;
   gchar *prefix;
   gint prefix_len;
 } CSVParser;
 
-#define _ESCAPE_MODE_SHIFT 16
-#define _ESCAPE_MODE_MASK  0xFFFF0000
+#define CSV_PARSER_FLAGS_SHIFT 16
+#define CSV_PARSER_FLAGS_MASK  0xFFFF0000
+#define CSV_SCANNER_FLAGS_MASK 0xFFFF
 
-#define _ESCAPE_MODE_NONE          (1 << _ESCAPE_MODE_SHIFT)
-#define _ESCAPE_MODE_BACKSLASH     (2 << _ESCAPE_MODE_SHIFT)
-#define _ESCAPE_MODE_DOUBLE_CHAR   (4 << _ESCAPE_MODE_SHIFT)
+#define CSV_PARSER_DIALECT_MASK              (0x7 << CSV_PARSER_FLAGS_SHIFT)
+#define CSV_PARSER_ESCAPE_MODE_NONE          (1 << CSV_PARSER_FLAGS_SHIFT)
+#define CSV_PARSER_ESCAPE_MODE_BACKSLASH     (2 << CSV_PARSER_FLAGS_SHIFT)
+#define CSV_PARSER_ESCAPE_MODE_DOUBLE_CHAR   (4 << CSV_PARSER_FLAGS_SHIFT)
+#define CSV_PARSER_DROP_INVALID              (8 << CSV_PARSER_FLAGS_SHIFT)
 
 CSVScannerOptions *
 csv_parser_get_scanner_options(LogParser *s)
@@ -56,26 +59,28 @@ gboolean
 csv_parser_set_flags(LogParser *s, guint32 flags)
 {
   CSVParser *self = (CSVParser *) s;
-  guint32 dialect = (flags & _ESCAPE_MODE_MASK);
-  guint32 scanner_flags = flags & 0xFFFF;
+  guint32 dialect = (flags & CSV_PARSER_DIALECT_MASK);
+  guint32 scanner_flags = flags & CSV_SCANNER_FLAGS_MASK;
 
   csv_scanner_options_set_flags(&self->options, scanner_flags);
   switch (dialect)
     {
     case 0:
       break;
-    case _ESCAPE_MODE_NONE:
+    case CSV_PARSER_ESCAPE_MODE_NONE:
       csv_scanner_options_set_dialect(&self->options, CSV_SCANNER_ESCAPE_NONE);
       break;
-    case _ESCAPE_MODE_BACKSLASH:
+    case CSV_PARSER_ESCAPE_MODE_BACKSLASH:
       csv_scanner_options_set_dialect(&self->options, CSV_SCANNER_ESCAPE_BACKSLASH);
       break;
-    case _ESCAPE_MODE_DOUBLE_CHAR:
+    case CSV_PARSER_ESCAPE_MODE_DOUBLE_CHAR:
       csv_scanner_options_set_dialect(&self->options, CSV_SCANNER_ESCAPE_DOUBLE_CHAR);
       break;
     default:
       return FALSE;
     }
+  if (flags & CSV_PARSER_DROP_INVALID)
+    self->drop_invalid = TRUE;
   return TRUE;
 }
 
@@ -97,36 +102,70 @@ csv_parser_set_prefix(LogParser *s, const gchar *prefix)
     }
 }
 
-static const gchar *
-_get_formatted_key(CSVParser *self, const gchar *key)
+void
+csv_parser_set_drop_invalid(LogParser *s, gboolean drop_invalid)
 {
-  if (!self->prefix)
-    return key;
-  else if (self->formatted_key->len > 0)
-    g_string_truncate(self->formatted_key, self->prefix_len);
-  else
-    g_string_assign(self->formatted_key, self->prefix);
-  g_string_append(self->formatted_key, key);
-  return self->formatted_key->str;
+  CSVParser *self = (CSVParser *) s;
+
+  self->drop_invalid = drop_invalid;
+}
+
+static const gchar *
+_format_key_for_prefix(GString *scratch, const gchar *key, const gint prefix_len)
+{
+  g_string_truncate(scratch, prefix_len);
+  g_string_append(scratch, key);
+  return scratch->str;
+}
+
+static const gchar *
+_return_key(GString *scratch, const gchar *key, const gint prefix_len)
+{
+  return key;
+}
+
+typedef const gchar *(*key_formatter_t)(GString *scratch, const gchar *key, const gint prefix_len);
+
+static key_formatter_t
+dispatch_key_formatter(gchar *prefix)
+{
+  return prefix ? _format_key_for_prefix : _return_key;
 }
 
 static gboolean
-csv_parser_process(LogParser *s, LogMessage **pmsg, const LogPathOptions *path_options, const gchar *input, gsize input_len)
+csv_parser_process(LogParser *s, LogMessage **pmsg, const LogPathOptions *path_options, const gchar *input,
+                   gsize input_len)
 {
   CSVParser *self = (CSVParser *) s;
   LogMessage *msg = log_msg_make_writable(pmsg, path_options);
 
-  csv_scanner_input(&self->scanner, input);
-  while (csv_scanner_scan_next(&self->scanner))
+  msg_trace("csv-parser message processing started",
+            evt_tag_str ("input", input),
+            evt_tag_str ("prefix", self->prefix),
+            evt_tag_printf("msg", "%p", *pmsg));
+  CSVScanner scanner;
+  csv_scanner_init(&scanner, &self->options, input);
+
+  GString *key_scratch = scratch_buffers_alloc();
+  if (self->prefix)
+    g_string_assign(key_scratch, self->prefix);
+
+  key_formatter_t _key_formatter = dispatch_key_formatter(self->prefix);
+  while (csv_scanner_scan_next(&scanner))
     {
 
       log_msg_set_value_by_name(msg,
-                                _get_formatted_key(self, csv_scanner_get_current_name(&self->scanner)),
-                                csv_scanner_get_current_value(&self->scanner),
-                                csv_scanner_get_current_value_len(&self->scanner));
+                                _key_formatter(key_scratch, csv_scanner_get_current_name(&scanner), self->prefix_len),
+                                csv_scanner_get_current_value(&scanner),
+                                csv_scanner_get_current_value_len(&scanner));
     }
 
-  return csv_scanner_is_scan_finished(&self->scanner);
+  gboolean result = TRUE;
+  if (self->drop_invalid)
+    result = csv_scanner_is_scan_complete(&scanner);
+  csv_scanner_deinit(&scanner);
+
+  return result;
 }
 
 static LogPipe *
@@ -139,6 +178,7 @@ csv_parser_clone(LogPipe *s)
   csv_scanner_options_copy(&cloned->options, &self->options);
   cloned->super.template = log_template_ref(self->super.template);
   csv_parser_set_prefix(&cloned->super, self->prefix);
+  csv_parser_set_drop_invalid(&cloned->super, self->drop_invalid);
   return &cloned->super.super;
 }
 
@@ -148,8 +188,6 @@ csv_parser_free(LogPipe *s)
   CSVParser *self = (CSVParser *) s;
 
   csv_scanner_options_clean(&self->options);
-  csv_scanner_state_clean(&self->scanner);
-  g_string_free(self->formatted_key, TRUE);
   g_free(self->prefix);
   log_parser_free_method(s);
 }
@@ -166,12 +204,10 @@ csv_parser_new(GlobalConfig *cfg)
   self->super.super.free_fn = csv_parser_free;
   self->super.super.clone = csv_parser_clone;
   self->super.process = csv_parser_process;
-  self->formatted_key = g_string_sized_new(32);
   csv_scanner_options_set_delimiters(&self->options, " ");
   csv_scanner_options_set_quote_pairs(&self->options, "\"\"''");
   csv_scanner_options_set_flags(&self->options, CSV_SCANNER_STRIP_WHITESPACE);
   csv_scanner_options_set_dialect(&self->options, CSV_SCANNER_ESCAPE_NONE);
-  csv_scanner_state_init(&self->scanner, &self->options);
   return &self->super;
 }
 
@@ -179,17 +215,17 @@ guint32
 csv_parser_lookup_flag(const gchar *flag)
 {
   if (strcmp(flag, "escape-none") == 0)
-    return _ESCAPE_MODE_NONE;
+    return CSV_PARSER_ESCAPE_MODE_NONE;
   else if (strcmp(flag, "escape-backslash") == 0)
-    return _ESCAPE_MODE_BACKSLASH;
+    return CSV_PARSER_ESCAPE_MODE_BACKSLASH;
   else if (strcmp(flag, "escape-double-char") == 0)
-    return _ESCAPE_MODE_DOUBLE_CHAR;
+    return CSV_PARSER_ESCAPE_MODE_DOUBLE_CHAR;
   else if (strcmp(flag, "strip-whitespace") == 0)
     return CSV_SCANNER_STRIP_WHITESPACE;
   else if (strcmp(flag, "greedy") == 0)
     return CSV_SCANNER_GREEDY;
   else if (strcmp(flag, "drop-invalid") == 0)
-    return CSV_SCANNER_DROP_INVALID;
+    return CSV_PARSER_DROP_INVALID;
   return 0;
 }
 

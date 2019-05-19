@@ -32,9 +32,9 @@ disk_queue_options_qout_size_set(DiskQueueOptions *self, gint qout_size)
   if (qout_size < 64)
     {
       msg_warning("WARNING: The configured qout size is smaller than the minimum allowed",
-                  evt_tag_int("configured size", qout_size),
-                  evt_tag_int("minimum allowed size", 64),
-                  evt_tag_int("new size", 64));
+                  evt_tag_int("configured_size", qout_size),
+                  evt_tag_int("minimum_allowed_size", 64),
+                  evt_tag_int("new_size", 64));
       qout_size = 64;
     }
   self->qout_size = qout_size;
@@ -43,16 +43,12 @@ disk_queue_options_qout_size_set(DiskQueueOptions *self, gint qout_size)
 void
 disk_queue_options_disk_buf_size_set(DiskQueueOptions *self, gint64 disk_buf_size)
 {
-  if (disk_buf_size == 0)
-    {
-      msg_warning("WARNING: The configured disk buffer size is zero. No disk queue file will be created.");
-    }
-  else if (disk_buf_size < MIN_DISK_BUF_SIZE)
+  if (disk_buf_size < MIN_DISK_BUF_SIZE)
     {
       msg_warning("WARNING: The configured disk buffer size is smaller than the minimum allowed",
-                  evt_tag_int("configured size", disk_buf_size),
-                  evt_tag_int("minimum allowed size", MIN_DISK_BUF_SIZE),
-                  evt_tag_int("new size", MIN_DISK_BUF_SIZE));
+                  evt_tag_long("configured_size", disk_buf_size),
+                  evt_tag_long("minimum_allowed_size", MIN_DISK_BUF_SIZE),
+                  evt_tag_long("new_size", MIN_DISK_BUF_SIZE));
       disk_buf_size = MIN_DISK_BUF_SIZE;
     }
   self->disk_buf_size = disk_buf_size;
@@ -83,16 +79,27 @@ disk_queue_options_check_plugin_settings(DiskQueueOptions *self)
     {
       if (self->mem_buf_length > 0)
         {
-          msg_warning("WARNING: Reliable queue: the mem-buf-length parameter is omitted");
+          msg_warning("WARNING: mem-buf-length parameter was ignored as it is not compatible with reliable queue. Did you mean mem-buf-size?");
         }
     }
   else
     {
       if (self->mem_buf_size > 0)
         {
-          msg_warning("WARNING: Non-reliable queue: the mem-buf-size parameter is omitted");
+          msg_warning("WARNING: mem-buf-size parameter was ignored as it is not compatible with non-reliable queue. Did you mean mem-buf-length?");
         }
     }
+}
+
+gchar *
+_normalize_path(const gchar *path)
+{
+  const int length = strlen(path);
+
+  if ('/' == path[length-1] || '\\' == path[length-1])
+    return g_path_get_dirname(path);
+
+  return g_strdup(path);
 }
 
 void
@@ -102,7 +109,8 @@ disk_queue_options_set_dir(DiskQueueOptions *self, const gchar *dir)
     {
       g_free(self->dir);
     }
-  self->dir = g_strdup(dir);
+
+  self->dir = _normalize_path(dir);
 }
 
 void

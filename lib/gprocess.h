@@ -28,6 +28,7 @@
 #include "syslog-ng.h"
 
 #include <sys/types.h>
+#include <glib.h>
 
 #if SYSLOG_NG_ENABLE_LINUX_CAPS
 #  include <sys/capability.h>
@@ -42,28 +43,25 @@ typedef enum
 
 #if SYSLOG_NG_ENABLE_LINUX_CAPS
 
-gboolean g_process_cap_modify(int capability, int onoff);
+gboolean g_process_enable_cap(const gchar *cap_name);
+gboolean g_process_is_cap_enabled(void);
 cap_t g_process_cap_save(void);
 void g_process_cap_restore(cap_t r);
-
-#ifndef CAP_SYSLOG
-#define CAP_SYSLOG -1
-#endif
 
 #else
 
 typedef gpointer cap_t;
 
-#define g_process_cap_modify(cap, onoff)
+#define g_process_enable_cap(cap)
 #define g_process_cap_save() NULL
 #define g_process_cap_restore(cap) cap = cap
 
 #endif
 
-void g_process_message(const gchar *fmt, ...);
+void g_process_message(const gchar *fmt, ...) G_GNUC_PRINTF(1, 2);
 
 void g_process_set_mode(GProcessMode mode);
-GProcessMode g_process_get_mode();
+GProcessMode g_process_get_mode(void);
 void g_process_set_name(const gchar *name);
 void g_process_set_user(const gchar *user);
 void g_process_set_group(const gchar *group);

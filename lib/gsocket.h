@@ -21,7 +21,7 @@
  * COPYING for details.
  *
  */
-  
+
 #ifndef G_SOCKET_H_INCLUDED
 #define G_SOCKET_H_INCLUDED
 
@@ -32,6 +32,6 @@ GIOStatus g_bind(int fd, GSockAddr *addr);
 GIOStatus g_accept(int fd, int *newfd, GSockAddr **addr);
 GIOStatus g_connect(int fd, GSockAddr *remote);
 gchar *g_inet_ntoa(char *buf, size_t bufsize, struct in_addr a);
-gint g_inet_aton(char *buf, struct in_addr *a);
+gint g_inet_aton(const char *buf, struct in_addr *a);
 
 #endif

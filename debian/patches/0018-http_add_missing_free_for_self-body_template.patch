@@ -1,0 +1,22 @@
+From 9632eb8584f791b9ea508ac006a1501875c88b30 Mon Sep 17 00:00:00 2001
+From: Antal Nemes <antal.nemes@balabit.com>
+Date: Tue, 19 Feb 2019 14:17:46 +0100
+Subject: [PATCH] http: add missing free for self->body_template
+
+Signed-off-by: Antal Nemes <antal.nemes@balabit.com>
+---
+ modules/http/http.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/modules/http/http.c b/modules/http/http.c
+index e734d0fb8f..2582df270d 100644
+--- a/modules/http/http.c
++++ b/modules/http/http.c
+@@ -339,6 +339,7 @@ http_dd_free(LogPipe *s)
+   g_string_free(self->delimiter, TRUE);
+   g_string_free(self->body_prefix, TRUE);
+   g_string_free(self->body_suffix, TRUE);
++  log_template_unref(self->body_template);
+ 
+   curl_global_cleanup();
+ 

@@ -27,12 +27,18 @@
 #include "python-grammar.h"
 
 extern int python_debug;
-int python_parse(CfgLexer *lexer, LogDriver **instance, gpointer arg);
+int python_parse(CfgLexer *lexer, void **instance, gpointer arg);
 
-static CfgLexerKeyword python_keywords[] = {
+static CfgLexerKeyword python_keywords[] =
+{
   { "python",                   KW_PYTHON  },
+  { "python_fetcher",           KW_PYTHON_FETCHER },
   { "class",                    KW_CLASS   },
-  { "imports",                  KW_IMPORTS },
+  {
+    "imports",                  KW_IMPORTS, KWS_OBSOLETE,
+    "imports() has been deprecated, please use loaders()"
+  },
+  { "loaders",                    KW_LOADERS   },
   { NULL }
 };
 
@@ -47,4 +53,4 @@ CfgParser python_parser =
   .cleanup = (void (*)(gpointer)) log_pipe_unref,
 };
 
-CFG_PARSER_IMPLEMENT_LEXER_BINDING(python_, LogDriver **)
+CFG_PARSER_IMPLEMENT_LEXER_BINDING(python_, void **)

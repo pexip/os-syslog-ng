@@ -29,16 +29,23 @@ typedef struct _FilterOp
   FilterExprNode *left, *right;
 } FilterOp;
 
-static void
+static gboolean
 fop_init(FilterExprNode *s, GlobalConfig *cfg)
 {
   FilterOp *self = (FilterOp *) s;
 
-  if (self->left && self->left->init)
-    self->left->init(self->left, cfg);
-  if (self->right && self->right->init)
-    self->right->init(self->right, cfg);
+  g_assert(self->left);
+  g_assert(self->right);
+
+  if (!filter_expr_init(self->left, cfg))
+    return FALSE;
+
+  if (!filter_expr_init(self->right, cfg))
+    return FALSE;
+
   self->super.modify = self->left->modify || self->right->modify;
+
+  return TRUE;
 }
 
 static void
@@ -63,7 +70,8 @@ fop_or_eval(FilterExprNode *s, LogMessage **msgs, gint num_msg)
 {
   FilterOp *self = (FilterOp *) s;
 
-  return (filter_expr_eval_with_context(self->left, msgs, num_msg) || filter_expr_eval_with_context(self->right, msgs, num_msg)) ^ s->comp;
+  return (filter_expr_eval_with_context(self->left, msgs, num_msg)
+          || filter_expr_eval_with_context(self->right, msgs, num_msg)) ^ s->comp;
 }
 
 FilterExprNode *
@@ -84,7 +92,8 @@ fop_and_eval(FilterExprNode *s, LogMessage **msgs, gint num_msg)
 {
   FilterOp *self = (FilterOp *) s;
 
-  return (filter_expr_eval_with_context(self->left, msgs, num_msg) && filter_expr_eval_with_context(self->right, msgs, num_msg)) ^ s->comp;
+  return (filter_expr_eval_with_context(self->left, msgs, num_msg)
+          && filter_expr_eval_with_context(self->right, msgs, num_msg)) ^ s->comp;
 }
 
 FilterExprNode *

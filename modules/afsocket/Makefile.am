@@ -15,6 +15,8 @@ modules_afsocket_libafsocket_la_SOURCES	=	\
 	modules/afsocket/afinet-source.h		\
 	modules/afsocket/afinet-dest.c			\
 	modules/afsocket/afinet-dest.h			\
+	modules/afsocket/afinet-dest-failover.c		\
+	modules/afsocket/afinet-dest-failover.h		\
 	modules/afsocket/socket-options-inet.c		\
 	modules/afsocket/socket-options-inet.h   	\
 	modules/afsocket/transport-mapper-inet.c 	\
@@ -60,7 +62,8 @@ BUILT_SOURCES					+=	\
 	modules/afsocket/afsocket-grammar.c		\
 	modules/afsocket/afsocket-grammar.h
 EXTRA_DIST 					+=	\
-	modules/afsocket/afsocket-grammar.ym
+	modules/afsocket/afsocket-grammar.ym	\
+	modules/afsocket/CMakeLists.txt
 
 CLEANFILES					+= \
 	modules/afsocket/libafsocket.la

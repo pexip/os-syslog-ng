@@ -30,7 +30,7 @@
 
 #include "cfg-grammar.h"
 #include "cfg-parser.h"
-#include "http-plugin.h"
+#include "http.h"
 #include "http-grammar.h"
 #include "plugin.h"
 
@@ -56,6 +56,22 @@
 %token KW_METHOD
 %token KW_HEADERS
 %token KW_BODY
+%token KW_CA_DIR
+%token KW_CA_FILE
+%token KW_CERT_FILE
+%token KW_KEY_FILE
+%token KW_CIPHER_SUITE
+%token KW_USE_SYSTEM_CERT_STORE
+%token KW_SSL_VERSION
+%token KW_PEER_VERIFY
+%token KW_TIMEOUT
+%token KW_TLS
+%token KW_BATCH_BYTES
+%token KW_BODY_PREFIX
+%token KW_BODY_SUFFIX
+%token KW_DELIMITER
+%token KW_WORKERS
+%token KW_ACCEPT_REDIRECTS
 
 %type   <ptr> driver
 %type   <ptr> http_destination
@@ -92,19 +108,42 @@ http_options
     ;
 
 http_option
-    : KW_URL        '(' string ')'            { http_dd_set_url(last_driver, $3); free($3); }
+    : KW_URL        '(' string_list ')'        { http_dd_set_urls(last_driver, $3); g_list_free_full($3, free); }
     | KW_USER       '(' string ')'            { http_dd_set_user(last_driver, $3); free($3); }
     | KW_PASSWORD   '(' string ')'            { http_dd_set_password(last_driver, $3); free($3); }
     | KW_USER_AGENT '(' string ')'            { http_dd_set_user_agent(last_driver, $3); free($3); }
-    | KW_HEADERS    '(' string_list ')'       { http_dd_set_headers(last_driver, $3); g_list_free($3); }
+    | KW_HEADERS    '(' string_list ')'       { http_dd_set_headers(last_driver, $3); g_list_free_full($3, free); }
     | KW_METHOD     '(' string ')'            { http_dd_set_method(last_driver, $3); free($3); }
+    | KW_BODY_PREFIX '(' string ')'           { http_dd_set_body_prefix(last_driver, $3); free($3); }
+    | KW_BODY_SUFFIX '(' string ')'           { http_dd_set_body_suffix(last_driver, $3); free($3); }
+    | KW_DELIMITER  '(' string ')'            { http_dd_set_delimiter(last_driver, $3); free($3); }
     | KW_BODY       '(' template_content ')'  { http_dd_set_body(last_driver, $3); log_template_unref($3); }
-    | dest_driver_option
+    | KW_ACCEPT_REDIRECTS '(' yesno ')'       { http_dd_set_accept_redirects(last_driver, $3); }
+    | KW_TIMEOUT '(' nonnegative_integer ')'  { http_dd_set_timeout(last_driver, $3); }
+    | KW_BATCH_BYTES '(' nonnegative_integer ')' { http_dd_set_batch_bytes(last_driver, $3); }
+    | KW_WORKERS '(' nonnegative_integer ')'  { log_threaded_dest_driver_set_num_workers(last_driver, $3); }
     | threaded_dest_driver_option
+    | http_tls_option
+    | KW_TLS '(' http_tls_options ')'
     | { last_template_options = http_dd_get_template_options(last_driver); } template_option
+    ;
+
+http_tls_options
+    : http_tls_option http_tls_options
+    |
+    ;
+
+http_tls_option
+    : KW_CA_DIR     '(' string ')'            { http_dd_set_ca_dir(last_driver, $3); free($3); }
+    | KW_CA_FILE    '(' string ')'            { http_dd_set_ca_file(last_driver, $3); free($3); }
+    | KW_CERT_FILE  '(' string ')'            { http_dd_set_cert_file(last_driver, $3); free($3); }
+    | KW_KEY_FILE   '(' string ')'            { http_dd_set_key_file(last_driver, $3); free($3); }
+    | KW_CIPHER_SUITE '(' string ')'          { http_dd_set_cipher_suite(last_driver, $3); free($3); }
+    | KW_USE_SYSTEM_CERT_STORE '(' yesno ')'  { http_dd_set_use_system_cert_store(last_driver, $3); }
+    | KW_SSL_VERSION '(' string ')'           { http_dd_set_ssl_version(last_driver, $3); free($3); }
+    | KW_PEER_VERIFY '(' yesno ')'            { http_dd_set_peer_verify(last_driver, $3); }
     ;
 
 /* INCLUDE_RULES */
 
 %%
-

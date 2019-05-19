@@ -30,7 +30,7 @@
 
 typedef struct _LogProtoClient LogProtoClient;
 
-#define LOG_PROTO_CLIENT_OPTIONS_SIZE 32
+#define LOG_PROTO_CLIENT_OPTIONS_SIZE 128
 
 typedef struct _LogProtoClientOptions
 {
@@ -62,10 +62,13 @@ struct _LogProtoClient
   const LogProtoClientOptions *options;
   LogTransport *transport;
   /* FIXME: rename to something else */
-  gboolean (*prepare)(LogProtoClient *s, gint *fd, GIOCondition *cond);
-  LogProtoStatus (*post)(LogProtoClient *s, guchar *msg, gsize msg_len, gboolean *consumed);
+  gboolean (*prepare)(LogProtoClient *s, gint *fd, GIOCondition *cond, gint *timeout);
+  LogProtoStatus (*post)(LogProtoClient *s, LogMessage *logmsg, guchar *msg, gsize msg_len, gboolean *consumed);
   LogProtoStatus (*flush)(LogProtoClient *s);
   gboolean (*validate_options)(LogProtoClient *s);
+  gboolean (*handshake_in_progess)(LogProtoClient *s);
+  LogProtoStatus (*handshake)(LogProtoClient *s);
+  gboolean (*restart_with_state)(LogProtoClient *s, PersistState *state, const gchar *persist_name);
   void (*free_fn)(LogProtoClient *s);
   LogProtoClientFlowControlFuncs flow_control_funcs;
 };
@@ -98,9 +101,29 @@ log_proto_client_validate_options(LogProtoClient *self)
 }
 
 static inline gboolean
-log_proto_client_prepare(LogProtoClient *s, gint *fd, GIOCondition *cond)
+log_proto_client_handshake_in_progress(LogProtoClient *s)
 {
-  return s->prepare(s, fd, cond);
+  if (s->handshake_in_progess)
+    {
+      return s->handshake_in_progess(s);
+    }
+  return FALSE;
+}
+
+static inline LogProtoStatus
+log_proto_client_handshake(LogProtoClient *s)
+{
+  if (s->handshake)
+    {
+      return s->handshake(s);
+    }
+  return LPS_SUCCESS;
+}
+
+static inline gboolean
+log_proto_client_prepare(LogProtoClient *s, gint *fd, GIOCondition *cond, gint *timeout)
+{
+  return s->prepare(s, fd, cond, timeout);
 }
 
 static inline LogProtoStatus
@@ -113,9 +136,9 @@ log_proto_client_flush(LogProtoClient *s)
 }
 
 static inline LogProtoStatus
-log_proto_client_post(LogProtoClient *s, guchar *msg, gsize msg_len, gboolean *consumed)
+log_proto_client_post(LogProtoClient *s, LogMessage *logmsg, guchar *msg, gsize msg_len, gboolean *consumed)
 {
-  return s->post(s, msg, msg_len, consumed);
+  return s->post(s, logmsg, msg, msg_len, consumed);
 }
 
 static inline gint
@@ -131,6 +154,14 @@ log_proto_client_reset_error(LogProtoClient *s)
   s->status = LPS_SUCCESS;
 }
 
+static inline gboolean
+log_proto_client_restart_with_state(LogProtoClient *s, PersistState *state, const gchar *persist_name)
+{
+  if (s->restart_with_state)
+    return s->restart_with_state(s, state, persist_name);
+  return FALSE;
+}
+
 gboolean log_proto_client_validate_options(LogProtoClient *self);
 void log_proto_client_init(LogProtoClient *s, LogTransport *transport, const LogProtoClientOptions *options);
 void log_proto_client_free(LogProtoClient *s);
@@ -138,21 +169,27 @@ void log_proto_client_free_method(LogProtoClient *s);
 
 #define DEFINE_LOG_PROTO_CLIENT(prefix) \
   static gpointer                                                       \
-  prefix ## _client_plugin_construct(Plugin *self,                      \
-                  GlobalConfig *cfg,                                    \
-                  gint plugin_type, const gchar *plugin_name)           \
+  prefix ## _client_plugin_construct(Plugin *self)            \
   {                                                                     \
     static LogProtoClientFactory proto = {                              \
       .construct = prefix ## _client_new,                               \
+      .stateful  = FALSE,                                               \
     };                                                                  \
     return &proto;                                                      \
   }
 
 #define LOG_PROTO_CLIENT_PLUGIN(prefix, __name) \
-  {							\
-    .type = LL_CONTEXT_CLIENT_PROTO,		        \
-    .name = __name,					\
-    .construct = prefix ## _client_plugin_construct,	\
+  {             \
+    .type = LL_CONTEXT_CLIENT_PROTO,            \
+    .name = __name,         \
+    .construct = prefix ## _client_plugin_construct,  \
+  }
+
+#define LOG_PROTO_CLIENT_PLUGIN_WITH_GRAMMAR(__parser, __name) \
+  {             \
+    .type = LL_CONTEXT_CLIENT_PROTO,            \
+    .name = __name,         \
+    .parser = &__parser,  \
   }
 
 typedef struct _LogProtoClientFactory LogProtoClientFactory;
@@ -160,14 +197,24 @@ typedef struct _LogProtoClientFactory LogProtoClientFactory;
 struct _LogProtoClientFactory
 {
   LogProtoClient *(*construct)(LogTransport *transport, const LogProtoClientOptions *options);
+  gint default_inet_port;
+  gboolean use_multitransport;
+  gboolean stateful;
 };
 
 static inline LogProtoClient *
-log_proto_client_factory_construct(LogProtoClientFactory *self, LogTransport *transport, const LogProtoClientOptions *options)
+log_proto_client_factory_construct(LogProtoClientFactory *self, LogTransport *transport,
+                                   const LogProtoClientOptions *options)
 {
   return self->construct(transport, options);
 }
 
-LogProtoClientFactory *log_proto_client_get_factory(GlobalConfig *cfg, const gchar *name);
+static inline gboolean
+log_proto_client_factory_is_proto_stateful(LogProtoClientFactory *self)
+{
+  return self->stateful;
+}
+
+LogProtoClientFactory *log_proto_client_get_factory(PluginContext *context, const gchar *name);
 
 #endif

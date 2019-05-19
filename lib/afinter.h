@@ -21,7 +21,7 @@
  * COPYING for details.
  *
  */
-  
+
 #ifndef SDINTER_H_INCLUDED
 #define SDINTER_H_INCLUDED
 
@@ -41,5 +41,6 @@ typedef struct _AFInterSourceDriver
 void afinter_postpone_mark(gint mark_freq);
 LogDriver *afinter_sd_new(GlobalConfig *cfg);
 void afinter_global_init(void);
+void afinter_global_deinit(void);
 
 #endif

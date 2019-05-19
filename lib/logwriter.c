@@ -21,7 +21,7 @@
  * COPYING for details.
  *
  */
-  
+
 #include "logwriter.h"
 #include "messages.h"
 #include "stats/stats-registry.h"
@@ -35,6 +35,7 @@
 #include "mainloop-call.h"
 #include "ml-batched-timer.h"
 #include "str-format.h"
+#include "scratch-buffers.h"
 
 #include <unistd.h>
 #include <assert.h>
@@ -62,18 +63,17 @@ struct _LogWriter
   LogQueue *queue;
   guint32 flags:31;
   gint32 seq_num;
+  gboolean partial_write;
   StatsCounterItem *dropped_messages;
   StatsCounterItem *suppressed_messages;
   StatsCounterItem *processed_messages;
-  StatsCounterItem *stored_messages;
+  StatsCounterItem *written_messages;
   LogPipe *control;
   LogWriterOptions *options;
   LogMessage *last_msg;
   guint32 last_msg_count;
   GString *line_buffer;
 
-  gint stats_level;
-  guint16 stats_source;
   gchar *stats_id;
   gchar *stats_instance;
 
@@ -86,6 +86,7 @@ struct _LogWriter
   MlBatchedTimer suppress_timer;
   MlBatchedTimer mark_timer;
   struct iv_timer reopen_timer;
+  struct iv_timer idle_timer;
   gboolean work_result;
   gint pollable_state;
   LogProtoClient *proto, *pending_proto;
@@ -104,13 +105,13 @@ struct _LogWriter
  * to the target asynchronously, first by placing them to a queue and then
  * sending messages when poll() indicates that the fd is writable.
  *
- * 
+ *
  * Flow control
  * ------------
  * For a simple log writer without a disk buffer messages are placed on a
  * GQueue and they are acknowledged when the send() system call returned
  * success. This is more complex when disk buffering is used, in which case
- * messages are put to the "disk buffer" first and acknowledged immediately. 
+ * messages are put to the "disk buffer" first and acknowledged immediately.
  * (this way the reader never stops when the disk buffer area is not yet
  * full). When disk buffer reaches its limit, messages are added to the the
  * usual GQueue and messages get acknowledged when they are moved to the
@@ -122,6 +123,7 @@ static gboolean log_writer_flush(LogWriter *self, LogWriterFlushMode flush_mode)
 static void log_writer_broken(LogWriter *self, gint notify_code);
 static void log_writer_start_watches(LogWriter *self);
 static void log_writer_stop_watches(LogWriter *self);
+static void log_writer_stop_idle_timer(LogWriter *self);
 static void log_writer_update_watches(LogWriter *self);
 static void log_writer_suspend(LogWriter *self);
 static void log_writer_free_proto(LogWriter *self);
@@ -136,11 +138,17 @@ log_writer_msg_ack(gint num_msg_acked, gpointer user_data)
   log_queue_ack_backlog(self->queue, num_msg_acked);
 }
 
+void
+log_writer_msg_rewind(LogWriter *self)
+{
+  log_queue_rewind_backlog_all(self->queue);
+}
+
 static void
-log_writer_msg_rewind(gpointer user_data)
+log_writer_msg_rewind_cb(gpointer user_data)
 {
   LogWriter *self = (LogWriter *)user_data;
-  log_queue_rewind_backlog_all(self->queue);
+  log_writer_msg_rewind(self);
 }
 
 void
@@ -167,10 +175,8 @@ log_writer_get_queue(LogWriter *s)
 
 /* consumes the reference */
 void
-log_writer_set_queue(LogWriter *s, LogQueue *queue)
+log_writer_set_queue(LogWriter *self, LogQueue *queue)
 {
-  LogWriter *self = (LogWriter *)s;
-
   log_queue_unref(self->queue);
   self->queue = log_queue_ref(queue);
   log_queue_set_use_backlog(self->queue, TRUE);
@@ -220,7 +226,7 @@ log_writer_work_finished(gpointer s)
                      evt_tag_int("fd", log_proto_client_get_fd(self->proto)),
                      evt_tag_int("time_reopen", self->options->time_reopen));
         }
-      goto exit;
+      return;
     }
 
   if ((self->super.flags & PIF_INITIALIZED) && self->proto)
@@ -228,9 +234,6 @@ log_writer_work_finished(gpointer s)
       /* reenable polling the source, but only if we're still initialized */
       log_writer_start_watches(self);
     }
-
-exit:
-  log_pipe_unref(&self->super);
 }
 
 static void
@@ -241,7 +244,6 @@ log_writer_io_flush_output(gpointer s)
   main_loop_assert_main_thread();
 
   log_writer_stop_watches(self);
-  log_pipe_ref(&self->super);
   if ((self->options->options & LWO_THREADED))
     {
       main_loop_io_worker_job_submit(&self->io_job);
@@ -313,7 +315,7 @@ log_writer_update_fd_callbacks(LogWriter *self, GIOCondition cond)
   main_loop_assert_main_thread();
   if (self->pollable_state > 0)
     {
-      if (self->flags & LW_DETECT_EOF && (cond & G_IO_IN) == 0 && (cond & G_IO_OUT))
+      if (self->flags & LW_DETECT_EOF && (cond & G_IO_IN) == 0)
         {
           /* if output is enabled, and we're in DETECT_EOF mode, and input is
            * not needed by the log protocol, install the eof check callback to
@@ -357,7 +359,7 @@ log_writer_update_fd_callbacks(LogWriter *self, GIOCondition cond)
 }
 
 static void
-log_writer_arm_suspend_timer(LogWriter *self, void (*handler)(void *), gint timeout_msec)
+log_writer_arm_suspend_timer(LogWriter *self, void (*handler)(void *), glong timeout_msec)
 {
   main_loop_assert_main_thread();
 
@@ -414,7 +416,7 @@ log_writer_suspend(LogWriter *self)
   /* flush code indicates that we need to suspend our writing activities
    * until time_reopen elapses */
 
-  log_writer_arm_suspend_timer(self, log_writer_error_suspend_elapsed, self->options->time_reopen * 1e3);
+  log_writer_arm_suspend_timer(self, log_writer_error_suspend_elapsed, self->options->time_reopen * 1000L);
   self->suspended = TRUE;
 }
 
@@ -424,12 +426,15 @@ log_writer_update_watches(LogWriter *self)
   gint fd;
   GIOCondition cond = 0;
   gint timeout_msec = 0;
+  gint idle_timeout = -1;
 
   main_loop_assert_main_thread();
 
+  log_writer_stop_idle_timer(self);
+
   /* NOTE: we either start the suspend_timer or enable the fd_watch. The two MUST not happen at the same time. */
 
-  if (log_proto_client_prepare(self->proto, &fd, &cond) ||
+  if (log_proto_client_prepare(self->proto, &fd, &cond, &idle_timeout) ||
       self->waiting_for_throttle ||
       log_queue_check_items(self->queue, &timeout_msec,
                             (LogQueuePushNotifyFunc) log_writer_schedule_update_watches, self, NULL))
@@ -443,7 +448,7 @@ log_writer_update_watches(LogWriter *self)
 
       log_writer_update_fd_callbacks(self, 0);
       self->waiting_for_throttle = TRUE;
-      log_writer_arm_suspend_timer(self, (void (*)(void *)) log_writer_update_watches, timeout_msec);
+      log_writer_arm_suspend_timer(self, (void (*)(void *)) log_writer_update_watches, (glong)timeout_msec);
     }
   else
     {
@@ -452,6 +457,16 @@ log_writer_update_watches(LogWriter *self)
        * log_queue_check_items and its parallel_push argument above
        */
       log_writer_update_fd_callbacks(self, 0);
+    }
+
+  if (idle_timeout > 0)
+    {
+      iv_validate_now();
+
+      self->idle_timer.expires = iv_now;
+      self->idle_timer.expires.tv_sec += idle_timeout;
+
+      iv_timer_register(&self->idle_timer);
     }
 }
 
@@ -476,11 +491,12 @@ log_writer_start_watches(LogWriter *self)
 {
   gint fd;
   GIOCondition cond;
+  gint idle_timeout = -1;
 
   if (self->watches_running)
     return;
 
-  log_proto_client_prepare(self->proto, &fd, &cond);
+  log_proto_client_prepare(self->proto, &fd, &cond, &idle_timeout);
 
   self->fd_watch.fd = fd;
 
@@ -516,6 +532,13 @@ log_writer_stop_watches(LogWriter *self)
 
       self->watches_running = FALSE;
     }
+}
+
+static void
+log_writer_stop_idle_timer(LogWriter *self)
+{
+  if (iv_timer_registered(&self->idle_timer))
+    iv_timer_unregister(&self->idle_timer);
 }
 
 static void
@@ -610,7 +633,9 @@ log_writer_suppress_timeout(gpointer pt)
 static gboolean
 _is_message_a_mark(LogMessage *msg)
 {
-  return strcmp(log_msg_get_value(msg, LM_V_MESSAGE, NULL), "-- MARK --") == 0;
+  gssize msg_len;
+  const gchar *value = log_msg_get_value(msg, LM_V_MESSAGE, &msg_len);
+  return strncmp(value, "-- MARK --", msg_len) == 0;
 }
 
 static gboolean
@@ -699,7 +724,7 @@ log_writer_is_msg_suppressed(LogWriter *self, LogMessage *lm)
 
           stats_counter_inc(self->suppressed_messages);
           self->last_msg_count++;
-          
+
           /* we only create the timer if this is the first suppressed message, otherwise it is already running. */
           need_to_arm_suppress_timer = self->last_msg_count == 1;
           g_static_mutex_unlock(&self->suppress_lock);
@@ -752,13 +777,11 @@ log_writer_mark_timeout(void *cookie)
   main_loop_assert_main_thread();
 
   msg = log_msg_new_mark();
+  path_options.ack_needed = FALSE;
   /* timeout: there was no new message on the writer or it is in periodical mode */
   hostname = resolve_sockaddr_to_hostname(&hostname_len, msg->saddr, &self->options->host_resolve_options);
 
   log_msg_set_value(msg, LM_V_HOST, hostname, hostname_len);
-
-  /* set the current time in the message stamp */
-  msg->timestamps[LM_TS_STAMP] = msg->timestamps[LM_TS_RECVD];
 
   if (!log_writer_is_msg_suppressed(self, msg))
     {
@@ -781,7 +804,7 @@ log_writer_mark_timeout(void *cookie)
 
 /* NOTE: runs in the reader thread */
 static void
-log_writer_queue(LogPipe *s, LogMessage *lm, const LogPathOptions *path_options, gpointer user_data)
+log_writer_queue(LogPipe *s, LogMessage *lm, const LogPathOptions *path_options)
 {
   LogWriter *self = (LogWriter *) s;
   LogPathOptions local_options;
@@ -831,9 +854,9 @@ log_writer_append_value(GString *result, LogMessage *lm, NVHandle handle, gboole
   else
     {
       gchar *space;
-      
+
       space = strchr(value, ' ');
-      
+
       if (!space)
         g_string_append_len(result, value, value_len);
       else
@@ -852,8 +875,8 @@ log_writer_do_padding(LogWriter *self, GString *result)
   if(G_UNLIKELY(self->options->padding < result->len))
     {
       msg_warning("Padding is too small to hold the full message",
-               evt_tag_int("padding", self->options->padding),
-               evt_tag_int("msg_size", result->len));
+                  evt_tag_int("padding", self->options->padding),
+                  evt_tag_int("msg_size", result->len));
       g_string_set_size(result, self->options->padding);
       return;
     }
@@ -892,7 +915,7 @@ log_writer_format_log(LogWriter *self, LogMessage *lm, GString *result)
       else
         seq_num = 0;
     }
-  
+
   /* no template was specified, use default */
   stamp = &lm->timestamps[LM_TS_STAMP];
 
@@ -901,19 +924,19 @@ log_writer_format_log(LogWriter *self, LogMessage *lm, GString *result)
   if ((self->flags & LW_SYSLOG_PROTOCOL) || (self->options->options & LWO_SYSLOG_PROTOCOL))
     {
       gssize len;
-       
+
       /* we currently hard-wire version 1 */
       g_string_append_c(result, '<');
       format_uint32_padded(result, 0, 0, 10, lm->pri);
       g_string_append_c(result, '>');
       g_string_append_c(result, '1');
       g_string_append_c(result, ' ');
- 
-      log_stamp_append_format(stamp, result, TS_FMT_ISO, 
+
+      log_stamp_append_format(stamp, result, TS_FMT_ISO,
                               time_zone_info_get_offset(self->options->template_options.time_zone_info[LTZ_SEND], stamp->tv_sec),
                               self->options->template_options.frac_digits);
       g_string_append_c(result, ' ');
-      
+
       log_writer_append_value(result, lm, LM_V_HOST, TRUE, TRUE);
       log_writer_append_value(result, lm, LM_V_PROGRAM, TRUE, TRUE);
       log_writer_append_value(result, lm, LM_V_PID, TRUE, TRUE);
@@ -926,13 +949,13 @@ log_writer_format_log(LogWriter *self, LogMessage *lm, GString *result)
           /* NOTE: sd_param format did not generate any output, take it as an empty SD string */
           g_string_append_c(result, '-');
         }
-       
+
       if (self->options->template)
         {
           g_string_append_c(result, ' ');
           if (lm->flags & LF_UTF8)
             g_string_append_len(result, "\xEF\xBB\xBF", 3);
-          log_template_append_format(self->options->template, lm, 
+          log_template_append_format(self->options->template, lm,
                                      &self->options->template_options,
                                      LTZ_SEND,
                                      seq_num, NULL,
@@ -970,17 +993,17 @@ log_writer_format_log(LogWriter *self, LogMessage *lm, GString *result)
         {
           template = self->options->proto_template;
         }
-      
+
       if (template)
         {
-          log_template_format(template, lm, 
+          log_template_format(template, lm,
                               &self->options->template_options,
                               LTZ_SEND,
                               seq_num, NULL,
                               result);
 
         }
-      else 
+      else
         {
           const gchar *p;
           gssize len;
@@ -993,9 +1016,9 @@ log_writer_format_log(LogWriter *self, LogMessage *lm, GString *result)
             }
           else if (self->flags & LW_FORMAT_PROTO)
             {
-	      g_string_append_c(result, '<');
-	      format_uint32_padded(result, 0, 0, 10, lm->pri);
-	      g_string_append_c(result, '>');
+              g_string_append_c(result, '<');
+              format_uint32_padded(result, 0, 0, 10, lm->pri);
+              g_string_append_c(result, '>');
 
               /* always use BSD timestamp by default, the use can override this using a custom template */
               log_stamp_append_format(stamp, result, TS_FMT_BSD,
@@ -1008,9 +1031,9 @@ log_writer_format_log(LogWriter *self, LogMessage *lm, GString *result)
           g_string_append_len(result, p, len);
           g_string_append_c(result, ' ');
 
-          if ((lm->flags & LF_LEGACY_MSGHDR))
+          p = log_msg_get_value(lm, LM_V_LEGACY_MSGHDR, &len);
+          if (len > 0)
             {
-              p = log_msg_get_value(lm, LM_V_LEGACY_MSGHDR, &len);
               g_string_append_len(result, p, len);
             }
           else
@@ -1054,6 +1077,7 @@ static void
 log_writer_broken(LogWriter *self, gint notify_code)
 {
   log_writer_stop_watches(self);
+  log_writer_stop_idle_timer(self);
   log_pipe_notify(self->control, notify_code, self);
 }
 
@@ -1082,10 +1106,11 @@ log_writer_flush_finalize(LogWriter *self)
 {
   LogProtoStatus status = log_proto_client_flush(self->proto);
 
-  if (status != LPS_SUCCESS)
-    return FALSE;
+  if (status == LPS_SUCCESS || status == LPS_PARTIAL)
+    return TRUE;
 
-  return TRUE;
+
+  return FALSE;
 }
 
 gboolean
@@ -1103,12 +1128,16 @@ log_writer_write_message(LogWriter *self, LogMessage *msg, LogPathOptions *path_
   if (!(msg->flags & LF_INTERNAL))
     {
       msg_debug("Outgoing message",
-            evt_tag_str("message",self->line_buffer->str));
+                evt_tag_printf("message", "%s", self->line_buffer->str));
     }
 
   if (self->line_buffer->len)
     {
-      LogProtoStatus status = log_proto_client_post(self->proto, (guchar *)self->line_buffer->str, self->line_buffer->len, &consumed);
+      LogProtoStatus status = log_proto_client_post(self->proto, msg, (guchar *)self->line_buffer->str,
+                                                    self->line_buffer->len,
+                                                    &consumed);
+
+      self->partial_write = (status == LPS_PARTIAL);
 
       if (consumed)
         log_writer_realloc_line_buffer(self);
@@ -1147,11 +1176,11 @@ log_writer_write_message(LogWriter *self, LogMessage *msg, LogPathOptions *path_
       log_msg_refcache_stop();
 
       return TRUE;
-  }
+    }
   else
     {
       msg_debug("Can't send the message rewind backlog",
-                evt_tag_str("message",self->line_buffer->str));
+                evt_tag_printf("message", "%s", self->line_buffer->str));
 
       log_queue_rewind_backlog(self->queue, 1);
 
@@ -1172,6 +1201,17 @@ log_writer_queue_pop_message(LogWriter *self, LogPathOptions *path_options, gboo
     return log_queue_pop_head(self->queue, path_options);
 }
 
+static inline gboolean
+log_writer_process_handshake(LogWriter *self)
+{
+  LogProtoStatus status = log_proto_client_handshake(self->proto);
+
+  if (status != LPS_SUCCESS)
+    return FALSE;
+
+  return TRUE;
+}
+
 /*
  * @flush_mode specifies how hard LogWriter is trying to send messages to
  * the actual destination:
@@ -1189,6 +1229,11 @@ log_writer_flush(LogWriter *self, LogWriterFlushMode flush_mode)
   if (!self->proto)
     return FALSE;
 
+  if (log_proto_client_handshake_in_progress(self->proto))
+    {
+      return log_writer_process_handshake(self);
+    }
+
   /* NOTE: in case we're reloading or exiting we flush all queued items as
    * long as the destination can consume it.  This is not going to be an
    * infinite loop, since the reader will cease to produce new messages when
@@ -1202,8 +1247,17 @@ log_writer_flush(LogWriter *self, LogWriterFlushMode flush_mode)
       if (!msg)
         break;
 
+      ScratchBuffersMarker mark;
+      scratch_buffers_mark(&mark);
       if (!log_writer_write_message(self, msg, &path_options, &write_error))
-        break;
+        {
+          scratch_buffers_reclaim_marked(mark);
+          break;
+        }
+      scratch_buffers_reclaim_marked(mark);
+
+      if (!write_error)
+        stats_counter_inc(self->written_messages);
     }
 
   if (write_error)
@@ -1218,6 +1272,17 @@ log_writer_reopen_timeout(void *cookie)
   LogWriter *self = (LogWriter *)cookie;
 
   log_pipe_notify(self->control, NC_REOPEN_REQUIRED, self);
+}
+
+static void
+log_writer_idle_timeout(void *cookie)
+{
+  LogWriter *self = (LogWriter *) cookie;
+
+  msg_notice("Destination timeout has elapsed, closing connection",
+             evt_tag_int("fd", log_proto_client_get_fd(self->proto)));
+
+  log_pipe_notify(self->control, NC_CLOSE, self);
 }
 
 static void
@@ -1241,13 +1306,17 @@ log_writer_init_watches(LogWriter *self)
 
   ml_batched_timer_init(&self->mark_timer);
   self->mark_timer.cookie = self;
-  self->mark_timer.handler = (void (*)(void *)) log_writer_mark_timeout;
+  self->mark_timer.handler = log_writer_mark_timeout;
   self->mark_timer.ref_cookie = (gpointer (*)(gpointer)) log_pipe_ref;
   self->mark_timer.unref_cookie = (void (*)(gpointer)) log_pipe_unref;
 
   IV_TIMER_INIT(&self->reopen_timer);
   self->reopen_timer.cookie = self;
-  self->reopen_timer.handler = (void (*)(void *)) log_writer_reopen_timeout;
+  self->reopen_timer.handler = log_writer_reopen_timeout;
+
+  IV_TIMER_INIT(&self->idle_timer);
+  self->idle_timer.cookie = self;
+  self->idle_timer.handler = log_writer_idle_timeout;
 
   IV_EVENT_INIT(&self->queue_filled);
   self->queue_filled.cookie = self;
@@ -1257,6 +1326,27 @@ log_writer_init_watches(LogWriter *self)
   self->io_job.user_data = self;
   self->io_job.work = (void (*)(void *)) log_writer_work_perform;
   self->io_job.completion = (void (*)(void *)) log_writer_work_finished;
+  self->io_job.engage = (void (*)(void *)) log_pipe_ref;
+  self->io_job.release = (void (*)(void *)) log_pipe_unref;
+}
+
+static void
+_register_counters(LogWriter *self)
+{
+  stats_lock();
+  {
+    StatsClusterKey sc_key;
+    stats_cluster_logpipe_key_set(&sc_key, self->options->stats_source | SCS_DESTINATION, self->stats_id,
+                                  self->stats_instance);
+
+    if (self->options->suppress > 0)
+      stats_register_counter(self->options->stats_level, &sc_key, SC_TYPE_SUPPRESSED, &self->suppressed_messages);
+    stats_register_counter(self->options->stats_level, &sc_key, SC_TYPE_DROPPED, &self->dropped_messages);
+    stats_register_counter(self->options->stats_level, &sc_key, SC_TYPE_PROCESSED, &self->processed_messages);
+    stats_register_counter(self->options->stats_level, &sc_key, SC_TYPE_WRITTEN, &self->written_messages);
+    log_queue_register_stats_counters(self->queue, self->options->stats_level, &sc_key);
+  }
+  stats_unlock();
 }
 
 static gboolean
@@ -1271,17 +1361,8 @@ log_writer_init(LogPipe *s)
   iv_event_register(&self->queue_filled);
 
   if ((self->options->options & LWO_NO_STATS) == 0 && !self->dropped_messages)
-    {
-      stats_lock();
-      stats_register_counter(self->stats_level, self->stats_source | SCS_DESTINATION, self->stats_id, self->stats_instance, SC_TYPE_DROPPED, &self->dropped_messages);
-      if (self->options->suppress > 0)
-        stats_register_counter(self->stats_level, self->stats_source | SCS_DESTINATION, self->stats_id, self->stats_instance, SC_TYPE_SUPPRESSED, &self->suppressed_messages);
-      stats_register_counter(self->stats_level, self->stats_source | SCS_DESTINATION, self->stats_id, self->stats_instance, SC_TYPE_PROCESSED, &self->processed_messages);
-      
-      stats_register_counter(self->stats_level, self->stats_source | SCS_DESTINATION, self->stats_id, self->stats_instance, SC_TYPE_STORED, &self->stored_messages);
-      stats_unlock();
-    }
-  log_queue_set_counters(self->queue, self->stored_messages, self->dropped_messages);
+    _register_counters(self);
+
   if (self->proto)
     {
       LogProtoClient *proto;
@@ -1302,6 +1383,25 @@ log_writer_init(LogPipe *s)
   return TRUE;
 }
 
+static void
+_unregister_counters(LogWriter *self)
+{
+  stats_lock();
+  {
+    StatsClusterKey sc_key;
+    stats_cluster_logpipe_key_set(&sc_key, self->options->stats_source | SCS_DESTINATION, self->stats_id,
+                                  self->stats_instance);
+
+    stats_unregister_counter(&sc_key, SC_TYPE_DROPPED, &self->dropped_messages);
+    stats_unregister_counter(&sc_key, SC_TYPE_SUPPRESSED, &self->suppressed_messages);
+    stats_unregister_counter(&sc_key, SC_TYPE_PROCESSED, &self->processed_messages);
+    stats_unregister_counter(&sc_key, SC_TYPE_WRITTEN, &self->written_messages);
+    log_queue_unregister_stats_counters(self->queue, &sc_key);
+  }
+  stats_unlock();
+
+}
+
 static gboolean
 log_writer_deinit(LogPipe *s)
 {
@@ -1316,20 +1416,18 @@ log_writer_deinit(LogPipe *s)
    * some kind of locking. */
 
   log_writer_stop_watches(self);
+  log_writer_stop_idle_timer(self);
+
   iv_event_unregister(&self->queue_filled);
+
+  if (iv_timer_registered(&self->reopen_timer))
+    iv_timer_unregister(&self->reopen_timer);
 
   ml_batched_timer_unregister(&self->suppress_timer);
   ml_batched_timer_unregister(&self->mark_timer);
 
-  log_queue_set_counters(self->queue, NULL, NULL);
+  _unregister_counters(self);
 
-  stats_lock();
-  stats_unregister_counter(self->stats_source | SCS_DESTINATION, self->stats_id, self->stats_instance, SC_TYPE_DROPPED, &self->dropped_messages);
-  stats_unregister_counter(self->stats_source | SCS_DESTINATION, self->stats_id, self->stats_instance, SC_TYPE_SUPPRESSED, &self->suppressed_messages);
-  stats_unregister_counter(self->stats_source | SCS_DESTINATION, self->stats_id, self->stats_instance, SC_TYPE_PROCESSED, &self->processed_messages);
-  stats_unregister_counter(self->stats_source | SCS_DESTINATION, self->stats_id, self->stats_instance, SC_TYPE_STORED, &self->stored_messages);
-  stats_unlock();
-  
   return TRUE;
 }
 
@@ -1389,7 +1487,7 @@ log_writer_set_proto(LogWriter *self, LogProtoClient *proto)
     {
       LogProtoClientFlowControlFuncs flow_control_funcs;
       flow_control_funcs.ack_callback = log_writer_msg_ack;
-      flow_control_funcs.rewind_callback = log_writer_msg_rewind;
+      flow_control_funcs.rewind_callback = log_writer_msg_rewind_cb;
       flow_control_funcs.user_data = self;
 
       log_proto_client_set_client_flow_control(self->proto, &flow_control_funcs);
@@ -1422,7 +1520,7 @@ log_writer_reopen_deferred(gpointer s)
       self->reopen_timer.expires.tv_sec += self->options->time_reopen;
 
       if (iv_timer_registered(&self->reopen_timer))
-          iv_timer_unregister(&self->reopen_timer);
+        iv_timer_unregister(&self->reopen_timer);
 
       iv_timer_register(&self->reopen_timer);
     }
@@ -1437,7 +1535,12 @@ log_writer_reopen_deferred(gpointer s)
     }
 
   log_writer_stop_watches(self);
+  log_writer_stop_idle_timer(self);
 
+  if (self->partial_write)
+    {
+      log_queue_rewind_backlog_all(self->queue);
+    }
   log_writer_free_proto(self);
   log_writer_set_proto(self, proto);
 
@@ -1491,13 +1594,12 @@ log_writer_reopen(LogWriter *s, LogProtoClient *proto)
 }
 
 void
-log_writer_set_options(LogWriter *self, LogPipe *control, LogWriterOptions *options, gint stats_level, gint stats_source, const gchar *stats_id, const gchar *stats_instance)
+log_writer_set_options(LogWriter *self, LogPipe *control, LogWriterOptions *options,
+                       const gchar *stats_id, const gchar *stats_instance)
 {
   self->control = control;
   self->options = options;
 
-  self->stats_level = stats_level;
-  self->stats_source = stats_source;
   if (control)
     self->super.expr_node = control->expr_node;
 
@@ -1514,7 +1616,7 @@ LogWriter *
 log_writer_new(guint32 flags, GlobalConfig *cfg)
 {
   LogWriter *self = g_new0(LogWriter, 1);
-  
+
   log_pipe_init_instance(&self->super, cfg);
   self->super.init = log_writer_init;
   self->super.deinit = log_writer_deinit;
@@ -1533,12 +1635,11 @@ log_writer_new(guint32 flags, GlobalConfig *cfg)
   return self;
 }
 
-void 
+void
 log_writer_options_defaults(LogWriterOptions *options)
 {
   options->template = NULL;
   options->flush_lines = -1;
-  options->flush_timeout = -1;
   log_template_options_defaults(&options->template_options);
   options->time_reopen = -1;
   options->suppress = -1;
@@ -1548,7 +1649,7 @@ log_writer_options_defaults(LogWriterOptions *options)
   host_resolve_options_defaults(&options->host_resolve_options);
 }
 
-void 
+void
 log_writer_options_set_template_escape(LogWriterOptions *options, gboolean enable)
 {
   if (options->template && options->template->def_inline)
@@ -1562,7 +1663,7 @@ log_writer_options_set_template_escape(LogWriterOptions *options, gboolean enabl
 }
 
 void
-log_writer_options_set_mark_mode(LogWriterOptions *options, gchar *mark_mode)
+log_writer_options_set_mark_mode(LogWriterOptions *options, const gchar *mark_mode)
 {
   options->mark_mode = cfg_lookup_mark_mode(mark_mode);
 }
@@ -1598,14 +1699,12 @@ log_writer_options_init(LogWriterOptions *options, GlobalConfig *cfg, guint32 op
     return;
 
   log_template_options_init(&options->template_options, cfg);
-  host_resolve_options_init(&options->host_resolve_options, cfg);
+  host_resolve_options_init(&options->host_resolve_options, &cfg->host_resolve_options);
   log_proto_client_options_init(&options->proto_options.super, cfg);
   options->options |= option_flags;
-    
+
   if (options->flush_lines == -1)
     options->flush_lines = cfg->flush_lines;
-  if (options->flush_timeout == -1)
-    options->flush_timeout = cfg->flush_timeout;
   if (options->suppress == -1)
     options->suppress = cfg->suppress;
   if (options->time_reopen == -1)
@@ -1619,7 +1718,7 @@ log_writer_options_init(LogWriterOptions *options, GlobalConfig *cfg, guint32 op
     {
       /* get the global option */
       options->mark_mode = cfg->mark_mode;
-     }
+    }
   if (options->mark_freq == -1)
     {
       /* not initialized, use the global mark freq */
@@ -1644,13 +1743,13 @@ log_writer_options_destroy(LogWriterOptions *options)
 gint
 log_writer_options_lookup_flag(const gchar *flag)
 {
-  if (strcmp(flag, "syslog_protocol") == 0 || strcmp(flag, "syslog-protocol") == 0)
+  if (strcmp(flag, "syslog-protocol") == 0)
     return LWO_SYSLOG_PROTOCOL;
-  if (strcmp(flag, "no-multi-line") == 0 || strcmp(flag, "no_multi_line") == 0)
+  if (strcmp(flag, "no-multi-line") == 0)
     return LWO_NO_MULTI_LINE;
   if (strcmp(flag, "threaded") == 0)
     return LWO_THREADED;
-  if (strcmp(flag, "ignore-errors") == 0 || strcmp(flag, "ignore_errors") == 0)
+  if (strcmp(flag, "ignore-errors") == 0)
     return LWO_IGNORE_ERRORS;
   msg_error("Unknown dest writer flag", evt_tag_str("flag", flag));
   return 0;

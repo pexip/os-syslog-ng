@@ -32,10 +32,11 @@
 #include <systemd/sd-journal.h>
 #else
 /* Open flags */
-enum {
-        SD_JOURNAL_LOCAL_ONLY = 1,
-        SD_JOURNAL_RUNTIME_ONLY = 2,
-        SD_JOURNAL_SYSTEM_ONLY = 4
+enum
+{
+  SD_JOURNAL_LOCAL_ONLY = 1,
+  SD_JOURNAL_RUNTIME_ONLY = 2,
+  SD_JOURNAL_SYSTEM_ONLY = 4
 };
 #endif
 
@@ -47,8 +48,8 @@ typedef void (*FOREACH_DATA_CALLBACK)(gchar *key, gchar *value, gpointer user_da
 void journald_foreach_data(Journald *self, FOREACH_DATA_CALLBACK func, gpointer user_data);
 
 
-gboolean load_journald_subsystem();
-Journald *journald_new();
+gboolean load_journald_subsystem(void);
+Journald *journald_new(void);
 void journald_free(Journald *self);
 
 int journald_open(Journald *self, int flags);
@@ -60,6 +61,7 @@ int journald_next(Journald *self);
 void journald_restart_data(Journald *self);
 int journald_enumerate_data(Journald *self, const void **data, gsize *length);
 int journald_seek_cursor(Journald *self, const gchar *cursor);
+int journald_test_cursor(Journald *self, const gchar *cursor);
 int journald_get_fd(Journald *self);
 int journald_process(Journald *self);
 int journald_get_realtime_usec(Journald *self, guint64 *usec);

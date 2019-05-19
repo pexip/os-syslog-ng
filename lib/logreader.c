@@ -26,6 +26,7 @@
 #include "mainloop-io-worker.h"
 #include "mainloop-call.h"
 #include "ack_tracker.h"
+#include "scratch-buffers.h"
 
 #include <iv_event.h>
 
@@ -34,19 +35,17 @@ struct _LogReader
   LogSource super;
   LogProtoServer *proto;
   gboolean immediate_check;
-  gboolean waiting_for_preemption;
   LogPipe *control;
   LogReaderOptions *options;
   PollEvents *poll_events;
   GSockAddr *peer_addr;
-  ino_t inode;
-  gint64 size;
 
   /* NOTE: these used to be LogReaderWatch members, which were merged into
    * LogReader with the multi-thread refactorization */
 
   struct iv_task restart_task;
   struct iv_event schedule_wakeup;
+  struct iv_event last_msg_sent_event;
   MainLoopIOWorkerJob io_job;
   gboolean watches_running:1, suspended:1;
   gint notify_code;
@@ -61,12 +60,19 @@ struct _LogReader
   GStaticMutex pending_proto_lock;
   LogProtoServer *pending_proto;
   PollEvents *pending_poll_events;
+
+  struct iv_timer idle_timer;
 };
 
 static gboolean log_reader_fetch_log(LogReader *self);
 
 static void log_reader_stop_watches(LogReader *self);
+static void log_reader_stop_idle_timer(LogReader *self);
+static void log_reader_idle_timeout(void *cookie);
+
 static void log_reader_update_watches(LogReader *self);
+
+static void log_reader_wakeup(LogSource *s);
 
 static void
 log_reader_apply_proto_and_poll_events(LogReader *self, LogProtoServer *proto, PollEvents *poll_events)
@@ -77,7 +83,18 @@ log_reader_apply_proto_and_poll_events(LogReader *self, LogProtoServer *proto, P
     poll_events_free(self->poll_events);
 
   self->proto = proto;
+
+  if (self->proto)
+    log_proto_server_set_wakeup_cb(self->proto, (LogProtoServerWakeupFunc) log_reader_wakeup, self);
+
   self->poll_events = poll_events;
+}
+
+static void
+_last_msg_sent(gpointer s)
+{
+  LogReader *self = (LogReader *) s;
+  log_pipe_notify(self->control, NC_LAST_MSG_SENT, self);
 }
 
 static void
@@ -126,7 +143,6 @@ log_reader_work_finished(void *s)
       log_proto_server_reset_error(self->proto);
       log_reader_update_watches(self);
     }
-  log_pipe_unref(&self->super.super);
 }
 
 static void
@@ -168,12 +184,19 @@ log_reader_wakeup(LogSource *s)
 }
 
 static void
+log_reader_window_empty(LogSource *s)
+{
+  LogReader *self = (LogReader *) s;
+  if (self->super.super.flags & PIF_INITIALIZED)
+    iv_event_post(&self->last_msg_sent_event);
+}
+
+static void
 log_reader_io_process_input(gpointer s)
 {
   LogReader *self = (LogReader *) s;
 
   log_reader_stop_watches(self);
-  log_pipe_ref(&self->super.super);
   if ((self->options->flags & LR_THREADED))
     {
       main_loop_io_worker_job_submit(&self->io_job);
@@ -207,10 +230,20 @@ log_reader_init_watches(LogReader *self)
   self->schedule_wakeup.cookie = self;
   self->schedule_wakeup.handler = log_reader_wakeup_triggered;
 
+  IV_EVENT_INIT(&self->last_msg_sent_event);
+  self->last_msg_sent_event.cookie = self;
+  self->last_msg_sent_event.handler = _last_msg_sent;
+
+  IV_TIMER_INIT(&self->idle_timer);
+  self->idle_timer.cookie = self;
+  self->idle_timer.handler = log_reader_idle_timeout;
+
   main_loop_io_worker_job_init(&self->io_job);
   self->io_job.user_data = self;
   self->io_job.work = (void (*)(void *)) log_reader_work_perform;
   self->io_job.completion = (void (*)(void *)) log_reader_work_finished;
+  self->io_job.engage = (void (*)(void *)) log_pipe_ref;
+  self->io_job.release = (void (*)(void *)) log_pipe_unref;
 }
 
 static void
@@ -224,6 +257,13 @@ log_reader_stop_watches(LogReader *self)
         iv_task_unregister(&self->restart_task);
       self->watches_running = FALSE;
     }
+}
+
+static void
+log_reader_stop_idle_timer(LogReader *self)
+{
+  if (iv_timer_registered(&self->idle_timer))
+    iv_timer_unregister(&self->idle_timer);
 }
 
 static void
@@ -267,30 +307,57 @@ static void
 log_reader_update_watches(LogReader *self)
 {
   GIOCondition cond;
-  gboolean free_to_send;
-  gboolean line_is_ready_in_buffer;
+  gint idle_timeout = -1;
 
   main_loop_assert_main_thread();
+
+  log_reader_stop_idle_timer(self);
 
   if (!log_reader_is_opened(self))
     return;
 
   log_reader_start_watches_if_stopped(self);
 
-  free_to_send = log_source_free_to_send(&self->super);
+  gboolean free_to_send = log_source_free_to_send(&self->super);
   if (!free_to_send)
     {
       log_reader_suspend_until_awoken(self);
       return;
     }
 
-  line_is_ready_in_buffer = log_proto_server_prepare(self->proto, &cond);
-  if (self->immediate_check || line_is_ready_in_buffer)
+  LogProtoPrepareAction prepare_action = log_proto_server_prepare(self->proto, &cond, &idle_timeout);
+
+  if (idle_timeout > 0)
+    {
+      iv_validate_now();
+
+      self->idle_timer.expires = iv_now;
+      self->idle_timer.expires.tv_sec += idle_timeout;
+
+      iv_timer_register(&self->idle_timer);
+    }
+
+  if (self->immediate_check)
     {
       log_reader_force_check_in_next_poll(self);
       return;
     }
-  poll_events_update_watches(self->poll_events, cond);
+
+  switch (prepare_action)
+    {
+    case LPPA_POLL_IO:
+      poll_events_update_watches(self->poll_events, cond);
+      break;
+    case LPPA_FORCE_SCHEDULE_FETCH:
+      log_reader_force_check_in_next_poll(self);
+      break;
+    case LPPA_SUSPEND:
+      log_reader_suspend_until_awoken(self);
+      break;
+    default:
+      g_assert_not_reached();
+      break;
+    }
 }
 
 static void
@@ -301,12 +368,31 @@ _add_aux_nvpair(const gchar *name, const gchar *value, gsize value_len, gpointer
   log_msg_set_value_by_name(msg, name, value, value_len);;
 }
 
+static inline gint
+log_reader_process_handshake(LogReader *self)
+{
+  LogProtoStatus status = log_proto_server_handshake(self->proto);
+
+  switch (status)
+    {
+    case LPS_EOF:
+    case LPS_ERROR:
+      return status == LPS_ERROR ? NC_READ_ERROR : NC_CLOSE;
+    case LPS_SUCCESS:
+      break;
+    default:
+      g_assert_not_reached();
+      break;
+    }
+  return 0;
+}
+
 static gboolean
 log_reader_handle_line(LogReader *self, const guchar *line, gint length, LogTransportAuxData *aux)
 {
   LogMessage *m;
-  
-  msg_debug("Incoming log entry", 
+
+  msg_debug("Incoming log entry",
             evt_tag_printf("line", "%.*s", length, line));
   /* use the current time to get the time zone offset */
   m = log_msg_new((gchar *) line, length,
@@ -314,7 +400,7 @@ log_reader_handle_line(LogReader *self, const guchar *line, gint length, LogTran
                   &self->options->parse_options);
 
   log_msg_refcache_start_producer(m);
-  
+
   log_transport_aux_data_foreach(aux, _add_aux_nvpair, m);
 
   log_source_post(&self->super, m);
@@ -330,14 +416,16 @@ log_reader_fetch_log(LogReader *self)
   gboolean may_read = TRUE;
   LogTransportAuxData aux;
 
-  if (self->waiting_for_preemption)
-    may_read = FALSE;
+  log_transport_aux_data_init(&aux);
+  if (log_proto_server_handshake_in_progress(self->proto))
+    {
+      return log_reader_process_handshake(self);
+    }
 
   /* NOTE: this loop is here to decrease the load on the main loop, we try
    * to fetch a couple of messages in a single run (but only up to
    * fetch_limit).
    */
-  log_transport_aux_data_init(&aux);
   while (msg_count < self->options->fetch_limit && !main_loop_worker_job_quit())
     {
       Bookmark *bookmark;
@@ -359,9 +447,11 @@ log_reader_fetch_log(LogReader *self)
       switch (status)
         {
         case LPS_EOF:
+          g_sockaddr_unref(aux.peer_addr);
+          return NC_CLOSE;
         case LPS_ERROR:
           g_sockaddr_unref(aux.peer_addr);
-          return status == LPS_ERROR ? NC_READ_ERROR : NC_CLOSE;
+          return NC_READ_ERROR;
         case LPS_SUCCESS:
           break;
         default:
@@ -378,26 +468,19 @@ log_reader_fetch_log(LogReader *self)
         {
           msg_count++;
 
+          ScratchBuffersMarker mark;
+          scratch_buffers_mark(&mark);
           if (!log_reader_handle_line(self, msg, msg_len, &aux))
             {
+              scratch_buffers_reclaim_marked(mark);
               /* window is full, don't generate further messages */
               break;
             }
+          scratch_buffers_reclaim_marked(mark);
         }
     }
   log_transport_aux_data_destroy(&aux);
-  if (self->options->flags & LR_PREEMPT)
-    {
-      if (log_proto_server_is_preemptable(self->proto))
-        {
-          self->waiting_for_preemption = FALSE;
-          log_pipe_notify(self->control, NC_FILE_SKIP, self);
-        }
-      else
-        {
-          self->waiting_for_preemption = TRUE;
-        }
-    }
+
   if (msg_count == self->options->fetch_limit)
     self->immediate_check = TRUE;
   return 0;
@@ -425,6 +508,7 @@ log_reader_init(LogPipe *s)
 
   log_reader_update_watches(self);
   iv_event_register(&self->schedule_wakeup);
+  iv_event_register(&self->last_msg_sent_event);
 
   return TRUE;
 }
@@ -433,11 +517,14 @@ static gboolean
 log_reader_deinit(LogPipe *s)
 {
   LogReader *self = (LogReader *) s;
-  
+
   main_loop_assert_main_thread();
 
   iv_event_unregister(&self->schedule_wakeup);
+  iv_event_unregister(&self->last_msg_sent_event);
   log_reader_stop_watches(self);
+  log_reader_stop_idle_timer(self);
+
   if (!log_source_deinit(s))
     return FALSE;
 
@@ -465,21 +552,29 @@ log_reader_free(LogPipe *s)
 }
 
 void
-log_reader_set_options(LogReader *s, LogPipe *control, LogReaderOptions *options, gint stats_level, gint stats_source, const gchar *stats_id, const gchar *stats_instance)
+log_reader_set_options(LogReader *s, LogPipe *control, LogReaderOptions *options,
+                       const gchar *stats_id, const gchar *stats_instance)
 {
   LogReader *self = (LogReader *) s;
 
-  gboolean pos_tracked = ((self->proto != NULL) && log_proto_server_is_position_tracked(self->proto));
+  /* log_reader_reopen() needs to be called prior to set_options.  This is
+   * an ugly hack, but at least it is more explicitly than what used to be
+   * here, which silently ignored if self->proto was NULL.
+   */
 
-  log_source_set_options(&self->super, &options->super, stats_level, stats_source, stats_id, stats_instance, (options->flags & LR_THREADED), pos_tracked, control->expr_node);
+  g_assert(self->proto != NULL);
+  gboolean pos_tracked = log_proto_server_is_position_tracked(self->proto);
+
+  log_source_set_options(&self->super, &options->super, stats_id, stats_instance,
+                         (options->flags & LR_THREADED), pos_tracked, control->expr_node);
 
   log_pipe_unref(self->control);
   log_pipe_ref(control);
   self->control = control;
 
   self->options = options;
-  if (self->proto)
-    log_proto_server_set_options(self->proto, &self->options->proto_options.super);
+  log_proto_server_set_options(self->proto, &self->options->proto_options.super);
+  log_proto_server_set_ack_tracker(self->proto, self->super.ack_tracker);
 }
 
 /* run in the main thread in reaction to a log_reader_reopen to change
@@ -503,6 +598,7 @@ log_reader_reopen_deferred(gpointer s)
     }
 
   log_reader_stop_watches(self);
+  log_reader_stop_idle_timer(self);
   log_reader_apply_proto_and_poll_events(self, proto, poll_events);
   log_reader_update_watches(self);
 }
@@ -511,8 +607,6 @@ void
 log_reader_reopen(LogReader *self, LogProtoServer *proto, PollEvents *poll_events)
 {
   gpointer args[] = { self, proto, poll_events };
-
-  log_source_deinit(&self->super.super);
 
   main_loop_call((MainLoopTaskFunc) log_reader_reopen_deferred, args, TRUE);
 
@@ -525,7 +619,23 @@ log_reader_reopen(LogReader *self, LogProtoServer *proto, PollEvents *poll_event
         }
       g_static_mutex_unlock(&self->pending_proto_lock);
     }
-  log_source_init(&self->super.super);
+}
+
+void
+log_reader_close_proto(LogReader *self)
+{
+  log_reader_reopen(self, NULL, NULL);
+}
+
+static void
+log_reader_idle_timeout(void *cookie)
+{
+  LogReader *self = (LogReader *) cookie;
+
+  msg_notice("Source timeout has elapsed, closing connection",
+             evt_tag_int("fd", log_proto_server_get_fd(self->proto)));
+
+  log_pipe_notify(self->control, NC_CLOSE, self);
 }
 
 void
@@ -547,6 +657,7 @@ log_reader_new(GlobalConfig *cfg)
   self->super.super.deinit = log_reader_deinit;
   self->super.super.free_fn = log_reader_free;
   self->super.wakeup = log_reader_wakeup;
+  self->super.window_empty_cb = log_reader_window_empty;
   self->immediate_check = FALSE;
   log_reader_init_watches(self);
   g_static_mutex_init(&self->pending_proto_lock);
@@ -554,11 +665,11 @@ log_reader_new(GlobalConfig *cfg)
   return self;
 }
 
-void 
+void
 log_reader_set_immediate_check(LogReader *s)
 {
-  LogReader *self = (LogReader*) s;
-  
+  LogReader *self = (LogReader *) s;
+
   self->immediate_check = TRUE;
 }
 
@@ -569,18 +680,13 @@ log_reader_options_defaults(LogReaderOptions *options)
   log_proto_server_options_defaults(&options->proto_options.super);
   msg_format_options_defaults(&options->parse_options);
   options->fetch_limit = 10;
-  if (configuration && cfg_is_config_version_older(configuration, 0x0300))
-    {
-      msg_warning_once("WARNING: input: sources do not remove new-line characters from messages by default from " VERSION_3_0 ", please add 'no-multi-line' flag to your configuration if you want to retain this functionality");
-      options->parse_options.flags |= LP_NO_MULTI_LINE;
-    }
 }
 
 /*
  * NOTE: _init needs to be idempotent when called multiple times w/o invoking _destroy
  *
  * Rationale:
- *   - init is called from driver init (e.g. affile_sd_init), 
+ *   - init is called from driver init (e.g. affile_sd_init),
  *   - destroy is called from driver free method (e.g. affile_sd_free, NOT affile_sd_deinit)
  *
  * The reason:
@@ -615,6 +721,10 @@ log_reader_options_init(LogReaderOptions *options, GlobalConfig *cfg, const gcha
   if (options->check_hostname)
     {
       options->parse_options.flags |= LP_CHECK_HOSTNAME;
+    }
+  if (!options->super.keep_timestamp)
+    {
+      options->parse_options.flags |= LP_NO_PARSE_DATE;
     }
   if (options->parse_options.default_pri == 0xFFFF)
     {
@@ -651,7 +761,7 @@ CfgFlagHandler log_reader_flag_handlers[] =
 };
 
 gboolean
-log_reader_options_process_flag(LogReaderOptions *options, gchar *flag)
+log_reader_options_process_flag(LogReaderOptions *options, const gchar *flag)
 {
   if (!msg_format_options_process_flag(&options->parse_options, flag))
     return cfg_process_flag(log_reader_flag_handlers, options, flag);

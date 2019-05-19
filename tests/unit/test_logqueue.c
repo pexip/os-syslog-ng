@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 Balabit
+ * Copyright (c) 2008-2016 Balabit
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published
@@ -20,15 +20,17 @@
  *
  */
 
+#include <criterion/criterion.h>
+
 #include "logqueue.h"
 #include "logqueue-fifo.h"
 #include "logpipe.h"
 #include "apphook.h"
 #include "plugin.h"
 #include "mainloop.h"
-#include "tls-support.h"
 #include "mainloop-io-worker.h"
 #include "libtest/queue_utils_lib.h"
+#include "msg_parse_lib.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -36,61 +38,7 @@
 #include <iv_list.h>
 #include <iv_thread.h>
 
-MsgFormatOptions parse_options;
-
 #define OVERFLOW_SIZE 10000
-
-void
-testcase_zero_diskbuf_and_normal_acks()
-{
-  LogQueue *q;
-  gint i;
-
-  q = log_queue_fifo_new(OVERFLOW_SIZE, NULL);
-  log_queue_set_use_backlog(q, TRUE);
-
-  fed_messages = 0;
-  acked_messages = 0;
-  for (i = 0; i < 10; i++)
-    feed_some_messages(q, 10, &parse_options);
-
-  send_some_messages(q, fed_messages);
-  app_ack_some_messages(q, fed_messages);
-  if (fed_messages != acked_messages)
-    {
-      fprintf(stderr, "did not receive enough acknowledgements: fed_messages=%d, acked_messages=%d\n", fed_messages, acked_messages);
-      exit(1);
-    }
-
-  log_queue_unref(q);
-}
-
-void
-testcase_zero_diskbuf_alternating_send_acks()
-{
-  LogQueue *q;
-  gint i;
-
-  q = log_queue_fifo_new(OVERFLOW_SIZE, NULL);
-  log_queue_set_use_backlog(q, TRUE);
-
-  fed_messages = 0;
-  acked_messages = 0;
-  for (i = 0; i < 10; i++)
-    {
-      feed_some_messages(q, 10, &parse_options);
-      send_some_messages(q, 10);
-      app_ack_some_messages(q, 10);
-    }
-  if (fed_messages != acked_messages)
-    {
-      fprintf(stderr, "did not receive enough acknowledgements: fed_messages=%d, acked_messages=%d\n", fed_messages, acked_messages);
-      exit(1);
-    }
-
-  log_queue_unref(q);
-}
-
 #define FEEDERS 1
 #define MESSAGES_PER_FEEDER 30000
 #define MESSAGES_SUM (FEEDERS * MESSAGES_PER_FEEDER)
@@ -99,8 +47,8 @@ testcase_zero_diskbuf_alternating_send_acks()
 GStaticMutex tlock;
 glong sum_time;
 
-gpointer
-threaded_feed(gpointer args)
+static gpointer
+_threaded_feed(gpointer args)
 {
   LogQueue *q = args;
   char *msg_str = "<155>2006-02-11T10:34:56+01:00 bzorp syslog-ng[23323]: árvíztűrőtükörfúrógép";
@@ -113,7 +61,7 @@ threaded_feed(gpointer args)
   glong diff;
 
   iv_init();
-  
+
   /* emulate main loop for LogQueue */
   main_loop_worker_thread_start(NULL);
 
@@ -129,7 +77,7 @@ threaded_feed(gpointer args)
       msg->ack_func = test_ack;
 
       log_queue_push_tail(q, msg, &path_options);
-      
+
       if ((i & 0xFF) == 0)
         main_loop_worker_invoke_batch_callbacks();
     }
@@ -140,13 +88,13 @@ threaded_feed(gpointer args)
   sum_time += diff;
   g_static_mutex_unlock(&tlock);
   log_msg_unref(tmpl);
-  iv_deinit();
   main_loop_worker_thread_stop();
+  iv_deinit();
   return NULL;
 }
 
-gpointer
-threaded_consume(gpointer st)
+static gpointer
+_threaded_consume(gpointer st)
 {
   LogQueue *q = (LogQueue *) st;
   LogMessage *msg;
@@ -197,10 +145,12 @@ threaded_consume(gpointer st)
   return NULL;
 }
 
-gpointer
-output_thread(gpointer args)
+static gpointer
+_output_thread(gpointer args)
 {
   WorkerOptions wo;
+
+  iv_init();
   wo.is_output_thread = TRUE;
   main_loop_worker_thread_start(&wo);
   struct timespec ns;
@@ -215,7 +165,91 @@ output_thread(gpointer args)
 
 
 void
-testcase_with_threads()
+setup(void)
+{
+  app_startup();
+  setenv("TZ", "MET-1METDST", TRUE);
+  tzset();
+  init_and_load_syslogformat_module();
+  configuration->stats_options.level = 1;
+  cr_assert(cfg_init(configuration), "cfg_init failed!");
+}
+
+void
+teardown(void)
+{
+  deinit_syslogformat_module();
+  app_shutdown();
+}
+
+TestSuite(logqueue, .init = setup, .fini = teardown);
+
+Test(logqueue, test_zero_diskbuf_and_normal_acks)
+{
+  LogQueue *q;
+  gint i;
+
+  q = log_queue_fifo_new(OVERFLOW_SIZE, NULL);
+
+  StatsClusterKey sc_key;
+  stats_lock();
+  stats_cluster_logpipe_key_set(&sc_key, SCS_DESTINATION, q->persist_name, NULL );
+  stats_register_counter(0, &sc_key, SC_TYPE_QUEUED, &q->queued_messages);
+  stats_register_counter(1, &sc_key, SC_TYPE_MEMORY_USAGE, &q->memory_usage);
+  stats_unlock();
+
+  log_queue_set_use_backlog(q, TRUE);
+
+  cr_assert_eq(atomic_gssize_racy_get(&q->queued_messages->value), 0);
+
+  fed_messages = 0;
+  acked_messages = 0;
+  feed_some_messages(q, 1, &parse_options);
+  cr_assert_eq(stats_counter_get(q->queued_messages), 1);
+  cr_assert_neq(stats_counter_get(q->memory_usage), 0);
+  gint size_when_single_msg = stats_counter_get(q->memory_usage);
+
+  for (i = 0; i < 10; i++)
+    feed_some_messages(q, 10, &parse_options);
+
+  cr_assert_eq(stats_counter_get(q->queued_messages), 101);
+  cr_assert_eq(stats_counter_get(q->memory_usage), 101*size_when_single_msg);
+
+  send_some_messages(q, fed_messages);
+  app_ack_some_messages(q, fed_messages);
+
+  cr_assert_eq(fed_messages, acked_messages,
+               "did not receive enough acknowledgements: fed_messages=%d, acked_messages=%d",
+               fed_messages, acked_messages);
+
+  log_queue_unref(q);
+}
+
+Test(logqueue, test_zero_diskbuf_alternating_send_acks)
+{
+  LogQueue *q;
+  gint i;
+
+  q = log_queue_fifo_new(OVERFLOW_SIZE, NULL);
+  log_queue_set_use_backlog(q, TRUE);
+
+  fed_messages = 0;
+  acked_messages = 0;
+  for (i = 0; i < 10; i++)
+    {
+      feed_some_messages(q, 10, &parse_options);
+      send_some_messages(q, 10);
+      app_ack_some_messages(q, 10);
+    }
+
+  cr_assert_eq(fed_messages, acked_messages,
+               "did not receive enough acknowledgements: fed_messages=%d, acked_messages=%d",
+               fed_messages, acked_messages);
+
+  log_queue_unref(q);
+}
+
+Test(logqueue, test_with_threads)
 {
   LogQueue *q;
   GThread *thread_feed[FEEDERS], *thread_consume;
@@ -232,18 +266,18 @@ testcase_with_threads()
       for (j = 0; j < FEEDERS; j++)
         {
           fprintf(stderr,"starting feed thread %d\n",j);
-          other_threads[j] = g_thread_create(output_thread, NULL, TRUE, NULL);
-          thread_feed[j] = g_thread_create(threaded_feed, q, TRUE, NULL);
+          other_threads[j] = g_thread_create(_output_thread, NULL, TRUE, NULL);
+          thread_feed[j] = g_thread_create(_threaded_feed, q, TRUE, NULL);
         }
 
-      thread_consume = g_thread_create(threaded_consume, q, TRUE, NULL);
+      thread_consume = g_thread_create(_threaded_consume, q, TRUE, NULL);
 
       for (j = 0; j < FEEDERS; j++)
-      {
-        fprintf(stderr,"waiting for feed thread %d\n",j);
-        g_thread_join(thread_feed[j]);
-        g_thread_join(other_threads[j]);
-      }
+        {
+          fprintf(stderr,"waiting for feed thread %d\n",j);
+          g_thread_join(thread_feed[j]);
+          g_thread_join(other_threads[j]);
+        }
       g_thread_join(thread_consume);
 
       log_queue_unref(q);
@@ -251,26 +285,27 @@ testcase_with_threads()
   fprintf(stderr, "Feed speed: %.2lf\n", (double) TEST_RUNS * MESSAGES_SUM * 1000000 / sum_time);
 }
 
-int
-main()
+Test(logqueue, log_queue_fifo_rewind_all_and_memory_usage)
 {
-  app_startup();
-  putenv("TZ=MET-1METDST");
-  tzset();
+  LogQueue *q = log_queue_fifo_new(OVERFLOW_SIZE, NULL);
+  log_queue_set_use_backlog(q, TRUE);
 
-  configuration = cfg_new(0x0302);
-  plugin_load_module("syslogformat", configuration, NULL);
-  msg_format_options_defaults(&parse_options);
-  msg_format_options_init(&parse_options, configuration);
+  StatsClusterKey sc_key;
+  stats_lock();
+  stats_cluster_logpipe_key_set(&sc_key, SCS_DESTINATION, q->persist_name, NULL );
+  stats_register_counter(1, &sc_key, SC_TYPE_MEMORY_USAGE, &q->memory_usage);
+  stats_unlock();
 
-  fprintf(stderr,"Start testcase_with_threads\n");
-  testcase_with_threads();
+  feed_some_messages(q, 1, &parse_options);
+  gint size_when_single_msg = stats_counter_get(q->memory_usage);
 
-#if 1
-  fprintf(stderr,"Start testcase_zero_diskbuf_alternating_send_acks\n");
-  testcase_zero_diskbuf_alternating_send_acks();
-  fprintf(stderr,"Start testcase_zero_diskbuf_and_normal_acks\n");
-  testcase_zero_diskbuf_and_normal_acks();
-#endif
-  return 0;
+  feed_some_messages(q, 9, &parse_options);
+  cr_assert_eq(stats_counter_get(q->memory_usage), 10*size_when_single_msg);
+
+  send_some_messages(q, 10);
+  cr_assert_eq(stats_counter_get(q->memory_usage), 0);
+  log_queue_rewind_backlog_all(q);
+  cr_assert_eq(stats_counter_get(q->memory_usage), 10*size_when_single_msg);
+
+  log_queue_unref(q);
 }

@@ -110,7 +110,7 @@ log_proto_file_writer_flush(LogProtoClient *s)
       self->partial = (guchar *)g_malloc(self->partial_len);
       ofs = sum - rc; /* the length of the remaning (not processed) chunk in the first message */
       pos = self->buffer[i0].iov_len - ofs;
-      memcpy(self->partial, self->buffer[i0].iov_base + pos, ofs);
+      memcpy(self->partial, (guchar *) self->buffer[i0].iov_base + pos, ofs);
       i = i0 + 1;
       while (i < self->buf_count)
         {
@@ -129,12 +129,12 @@ log_proto_file_writer_flush(LogProtoClient *s)
 
   return LPS_SUCCESS;
 
- write_error:
+write_error:
   if (errno != EINTR && errno != EAGAIN)
     {
       msg_error("I/O error occurred while writing",
                 evt_tag_int("fd", self->super.transport->fd),
-                evt_tag_errno(EVT_TAG_OSERROR, errno));
+                evt_tag_error(EVT_TAG_OSERROR));
       return LPS_ERROR;
     }
 
@@ -154,7 +154,7 @@ log_proto_file_writer_flush(LogProtoClient *s)
  * successfully sent this message, or if it should be resent by the caller.
  **/
 static LogProtoStatus
-log_proto_file_writer_post(LogProtoClient *s, guchar *msg, gsize msg_len, gboolean *consumed)
+log_proto_file_writer_post(LogProtoClient *s, LogMessage *logmsg, guchar *msg, gsize msg_len, gboolean *consumed)
 {
   LogProtoFileWriter *self = (LogProtoFileWriter *)s;
   LogProtoStatus result;
@@ -179,21 +179,20 @@ log_proto_file_writer_post(LogProtoClient *s, guchar *msg, gsize msg_len, gboole
   ++self->buf_count;
   self->sum_len += msg_len;
 
+  *consumed = TRUE;
+  log_proto_client_msg_ack(&self->super, 1);
+
   if (self->buf_count == self->buf_size)
     {
       /* we have reached the max buffer size -> we need to write the messages */
-      result = log_proto_file_writer_flush(s);
-      if (result != LPS_SUCCESS)
-        return result;
+      return log_proto_file_writer_flush(s);
     }
 
-  *consumed = TRUE;
-  log_proto_client_msg_ack(&self->super, 1);
   return LPS_SUCCESS;
 }
 
 static gboolean
-log_proto_file_writer_prepare(LogProtoClient *s, gint *fd, GIOCondition *cond)
+log_proto_file_writer_prepare(LogProtoClient *s, gint *fd, GIOCondition *cond, gint *timeout)
 {
   LogProtoFileWriter *self = (LogProtoFileWriter *) s;
 
@@ -219,7 +218,8 @@ log_proto_file_writer_new(LogTransport *transport, const LogProtoClientOptions *
 #endif
 
   /* allocate the structure with the proper number of items at the end */
-  LogProtoFileWriter *self = (LogProtoFileWriter *)g_malloc0(sizeof(LogProtoFileWriter) + sizeof(struct iovec)*flush_lines);
+  LogProtoFileWriter *self = (LogProtoFileWriter *)g_malloc0(sizeof(LogProtoFileWriter) + sizeof(
+      struct iovec)*flush_lines);
 
   log_proto_client_init(&self->super, transport, options);
   self->fd = transport->fd;

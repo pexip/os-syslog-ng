@@ -27,6 +27,8 @@
 
 #include "syslog-ng.h"
 #include "cfg-args.h"
+#include "cfg-block-generator.h"
+#include "messages.h"
 
 #include <stdio.h>
 #include <setjmp.h>
@@ -38,9 +40,6 @@
 
 typedef struct _CfgIncludeLevel CfgIncludeLevel;
 typedef struct _CfgTokenBlock CfgTokenBlock;
-typedef struct _CfgBlockGenerator CfgBlockGenerator;
-typedef struct _CfgBlock CfgBlock;
-typedef struct _CfgLexer CfgLexer;
 
 /* the location type to carry location information from the lexer to the grammar */
 #define YYLTYPE YYLTYPE
@@ -86,13 +85,7 @@ typedef struct _CfgLexerKeyword
 
 #define CFG_KEYWORD_STOP "@!#?"
 
-/* a block generator is a function that includes a configuration file
- * snippet in place to the block reference.  This is used by the
- * "block" statement, but can also be used by external plugins to
- * generate configuration snippets programmatically.  That code
- * however is missing as of now.  (though would be trivial to add)
- */
-typedef gboolean (*CfgBlockGeneratorFunc)(CfgLexer *lexer, gint type, const gchar *name, CfgArgs *args, gpointer user_data);
+
 
 /* structure that describes a given location in the include stack */
 struct _CfgIncludeLevel
@@ -113,6 +106,9 @@ struct _CfgIncludeLevel
     } file;
     struct
     {
+      /* the lexer mutates content, so save it for error reporting */
+      gchar *original_content;
+      /* buffer for the lexer */
       gchar *content;
       gsize content_length;
     } buffer;
@@ -137,28 +133,22 @@ struct _CfgLexer
   gint brace_count;
   gint tokenize_eol;
   GList *token_blocks;
-  GList *generators;
   GString *string_buffer;
   GString *preprocess_output;
   gint preprocess_suppress_tokens;
   GString *token_pretext;
   GString *token_text;
-  CfgArgs *globals;
+  GlobalConfig *cfg;
   gboolean non_pragma_seen:1, ignore_pragma:1;
 };
-
-/* preprocessor help */
-gchar *
-cfg_lexer_subst_args(CfgArgs *globals, CfgArgs *defs, CfgArgs *args, const gchar *input, gssize input_length, gsize *output_length, GError **error);
 
 /* pattern buffer */
 void cfg_lexer_unput_token(CfgLexer *self, YYSTYPE *yylval);
 
-void cfg_lexer_start_block_state(CfgLexer *self, gchar block_boundary[2]);
+void cfg_lexer_start_block_state(CfgLexer *self, const gchar block_boundary[2]);
 
 void cfg_lexer_append_string(CfgLexer *self, int length, char *str);
 void cfg_lexer_append_char(CfgLexer *self, char c);
-
 
 /* keyword handling */
 void cfg_lexer_set_current_keywords(CfgLexer *self, CfgLexerKeyword *keywords);
@@ -169,6 +159,10 @@ int cfg_lexer_lookup_keyword(CfgLexer *self, YYSTYPE *yylval, YYLTYPE *yylloc, c
 gboolean cfg_lexer_start_next_include(CfgLexer *self);
 gboolean cfg_lexer_include_file(CfgLexer *self, const gchar *filename);
 gboolean cfg_lexer_include_buffer(CfgLexer *self, const gchar *name, const gchar *buffer, gssize length);
+gboolean cfg_lexer_include_buffer_without_backtick_substitution(CfgLexer *self,
+    const gchar *name, const gchar *buffer, gsize length);
+const gchar *cfg_lexer_format_location(CfgLexer *self, YYLTYPE *yylloc, gchar *buf, gsize buf_len);
+EVTTAG *cfg_lexer_format_location_tag(CfgLexer *self, YYLTYPE *yylloc);
 
 /* context tracking */
 void cfg_lexer_push_context(CfgLexer *self, gint context, CfgLexerKeyword *keywords, const gchar *desc);
@@ -178,13 +172,12 @@ gint cfg_lexer_get_context_type(CfgLexer *self);
 
 /* token blocks */
 void cfg_lexer_inject_token_block(CfgLexer *self, CfgTokenBlock *block);
-gboolean cfg_lexer_register_block_generator(CfgLexer *self, gint context, const gchar *name, CfgBlockGeneratorFunc generator, gpointer user_data, GDestroyNotify user_data_free);
 
 int cfg_lexer_lex(CfgLexer *self, YYSTYPE *yylval, YYLTYPE *yylloc);
 void cfg_lexer_free_token(YYSTYPE *token);
 
-CfgLexer *cfg_lexer_new(FILE *file, const gchar *filename, GString *preprocess_output);
-CfgLexer *cfg_lexer_new_buffer(const gchar *buffer, gsize length);
+CfgLexer *cfg_lexer_new(GlobalConfig *cfg, FILE *file, const gchar *filename, GString *preprocess_output);
+CfgLexer *cfg_lexer_new_buffer(GlobalConfig *cfg, const gchar *buffer, gsize length);
 void  cfg_lexer_free(CfgLexer *self);
 
 gint cfg_lexer_lookup_context_type_by_name(const gchar *name);
@@ -199,11 +192,8 @@ YYSTYPE *cfg_token_block_get_token(CfgTokenBlock *self);
 CfgTokenBlock *cfg_token_block_new(void);
 void cfg_token_block_free(CfgTokenBlock *self);
 
-/* user defined configuration block */
+void cfg_lexer_register_generator_plugin(PluginContext *context, CfgBlockGenerator *gen);
 
-gboolean cfg_block_generate(CfgLexer *lexer, gint context, const gchar *name, CfgArgs *args, gpointer user_data);
-CfgBlock *cfg_block_new(const gchar *content, CfgArgs *arg_defs);
-void cfg_block_free(CfgBlock *self);
 
 #define CFG_LEXER_ERROR cfg_lexer_error_quark()
 

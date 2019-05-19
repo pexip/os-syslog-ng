@@ -32,7 +32,11 @@ typedef struct _ContextInfoDB ContextInfoDB;
 typedef void (*ADD_CONTEXT_INFO_CB) (gpointer arg,
                                      const ContextualDataRecord *record);
 
-ContextInfoDB *context_info_db_new();
+void context_info_db_enable_ordering(ContextInfoDB *self);
+GList *context_info_db_ordered_selectors(ContextInfoDB *self);
+ContextInfoDB *context_info_db_new(void);
+void context_info_db_set_ignore_case(ContextInfoDB *self, gboolean ignore);
+void context_info_db_init(ContextInfoDB *self);
 void context_info_db_free(ContextInfoDB *self);
 
 ContextInfoDB *context_info_db_ref(ContextInfoDB *self);

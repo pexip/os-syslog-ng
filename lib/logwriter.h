@@ -21,7 +21,7 @@
  * COPYING for details.
  *
  */
-  
+
 #ifndef LOG_WRITER_H_INCLUDED
 #define LOG_WRITER_H_INCLUDED
 
@@ -53,16 +53,14 @@ typedef struct _LogWriterOptions
   gboolean initialized;
   /* bitmask of LWO_* */
   guint32 options;
-  
+
   /* minimum number of entries to trigger a flush */
   gint flush_lines;
-  
-  /* flush anyway if this time was elapsed */
-  gint flush_timeout;
+
   LogTemplate *template;
   LogTemplate *file_template;
   LogTemplate *proto_template;
-  
+
   LogTemplateOptions template_options;
   HostResolveOptions host_resolve_options;
   LogProtoClientOptionsStorage proto_options;
@@ -72,13 +70,16 @@ typedef struct _LogWriterOptions
   gint padding;
   gint mark_mode;
   gint mark_freq;
+  gint stats_level;
+  gint stats_source;
 } LogWriterOptions;
 
 typedef struct _LogWriter LogWriter;
 
 void log_writer_set_flags(LogWriter *self, guint32 flags);
 guint32 log_writer_get_flags(LogWriter *self);
-void log_writer_set_options(LogWriter *self, LogPipe *control, LogWriterOptions *options, gint stats_level, gint stats_source, const gchar *stats_id, const gchar *stats_instance);
+void log_writer_set_options(LogWriter *self, LogPipe *control, LogWriterOptions *options, const gchar *stats_id,
+                            const gchar *stats_instance);
 void log_writer_format_log(LogWriter *self, LogMessage *lm, GString *result);
 gboolean log_writer_has_pending_writes(LogWriter *self);
 gboolean log_writer_opened(LogWriter *self);
@@ -86,12 +87,13 @@ void log_writer_reopen(LogWriter *self, LogProtoClient *proto);
 void log_writer_set_queue(LogWriter *self, LogQueue *queue);
 LogQueue *log_writer_get_queue(LogWriter *s);
 LogWriter *log_writer_new(guint32 flags, GlobalConfig *cfg);
+void log_writer_msg_rewind(LogWriter *self);
 
 void log_writer_options_set_template_escape(LogWriterOptions *options, gboolean enable);
 void log_writer_options_defaults(LogWriterOptions *options);
 void log_writer_options_init(LogWriterOptions *options, GlobalConfig *cfg, guint32 option_flags);
 void log_writer_options_destroy(LogWriterOptions *options);
-void log_writer_options_set_mark_mode(LogWriterOptions *options, gchar *mark_mode);
+void log_writer_options_set_mark_mode(LogWriterOptions *options, const gchar *mark_mode);
 gint log_writer_options_lookup_flag(const gchar *flag);
 
 #endif

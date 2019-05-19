@@ -33,6 +33,7 @@
 #include <sys/mman.h>
 #include <errno.h>
 #include <string.h>
+#include <signal.h>
 
 typedef struct _PersistFileHeader
 {
@@ -59,6 +60,13 @@ typedef struct _PersistFileHeader
 
 #define PERSIST_FILE_INITIAL_SIZE 16384
 #define PERSIST_STATE_KEY_BLOCK_SIZE 4096
+#define PERSIST_FILE_WATERMARK 4096
+
+typedef struct
+{
+  void (*handler)(gpointer user_data);
+  gpointer cookie;
+} PersistStateErrorHandler;
 
 /*
  * The syslog-ng persistent state is a set of name-value pairs,
@@ -130,7 +138,7 @@ typedef struct _PersistFileHeader
 struct _PersistState
 {
   gint version;
-  gchar *commited_filename;
+  gchar *committed_filename;
   gchar *temp_filename;
   gint fd;
   gint mapped_counter;
@@ -140,6 +148,7 @@ struct _PersistState
   guint32 current_ofs;
   gpointer current_map;
   PersistFileHeader *header;
+  PersistStateErrorHandler error_handler;
 
   /* keys being used */
   GHashTable *keys;
@@ -165,12 +174,30 @@ typedef struct _PersistValueHeader
 /* lowest layer, "store" functions manage the file on disk */
 
 static void
-_wait_until_map_release(PersistState* self)
+_wait_until_map_release(PersistState *self)
 {
   g_mutex_lock(self->mapped_lock);
-  if (self->mapped_counter != 0)
+  while (self->mapped_counter)
     g_cond_wait(self->mapped_release_cond, self->mapped_lock);
-  g_assert(self->mapped_counter == 0);
+}
+
+static gboolean
+_increase_file_size(PersistState *self, guint32 new_size)
+{
+  gboolean result = TRUE;
+  ssize_t length = new_size - self->current_size;
+  gchar *pad_buffer = g_new0(gchar, length);
+  ssize_t rc = pwrite(self->fd, pad_buffer, length, self->current_size);
+  if (rc != length)
+    {
+      msg_error("Can't grow the persist file",
+                evt_tag_int("old_size", self->current_size),
+                evt_tag_int("new_size", new_size),
+                evt_tag_str("error", rc < 0 ? g_strerror(errno) : "short write"));
+      result = FALSE;
+    }
+  g_free(pad_buffer);
+  return result;
 }
 
 static gboolean
@@ -188,12 +215,9 @@ _grow_store(PersistState *self, guint32 new_size)
 
   if (new_size > self->current_size)
     {
-      gchar zero = 0;
+      if (!_increase_file_size(self, new_size))
+        goto exit;
 
-      if (lseek(self->fd, new_size - 1, SEEK_SET) < 0)
-        goto exit;
-      if (write(self->fd, &zero, 1) != 1)
-        goto exit;
       if (self->current_map)
         munmap(self->current_map, self->current_size);
       self->current_size = new_size;
@@ -220,7 +244,7 @@ _create_store(PersistState *self)
     {
       msg_error("Error creating persistent state file",
                 evt_tag_str("filename", self->temp_filename),
-                evt_tag_errno("error", errno));
+                evt_tag_error("error"));
       return FALSE;
     }
   g_fd_set_cloexec(self->fd, TRUE);
@@ -234,7 +258,26 @@ static gboolean
 _commit_store(PersistState *self)
 {
   /* NOTE: we don't need to remap the file in case it is renamed */
-  return rename(self->temp_filename, self->commited_filename) >= 0;
+  return rename(self->temp_filename, self->committed_filename) >= 0;
+}
+
+static gboolean
+_check_watermark(PersistState *self)
+{
+  return (self->current_ofs + PERSIST_FILE_WATERMARK < self->current_size);
+}
+
+static inline gboolean
+_check_free_space(PersistState *self, guint32 size)
+{
+  return (size + sizeof(PersistValueHeader) +  self->current_ofs) <= self->current_size;
+}
+
+static void
+persist_state_run_error_handler(PersistState *self)
+{
+  if (self->error_handler.handler)
+    self->error_handler.handler(self->error_handler.cookie);
 }
 
 /* "value" layer that handles memory block allocation in the file, without working with keys */
@@ -250,10 +293,10 @@ _alloc_value(PersistState *self, guint32 orig_size, gboolean in_use, guint8 vers
   if ((size & 0x7))
     size = ((size >> 3) + 1) << 3;
 
-  if (self->current_ofs + size + sizeof(PersistValueHeader) > self->current_size)
+  if (!_check_free_space(self, size))
     {
-      if (!_grow_store(self, self->current_size + sizeof(PersistValueHeader) + size))
-        return 0;
+      msg_error("No more free space exhausted in persist file");
+      return 0;
     }
 
   result = self->current_ofs + sizeof(PersistValueHeader);
@@ -266,6 +309,15 @@ _alloc_value(PersistState *self, guint32 orig_size, gboolean in_use, guint8 vers
   persist_state_unmap_entry(self, self->current_ofs);
 
   self->current_ofs += size + sizeof(PersistValueHeader);
+
+  if (!_check_watermark(self) && !_grow_store(self, self->current_size + PERSIST_FILE_INITIAL_SIZE))
+    {
+      msg_error("Can't preallocate space for persist file",
+                evt_tag_int("current", self->current_size),
+                evt_tag_int("new_size", self->current_size + PERSIST_FILE_INITIAL_SIZE));
+      persist_state_run_error_handler(self);
+    }
+
   return result;
 }
 
@@ -346,7 +398,6 @@ static gboolean
 _add_key(PersistState *self, const gchar *key, PersistEntryHandle handle)
 {
   PersistEntry *entry;
-  gpointer key_area;
   gboolean new_block_created = FALSE;
   SerializeArchive *sa;
 
@@ -365,10 +416,11 @@ _add_key(PersistState *self, const gchar *key, PersistEntryHandle handle)
       guint32 chain_size = sizeof(guint32) + sizeof(guint32);
       gboolean success;
 
-      key_area = persist_state_map_entry(self, self->current_key_block);
+      gchar *key_area = persist_state_map_entry(self, self->current_key_block);
 
       /* we reserve space for the next area pointer */
-      sa = serialize_buffer_archive_new(key_area + self->current_key_ofs, self->current_key_size - self->current_key_ofs - chain_size);
+      sa = serialize_buffer_archive_new(key_area + self->current_key_ofs,
+                                        self->current_key_size - self->current_key_ofs - chain_size);
       sa->silent = TRUE;
       success =
         serialize_write_cstring(sa, key, -1) &&
@@ -422,7 +474,8 @@ _add_key(PersistState *self, const gchar *key, PersistEntryHandle handle)
         }
       else
         {
-          self->header->key_count = GUINT32_TO_BE(GUINT32_FROM_BE(self->header->key_count) + 1);
+          const guint32 key_count = GUINT32_FROM_BE(self->header->key_count);
+          self->header->key_count = GUINT32_TO_BE(key_count + 1);
           self->current_key_ofs += serialize_buffer_archive_get_pos(sa);
           serialize_archive_free(sa);
           persist_state_unmap_entry(self, self->current_key_block);
@@ -446,12 +499,11 @@ _load_v23(PersistState *self, gint version, SerializeArchive *sa)
       guint32 str_len;
       if (key[0] && serialize_read_cstring(sa, &value, &len))
         {
-          gpointer new_block;
           PersistEntryHandle new_handle;
 
           /*  add length of the string */
           new_handle = _alloc_value(self, len + sizeof(str_len), FALSE, version);
-          new_block = persist_state_map_entry(self, new_handle);
+          gchar *new_block = persist_state_map_entry(self, new_handle);
 
           /* NOTE: we add an extra length field to the old value, as our
            * persist_state_lookup_string() needs that.
@@ -488,7 +540,7 @@ _load_v4(PersistState *self, gboolean load_all_entries)
   PersistFileHeader *header;
   gint key_count, i;
 
-  fd = open(self->commited_filename, O_RDONLY);
+  fd = open(self->committed_filename, O_RDONLY);
   if (fd < 0)
     {
       /* no previous data found */
@@ -499,8 +551,9 @@ _load_v4(PersistState *self, gboolean load_all_entries)
   if (file_size > ((1LL << 31) - 1))
     {
       msg_error("Persistent file too large",
-                evt_tag_str("filename", self->commited_filename),
+                evt_tag_str("filename", self->committed_filename),
                 evt_tag_printf("size", "%" G_GINT64_FORMAT, file_size));
+      close(fd);
       return FALSE;
     }
   map = mmap(NULL, file_size, PROT_READ, MAP_SHARED, fd, 0);
@@ -508,8 +561,8 @@ _load_v4(PersistState *self, gboolean load_all_entries)
   if (map == MAP_FAILED)
     {
       msg_error("Error mapping persistent file into memory",
-                evt_tag_str("filename", self->commited_filename),
-                evt_tag_errno("error", errno));
+                evt_tag_str("filename", self->committed_filename),
+                evt_tag_error("error"));
       return FALSE;
     }
   header = (PersistFileHeader *) map;
@@ -609,7 +662,7 @@ _load_v4(PersistState *self, gboolean load_all_entries)
         }
       serialize_archive_free(sa);
     }
- free_and_exit:
+free_and_exit:
   munmap(map, file_size);
   return TRUE;
 }
@@ -620,7 +673,7 @@ _load(PersistState *self, gboolean all_errors_are_fatal, gboolean load_all_entri
   FILE *persist_file;
   gboolean success = FALSE;
 
-  persist_file = fopen(self->commited_filename, "r");
+  persist_file = fopen(self->committed_filename, "r");
   if (persist_file)
     {
       SerializeArchive *sa;
@@ -650,19 +703,19 @@ _load(PersistState *self, gboolean all_errors_are_fatal, gboolean load_all_entri
                     evt_tag_int("version", version));
           success = TRUE;
         }
-    close_and_exit:
+close_and_exit:
       fclose(persist_file);
       serialize_archive_free(sa);
     }
   else
     {
       if (all_errors_are_fatal)
-      {
-        msg_error("Failed to open persist file!",
-                    evt_tag_str("filename", self->commited_filename),
+        {
+          msg_error("Failed to open persist file!",
+                    evt_tag_str("filename", self->committed_filename),
                     evt_tag_str("error", strerror(errno)));
-        success = FALSE;
-      }
+          success = FALSE;
+        }
       else
         success = TRUE;
     }
@@ -772,9 +825,9 @@ persist_state_remove_entry(PersistState *self, const gchar *key)
 
 typedef struct _PersistStateKeysForeachData
 {
-   PersistStateForeachFunc func;
-   gpointer userdata;
-   PersistState* storage;
+  PersistStateForeachFunc func;
+  gpointer userdata;
+  PersistState *storage;
 } PersistStateKeysForeachData;
 
 static void
@@ -863,7 +916,7 @@ persist_state_alloc_string(PersistState *self, const gchar *persist_name, const 
 const gchar *
 persist_state_get_filename(PersistState *self)
 {
-  return self->commited_filename;
+  return self->committed_filename;
 }
 
 gboolean
@@ -927,12 +980,12 @@ _destroy(PersistState *self)
   g_mutex_free(self->mapped_lock);
   g_cond_free(self->mapped_release_cond);
   g_free(self->temp_filename);
-  g_free(self->commited_filename);
+  g_free(self->committed_filename);
   g_hash_table_destroy(self->keys);
 }
 
 static void
-_init(PersistState* self, gchar* commited_filename, gchar* temp_filename)
+_init(PersistState *self, gchar *committed_filename, gchar *temp_filename)
 {
   self->keys = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
   self->current_ofs = sizeof(PersistFileHeader);
@@ -940,7 +993,7 @@ _init(PersistState* self, gchar* commited_filename, gchar* temp_filename)
   self->mapped_release_cond = g_cond_new();
   self->version = 4;
   self->fd = -1;
-  self->commited_filename = commited_filename;
+  self->committed_filename = committed_filename;
   self->temp_filename = temp_filename;
 }
 
@@ -951,15 +1004,15 @@ _init(PersistState* self, gchar* commited_filename, gchar* temp_filename)
 void
 persist_state_cancel(PersistState *self)
 {
-  gchar *commited_filename, *temp_filename;
-  commited_filename = g_strdup(self->commited_filename);
+  gchar *committed_filename, *temp_filename;
+  committed_filename = g_strdup(self->committed_filename);
   temp_filename = g_strdup(self->temp_filename);
 
   _destroy(self);
 
   memset(self, 0, sizeof(*self));
 
-  _init(self, commited_filename, temp_filename);
+  _init(self, committed_filename, temp_filename);
 }
 
 PersistState *
@@ -976,4 +1029,11 @@ persist_state_free(PersistState *self)
 {
   _destroy(self);
   g_free(self);
+}
+
+void
+persist_state_set_global_error_handler(PersistState *self, void (*handler)(gpointer user_data), gpointer user_data)
+{
+  self->error_handler.handler = handler;
+  self->error_handler.cookie = user_data;
 }

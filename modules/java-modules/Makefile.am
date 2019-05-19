@@ -47,6 +47,7 @@ EXTRA_DIST += \
 	modules/java-modules/http/build.gradle   \
 	modules/java-modules/settings.gradle \
 	modules/java-modules/build.gradle \
+	modules/java-modules/internal_repositories.gradle \
 	modules/java-modules/elastic/src/main/java/org/syslog_ng/elasticsearch/messageprocessor/ESMessageProcessor.java \
 	modules/java-modules/elastic/src/main/java/org/syslog_ng/elasticsearch/messageprocessor/DummyProcessor.java \
 	modules/java-modules/elastic/src/main/java/org/syslog_ng/elasticsearch/messageprocessor/ESBulkMessageProcessor.java \
@@ -86,6 +87,7 @@ EXTRA_DIST += \
 	modules/java-modules/common/src/test/java/org/syslog_ng/logging/test/MockLogDestination.java \
 	modules/java-modules/hdfs/src/main/java/org/syslog_ng/hdfs/HdfsDestination.java \
 	modules/java-modules/hdfs/src/main/java/org/syslog_ng/hdfs/HdfsOptions.java \
+	modules/java-modules/hdfs/src/main/java/org/syslog_ng/hdfs/HdfsFile.java \
 	modules/java-modules/http/src/main/java/org/syslog_ng/http/HTTPDestination.java \
 	modules/java-modules/http/src/main/java/org/syslog_ng/http/HTTPDestinationOptions.java \
 	modules/java-modules/dummy/src/main/java/org/syslog_ng/DummyTextDestination.java \
@@ -104,8 +106,21 @@ EXTRA_DIST += \
 	modules/java-modules/elastic-v2/src/main/java/org/syslog_ng/elasticsearch_v2/client/UnknownESClientModeException.java \
 	modules/java-modules/elastic-v2/src/main/java/org/syslog_ng/elasticsearch_v2/client/ESClientFactory.java \
 	modules/java-modules/elastic-v2/src/main/java/org/syslog_ng/elasticsearch_v2/ElasticSearchOptions.java \
-	modules/java-modules/elastic-v2/src/main/java/org/syslog_ng/elasticsearch_v2/client/esnative/ESTransportShieldClient.java \
+	modules/java-modules/elastic-v2/src/main/java/org/syslog_ng/elasticsearch_v2/client/esnative/ESTransportSearchGuardClient.java \
 	modules/java-modules/elastic-v2/src/main/java/org/syslog_ng/elasticsearch_v2/client/http/ESHttpClient.java \
+	modules/java-modules/elastic-v2/src/main/java/org/syslog_ng/elasticsearch_v2/client/http/ESHttpsClient.java \
 	modules/java-modules/elastic-v2/src/main/java/org/syslog_ng/elasticsearch_v2/messageprocessor/http/HttpBulkMessageProcessor.java \
 	modules/java-modules/elastic-v2/src/main/java/org/syslog_ng/elasticsearch_v2/messageprocessor/http/HttpMessageProcessor.java \
-	modules/java-modules/elastic-v2/src/main/java/org/syslog_ng/elasticsearch_v2/messageprocessor/http/HttpSingleMessageProcessor.java
+	modules/java-modules/elastic-v2/src/main/java/org/syslog_ng/elasticsearch_v2/messageprocessor/http/HttpSingleMessageProcessor.java \
+	modules/java-modules/kafka/src/test/java/org/syslog_ng/test/MockLogDestination.java \
+	modules/java-modules/kafka/src/test/java/org/syslog_ng/test/TestBooleanOptionDecorator.java \
+	modules/java-modules/kafka/src/test/java/org/syslog_ng/test/TestEnumOptionDecorator.java \
+	modules/java-modules/kafka/src/test/java/org/syslog_ng/test/TestIntegerOptionDecorator.java \
+	modules/java-modules/kafka/src/test/java/org/syslog_ng/test/TestIntegerRangeCheckOptionDecorator.java \
+	modules/java-modules/kafka/src/test/java/org/syslog_ng/test/TestOption.java \
+	modules/java-modules/kafka/src/test/java/org/syslog_ng/test/TestPortCheckDecorator.java \
+	modules/java-modules/kafka/src/test/java/org/syslog_ng/test/TestRequiredOptionDecorator.java \
+	modules/java-modules/kafka/src/test/java/org/syslog_ng/test/TestStringOption.java \
+	modules/java-modules/CMakeLists.txt \
+	modules/java-modules/common/README.md	\
+	modules/java/README.md

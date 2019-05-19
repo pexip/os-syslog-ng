@@ -23,9 +23,9 @@
 
 #include "logproto-regexp-multiline-server.h"
 #include "messages.h"
+#include "compat/pcre.h"
 
 #include <string.h>
-#include <pcre.h>
 
 struct _MultiLineRegexp
 {
@@ -48,7 +48,8 @@ multi_line_regexp_compile(const gchar *regexp, GError **error)
   self->pattern = pcre_compile2(regexp, 0, &rc, &errptr, &erroffset, NULL);
   if (!self->pattern)
     {
-      g_set_error(error, 0, 0, "Error while compiling multi-line regexp as a PCRE expression, error=%s, error_at=%d", errptr, erroffset);
+      g_set_error(error, 0, 0, "Error while compiling multi-line regexp as a PCRE expression, error=%s, error_at=%d", errptr,
+                  erroffset);
       goto error;
     }
 
@@ -65,7 +66,7 @@ multi_line_regexp_compile(const gchar *regexp, GError **error)
     }
 
   return self;
- error:
+error:
   if (self->pattern)
     pcre_free(self->pattern);
   g_free(self);
@@ -80,7 +81,7 @@ multi_line_regexp_free(MultiLineRegexp *self)
       if (self->pattern)
         pcre_free(self->pattern);
       if (self->extra)
-        pcre_free(self->extra);
+        pcre_free_study(self->extra);
       g_free(self);
     }
 }
@@ -91,7 +92,7 @@ struct _LogProtoREMultiLineServer
   /* these are borrowed */
   MultiLineRegexp *prefix;
   MultiLineRegexp *garbage;
-  gint (*get_offset_of_garbage)(LogProtoREMultiLineServer *self, const guchar* line, gsize line_len);
+  gint (*get_offset_of_garbage)(LogProtoREMultiLineServer *self, const guchar *line, gsize line_len);
 };
 
 static int
@@ -116,7 +117,8 @@ _regexp_matches(MultiLineRegexp *re, const guchar *str, gsize len)
 }
 
 gint
-log_proto_prefix_garbage_multiline_get_offset_of_garbage(LogProtoREMultiLineServer *self, const guchar* line, gsize line_len)
+log_proto_prefix_garbage_multiline_get_offset_of_garbage(LogProtoREMultiLineServer *self, const guchar *line,
+                                                         gsize line_len)
 {
   gint match[3];
   if (_find_regexp(self->garbage, line, line_len, match, 1) < 0)
@@ -125,7 +127,8 @@ log_proto_prefix_garbage_multiline_get_offset_of_garbage(LogProtoREMultiLineServ
 };
 
 gint
-log_proto_prefix_suffix_multiline_get_offset_of_garbage(LogProtoREMultiLineServer *self, const guchar* line, gsize line_len)
+log_proto_prefix_suffix_multiline_get_offset_of_garbage(LogProtoREMultiLineServer *self, const guchar *line,
+                                                        gsize line_len)
 {
   gint match[3];
   if (_find_regexp(self->garbage, line, line_len, match, 1) < 0)
@@ -203,6 +206,21 @@ log_proto_regexp_multiline_accumulate_line(LogProtoTextServer *s,
     }
 }
 
+static gboolean
+log_proto_regexp_multi_line_server_validate_options(LogProtoServer *s)
+{
+  LogProtoREMultiLineServer *self = (LogProtoREMultiLineServer *) s;
+
+  if (!self->prefix &&
+      !self->garbage)
+    {
+      msg_error("To follow files in multi-line-mode() 'regexp', 'prefix-garbage', 'prefix-suffix', "
+                "please also specify regexps using the multi-line-prefix/garbage options");
+      return FALSE;
+    }
+  return log_proto_text_server_validate_options_method(s);
+}
+
 void
 log_proto_regexp_multiline_server_init(LogProtoREMultiLineServer *self,
                                        LogTransport *transport,
@@ -211,6 +229,7 @@ log_proto_regexp_multiline_server_init(LogProtoREMultiLineServer *self,
                                        MultiLineRegexp *garbage_or_suffix)
 {
   log_proto_text_server_init(&self->super, transport, options);
+  self->super.super.super.validate_options = log_proto_regexp_multi_line_server_validate_options;
   self->super.accumulate_line = log_proto_regexp_multiline_accumulate_line;
   self->prefix = prefix;
   self->garbage = garbage_or_suffix;
@@ -218,9 +237,9 @@ log_proto_regexp_multiline_server_init(LogProtoREMultiLineServer *self,
 
 LogProtoServer *
 log_proto_prefix_garbage_multiline_server_new(LogTransport *transport,
-                                      const LogProtoServerOptions *options,
-                                      MultiLineRegexp *prefix,
-                                      MultiLineRegexp *garbage)
+                                              const LogProtoServerOptions *options,
+                                              MultiLineRegexp *prefix,
+                                              MultiLineRegexp *garbage)
 {
   LogProtoREMultiLineServer *self = g_new0(LogProtoREMultiLineServer, 1);
 
@@ -231,9 +250,9 @@ log_proto_prefix_garbage_multiline_server_new(LogTransport *transport,
 
 LogProtoServer *
 log_proto_prefix_suffix_multiline_server_new(LogTransport *transport,
-                                      const LogProtoServerOptions *options,
-                                      MultiLineRegexp *prefix,
-                                      MultiLineRegexp *suffix)
+                                             const LogProtoServerOptions *options,
+                                             MultiLineRegexp *prefix,
+                                             MultiLineRegexp *suffix)
 {
   LogProtoREMultiLineServer *self = g_new0(LogProtoREMultiLineServer, 1);
 

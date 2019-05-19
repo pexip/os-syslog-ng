@@ -23,6 +23,7 @@
 #include "afinet.h"
 #include "messages.h"
 #include "gprocess.h"
+#include "transport-mapper-inet.h"
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -66,13 +67,26 @@ afinet_lookup_proto(gint protocol_number, gint sock_type)
   struct protoent *ipproto_ent = getprotobynumber(protocol_number);
 
   return ipproto_ent ? ipproto_ent->p_name
-                     : ((sock_type == SOCK_STREAM) ? "tcp" : "udp");
+         : ((sock_type == SOCK_STREAM) ? "tcp" : "udp");
 }
 
 guint16
-afinet_lookup_service(TransportMapper *transport_mapper, const gchar *service)
+afinet_lookup_service(const TransportMapper *transport_mapper, const gchar *service)
 {
   const gchar *protocol_name = afinet_lookup_proto(transport_mapper->sock_proto, transport_mapper->sock_type);
 
   return afinet_lookup_service_and_proto(service, protocol_name);
+}
+
+gint
+afinet_determine_port(const TransportMapper *transport_mapper, const gchar *service_port)
+{
+  gint port = 0;
+
+  if (!service_port)
+    port = transport_mapper_inet_get_server_port(transport_mapper);
+  else
+    port = afinet_lookup_service(transport_mapper, service_port);
+
+  return port;
 }

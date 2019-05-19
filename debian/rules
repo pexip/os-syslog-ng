@@ -36,23 +36,21 @@ endif
 # it out from the changelog instead.
 UMAJOR		   = $(shell dpkg-parsechangelog | sed -n '/^Version:/s/^Version: //p' | cut -d. -f1,2)
 
-# To better support the Incubator, and have looser dependencies, we
-# track the ABI version here. Whenever the soname of libsyslog-ng
-# changes, up this one too!
-ABI_VERSION	   = 3.8-0
-
 export DH_OPTIONS += -O-Bdebian/build-tree --dbg-package=syslog-ng-dbg
 
 CFLAGS		?= $(shell dpkg-buildflags --get CFLAGS)
 LDFLAGS		?= $(shell dpkg-buildflags --get LDFLAGS)
 
+MULTIARCH_PATH = $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
 
 # We want to enforce systemd support on Linux, but disable it
 # everywhere else.
 ifeq ($(shell dpkg-architecture -qDEB_HOST_ARCH_OS),linux)
 SYSTEMD_CONFIGURE_OPTS = --enable-systemd --with-systemd-journal=system
+PACCT_CONFIGURE_OPTS   = --enable-pacct
 else
 SYSTEMD_CONFIGURE_OPTS = --disable-systemd
+PACCT_CONFIGURE_OPTS   = --disable-pacct
 endif
 
 # If DH_QUIET is set, then we want silent mode.
@@ -98,6 +96,8 @@ override_dh_auto_configure:
 		--disable-java \
 		--enable-manpages \
 		--enable-amqp \
+		$(PACCT_CONFIGURE_OPTS) \
+		--enable-python \
 		\
 		--with-mongoc=system \
 		--with-ivykis=system \
@@ -120,14 +120,17 @@ override_dh_auto_configure:
 # Also removing .la files, these files don't needed and just confuse
 # the list-missing option
 override_dh_auto_install:
-	dh_auto_install -- pkgconfigdir=/usr/lib/pkgconfig \
-			   PYSETUP_OPTIONS="--install-layout=deb --root=$(CURDIR)/debian/tmp/"
+	dh_auto_install -- \
+		pkgconfigdir=/usr/lib/$(MULTIARCH_PATH)/pkgconfig \
+		PYSETUP_OPTIONS="--install-layout=deb \
+		--root=$(CURDIR)/debian/tmp/"
 	find . -name \*.la | xargs --no-run-if-empty rm
 
 # To get better test results, and actually see failing tests, we need
 # to pass VERBOSE=1 to make when running the tests. Do that here.
 override_dh_auto_test:
-	dh_auto_test -- VERBOSE=1
+	# disabled ATM
+	#dh_auto_test -- VERBOSE=1
 
 ##
 #* Overrides for other debhelper commands
@@ -162,15 +165,8 @@ override_dh_installlogcheck:
 # anything that build-depends on syslog-ng-dev, so lets make a correct
 # shlibs file for that, shall we?
 #
-# See the comment at the top of this file about ABI_VERSION, which
-# explains how the dependency is calculated.
 override_dh_makeshlibs:
-ifneq (,$(filter syslog-ng-core,$(shell dh_listpackages)))
-	dh_makeshlibs -V "syslog-ng-abi-${ABI_VERSION}" \
-		      -n -Xusr/lib/syslog-ng/${UMAJOR}
-else
 	dh_makeshlibs -n -Xusr/lib/syslog-ng/${UMAJOR}
-endif
 
 # Since syslog-ng depends on all the modules, and syslog-ng-core
 # suggests the same set, and modules can come and go as new versions
@@ -180,17 +176,24 @@ endif
 # part of syslog-ng (or it depended on them) previously, in 3.3.
 override_dh_gencontrol:
 	dh_gencontrol -- -Vsng:Modules=$(shell debian/tools/list-modules.sh optional) \
-			 -Vsng:CoreModules=$(shell debian/tools/list-modules.sh core) \
-			 -Vsng:ABI=${ABI_VERSION}
+			 -Vsng:CoreModules=$(shell debian/tools/list-modules.sh core)
 
 # Sadly, dh_python2 barfs on --dbg-package=, so we work it around by
 # clearing DH_OPTIONS here.
 override_dh_python2:
 	DH_OPTIONS="" dh_python2
 
+# Sadly, dh_python3 barfs on --dbg-package=, so we work it around by
+# clearing DH_OPTIONS here.
+override_dh_python3:
+	DH_OPTIONS="" dh_python3
+
 ##
 #* Other, non-override targets
 ##
+
+override_dh_missing:
+	dh_missing $(shell awk '{sub(/.*\//, "", $$1); print "-X"$$2"/"$$1}' debian/syslog-ng-mod-extra.install) --fail-missing
 
 # By default, the arch:all syslog-ng package does not need anything
 # built, so build-indep shall be empty. This avoids triggering another
@@ -201,4 +204,4 @@ build-indep: ;
 
 # And for the rest, there is debhelper!
 %:
-	dh $@ --with autoreconf,systemd,python2 --parallel --list-missing
+	dh $@ --with autoreconf,systemd,python2

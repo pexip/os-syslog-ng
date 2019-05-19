@@ -51,8 +51,8 @@ extern LogDriver *last_driver;
 
 /* INCLUDE_DECLS */
 
-%token KW_DOOR                        10020
-%token KW_SUN_STREAMS                 10021
+%token KW_DOOR
+%token KW_SUN_STREAMS
 
 
 %type	<ptr> source_afstreams
@@ -83,6 +83,7 @@ source_afstreams_options
 
 source_afstreams_option
 	: KW_DOOR '(' string ')'		{ afstreams_sd_set_sundoor(last_driver, $3); free($3); }
+	| source_driver_option
 	;
 
 

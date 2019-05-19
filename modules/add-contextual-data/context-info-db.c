@@ -22,7 +22,9 @@
 
 #include "context-info-db.h"
 #include "atomic.h"
+#include "messages.h"
 #include <string.h>
+#include <stdio.h>
 #include <sys/types.h>
 
 struct _ContextInfoDB
@@ -31,6 +33,9 @@ struct _ContextInfoDB
   GArray *data;
   GHashTable *index;
   gboolean is_data_indexed;
+  gboolean is_ordering_enabled;
+  GList *ordered_selectors;
+  gboolean ignore_case;
 };
 
 typedef struct _element_range
@@ -48,12 +53,61 @@ _contextual_data_record_cmp(gconstpointer k1, gconstpointer k2)
   return strcmp(r1->selector->str, r2->selector->str);
 }
 
+static gint
+_g_strcmp(gconstpointer a, gconstpointer b)
+{
+  return g_strcmp0((const gchar *) a, (const gchar *) b);
+}
+
+static gint
+_g_strcasecmp(gconstpointer a, gconstpointer b)
+{
+  if (!a || !b)
+    return 1;
+  return g_ascii_strcasecmp((const gchar *)a, (const gchar *)b);
+}
+
+static gint
+_contextual_data_record_case_cmp(gconstpointer k1, gconstpointer k2)
+{
+  ContextualDataRecord *r1 = (ContextualDataRecord *) k1;
+  ContextualDataRecord *r2 = (ContextualDataRecord *) k2;
+
+  return _g_strcasecmp(r1->selector->str, r2->selector->str);
+}
+
+void
+context_info_db_enable_ordering(ContextInfoDB *self)
+{
+  self->is_ordering_enabled = TRUE;
+}
+
+GList *
+context_info_db_ordered_selectors(ContextInfoDB *self)
+{
+  return self->ordered_selectors;
+}
+
+void
+context_info_db_set_ignore_case(ContextInfoDB *self, gboolean ignore_case)
+{
+  self->ignore_case = ignore_case;
+}
+
+gchar *
+_str_case_insensitive_dup(const gchar *str)
+{
+  return g_ascii_strup(str, -1);
+}
+
 void
 context_info_db_index(ContextInfoDB *self)
 {
+  GCompareFunc record_cmp = self->ignore_case ? _contextual_data_record_case_cmp : _contextual_data_record_cmp;
+
   if (self->data->len > 0)
     {
-      g_array_sort(self->data, _contextual_data_record_cmp);
+      g_array_sort(self->data, record_cmp);
       gsize range_start = 0;
       ContextualDataRecord range_start_record =
         g_array_index(self->data, ContextualDataRecord, 0);
@@ -63,8 +117,7 @@ context_info_db_index(ContextInfoDB *self)
           ContextualDataRecord current_record =
             g_array_index(self->data, ContextualDataRecord, i);
 
-          if (_contextual_data_record_cmp
-              (&range_start_record, &current_record))
+          if (record_cmp(&range_start_record, &current_record))
             {
               element_range *current_range = g_new(element_range, 1);
               current_range->offset = range_start;
@@ -103,13 +156,37 @@ _record_free(gpointer p)
   contextual_data_record_clean(rec);
 }
 
-static void
-_new(ContextInfoDB *self)
+static gboolean
+_strcase_eq(gconstpointer a, gconstpointer b)
 {
+  return _g_strcasecmp(a,b) == 0;
+}
+
+static guint
+_str_case_insensitive_djb2_hash(const gchar *str)
+{
+  guint hash = 5381;
+  int c;
+
+  while ((c = *str++))
+    hash = ((hash << 5) + hash) + g_ascii_toupper(c);
+
+  return hash;
+}
+
+static guint
+_strcase_hash(gconstpointer value)
+{
+  return _str_case_insensitive_djb2_hash((const gchar *)value);
+}
+
+void
+context_info_db_init(ContextInfoDB *self)
+{
+  GEqualFunc str_eq = self->ignore_case ? _strcase_eq : g_str_equal;
+  GHashFunc str_hash = self->ignore_case ? _strcase_hash : g_str_hash;
   self->data = g_array_new(FALSE, FALSE, sizeof(ContextualDataRecord));
-  self->index = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, g_free);
-  self->is_data_indexed = FALSE;
-  g_atomic_counter_set(&self->ref_cnt, 1);
+  self->index = g_hash_table_new_full(str_hash, str_eq, NULL, g_free);
 }
 
 static void
@@ -135,14 +212,18 @@ _free(ContextInfoDB *self)
     {
       _free_array(self->data);
     }
+  if (self->ordered_selectors)
+    {
+      g_list_free(self->ordered_selectors);
+    }
 }
 
 ContextInfoDB *
-context_info_db_new()
+context_info_db_new(void)
 {
   ContextInfoDB *self = g_new0(ContextInfoDB, 1);
 
-  _new(self);
+  g_atomic_counter_set(&self->ref_cnt, 1);
 
   return self;
 }
@@ -197,11 +278,16 @@ context_info_db_insert(ContextInfoDB *self,
 {
   g_array_append_val(self->data, *record);
   self->is_data_indexed = FALSE;
+  if (self->is_ordering_enabled && !g_list_find_custom(self->ordered_selectors, record->selector->str, _g_strcmp))
+    self->ordered_selectors = g_list_append(self->ordered_selectors, record->selector->str);
 }
 
 gboolean
 context_info_db_contains(ContextInfoDB *self, const gchar *selector)
 {
+  if (!selector)
+    return FALSE;
+
   _ensure_indexed_db(self);
   return (_get_range_of_records(self, selector) != NULL);
 }
@@ -260,19 +346,39 @@ context_info_db_get_selectors(ContextInfoDB *self)
   return g_hash_table_get_keys(self->index);
 }
 
+static void
+_truncate_eol(gchar *line, gsize line_len)
+{
+  if (line_len >= 2 && line[line_len - 2] == '\r' && line[line_len - 1] == '\n')
+    line[line_len - 2] = '\0';
+  else if (line_len >= 1 && line[line_len - 1] == '\n')
+    line[line_len - 1] = '\0';
+}
+
+static gboolean
+_get_line_without_eol(gchar **line_buf, gsize *line_buf_len, FILE *fp)
+{
+  gssize n;
+  if ((n = getline(line_buf, line_buf_len, fp)) == -1)
+    return FALSE;
+
+  _truncate_eol(*line_buf, n);
+  *line_buf_len = strlen(*line_buf);
+  return TRUE;
+}
+
 gboolean
 context_info_db_import(ContextInfoDB *self, FILE *fp,
                        ContextualDataRecordScanner *scanner)
 {
-  ssize_t n;
   size_t line_buf_len;
   gchar *line_buf = NULL;
   const ContextualDataRecord *next_record;
 
-  while ((n = getline(&line_buf, &line_buf_len, fp)) != -1)
+  while (_get_line_without_eol(&line_buf, &line_buf_len, fp))
     {
-      if (line_buf[n - 1] == '\n')
-        line_buf[n - 1] = '\0';
+      if (line_buf_len == 0)
+        continue;
       next_record = contextual_data_record_scanner_get_next(scanner, line_buf);
       if (!next_record)
         {
@@ -280,6 +386,10 @@ context_info_db_import(ContextInfoDB *self, FILE *fp,
           g_free(line_buf);
           return FALSE;
         }
+      msg_trace("add-contextual-data(): adding database entry",
+                evt_tag_str("selector", next_record->selector->str),
+                evt_tag_str("name", next_record->name->str),
+                evt_tag_str("value", next_record->value->str));
       context_info_db_insert(self, next_record);
     }
 

@@ -24,7 +24,6 @@
 
 #include "cfg-lexer-subst.h"
 #include "cfg-args.h"
-#include "cfg-lexer.h"
 #include "cfg-grammar.h"
 
 #include <string.h>
@@ -93,6 +92,9 @@ _track_string_state(CfgLexerSubst *self, CfgLexerStringTrackState last_state, co
       if (*p == '\'')
         return CLS_NOT_STRING;
       return CLS_WITHIN_QSTRING;
+    default:
+      g_assert_not_reached();
+      break;
     }
   g_assert_not_reached();
 }
@@ -106,7 +108,7 @@ _extract_string_literal(const gchar *value)
   YYLTYPE yylloc, look_ahead_yylloc;
   gchar *result = NULL;
 
-  lexer = cfg_lexer_new_buffer(value, strlen(value));
+  lexer = cfg_lexer_new_buffer(configuration, value, strlen(value));
   token = cfg_lexer_lex(lexer, &yylval, &yylloc);
   if (token == LL_STRING)
     {
@@ -158,7 +160,8 @@ _encode_as_qstring(CfgLexerSubst *self, const gchar *value, GError **error)
 
       if (p == '\'')
         {
-          g_set_error(error, CFG_LEXER_ERROR, CFG_LEXER_CANNOT_REPRESENT_APOSTROPHES_IN_QSTRINGS, "cannot represent apostrophes within apostroph-enclosed string");
+          g_set_error(error, CFG_LEXER_ERROR, CFG_LEXER_CANNOT_REPRESENT_APOSTROPHES_IN_QSTRINGS,
+                      "cannot represent apostrophes within apostroph-enclosed string");
           return FALSE;
         }
       g_string_append_c(self->result_buffer, p);
@@ -226,7 +229,8 @@ cfg_lexer_subst_invoke(CfgLexerSubst *self, const gchar *input, gssize input_len
         {
           if (self->string_state == CLS_WITHIN_STRING_QUOTED_CHARACTER)
             {
-              g_set_error(error, CFG_LEXER_ERROR, CFG_LEXER_BACKTICKS_CANT_BE_SUBSTITUTED_AFTER_BACKSLASH, "cannot subsitute backticked values right after a string quote character");
+              g_set_error(error, CFG_LEXER_ERROR, CFG_LEXER_BACKTICKS_CANT_BE_SUBSTITUTED_AFTER_BACKSLASH,
+                          "cannot subsitute backticked values right after a string quote character");
               goto error;
             }
           /* start of reference */
@@ -270,7 +274,7 @@ cfg_lexer_subst_invoke(CfgLexerSubst *self, const gchar *input, gssize input_len
 
   *output_length = result->len;
   return g_string_free(result, FALSE);
- error:
+error:
   g_string_free(result, TRUE);
   return NULL;
 
@@ -294,4 +298,16 @@ cfg_lexer_subst_free(CfgLexerSubst *self)
   cfg_args_unref(self->defs);
   cfg_args_unref(self->args);
   g_free(self);
+}
+
+gchar *
+cfg_lexer_subst_args_in_input(CfgArgs *globals, CfgArgs *defs, CfgArgs *args, const gchar *input, gssize input_length,
+                              gsize *output_length, GError **error)
+{
+  CfgLexerSubst *subst = cfg_lexer_subst_new(cfg_args_ref(globals), cfg_args_ref(defs), cfg_args_ref(args));
+  gchar *result;
+
+  result = cfg_lexer_subst_invoke(subst, input, input_length, output_length, error);
+  cfg_lexer_subst_free(subst);
+  return result;
 }

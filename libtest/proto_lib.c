@@ -69,7 +69,7 @@ construct_server_proto_plugin(const gchar *name, LogTransport *transport)
   LogProtoServerFactory *proto_factory;
 
   log_proto_server_options_init(&proto_server_options, configuration);
-  proto_factory = log_proto_server_get_factory(configuration, name);
+  proto_factory = log_proto_server_get_factory(&configuration->plugin_context, name);
   assert_true(proto_factory != NULL, "error looking up proto factory");
   return log_proto_server_factory_construct(proto_factory, transport, &proto_server_options);
 }
@@ -84,7 +84,8 @@ assert_proto_server_fetch(LogProtoServer *proto, const gchar *expected_msg, gssi
   status = proto_server_fetch(proto, &msg, &msg_len);
 
   assert_proto_server_status(proto, status, LPS_SUCCESS);
-  assert_nstring((const gchar *) msg, msg_len, expected_msg, expected_msg_len, "LogProtoServer expected message mismatch");
+  assert_nstring((const gchar *) msg, msg_len, expected_msg, expected_msg_len,
+                 "LogProtoServer expected message mismatch");
 }
 
 void
@@ -104,7 +105,8 @@ assert_proto_server_fetch_single_read(LogProtoServer *proto, const gchar *expect
 
   if (expected_msg)
     {
-      assert_nstring((const gchar *) msg, msg_len, expected_msg, expected_msg_len, "LogProtoServer expected message mismatch");
+      assert_nstring((const gchar *) msg, msg_len, expected_msg, expected_msg_len,
+                     "LogProtoServer expected message mismatch");
     }
   else
     {

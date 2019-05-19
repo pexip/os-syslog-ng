@@ -30,9 +30,10 @@ extern int afsocket_debug;
 
 int afsocket_parse(CfgLexer *lexer, LogDriver **instance, gpointer arg);
 
-static CfgLexerKeyword afsocket_keywords[] = {
-  { "unix_dgram",	KW_UNIX_DGRAM },
-  { "unix_stream",	KW_UNIX_STREAM },
+static CfgLexerKeyword afsocket_keywords[] =
+{
+  { "unix_dgram", KW_UNIX_DGRAM },
+  { "unix_stream",  KW_UNIX_STREAM },
   { "udp",                KW_UDP },
   { "tcp",                KW_TCP },
   { "syslog",             KW_SYSLOG },
@@ -46,24 +47,32 @@ static CfgLexerKeyword afsocket_keywords[] = {
   { "peer_verify",        KW_PEER_VERIFY },
   { "key_file",           KW_KEY_FILE },
   { "cert_file",          KW_CERT_FILE },
+  { "dhparam_file",       KW_DHPARAM_FILE },
+  { "pkcs12_file",        KW_PKCS12_FILE },
   { "ca_dir",             KW_CA_DIR },
   { "crl_dir",            KW_CRL_DIR },
   { "trusted_keys",       KW_TRUSTED_KEYS },
   { "trusted_dn",         KW_TRUSTED_DN },
   { "cipher_suite",       KW_CIPHER_SUITE },
+  { "ecdh_curve_list",    KW_ECDH_CURVE_LIST },
+  { "curve_list",         KW_ECDH_CURVE_LIST, KWS_OBSOLETE, "ecdh_curve_list"},
   { "ssl_options",        KW_SSL_OPTIONS },
+  { "allow_compress",     KW_ALLOW_COMPRESS },
 
   { "localip",            KW_LOCALIP },
   { "ip",                 KW_IP },
+  { "interface",          KW_INTERFACE },
   { "localport",          KW_LOCALPORT },
   { "port",               KW_PORT },
   { "destport",           KW_DESTPORT },
   { "ip_ttl",             KW_IP_TTL },
   { "ip_tos",             KW_IP_TOS },
+  { "ip_freebind",        KW_IP_FREEBIND },
   { "so_broadcast",       KW_SO_BROADCAST },
   { "so_rcvbuf",          KW_SO_RCVBUF },
   { "so_sndbuf",          KW_SO_SNDBUF },
   { "so_keepalive",       KW_SO_KEEPALIVE },
+  { "so_reuseport",       KW_SO_REUSEPORT },
   { "tcp_keep_alive",     KW_SO_KEEPALIVE }, /* old, once deprecated form, but revived in 3.4 */
   { "tcp_keepalive",      KW_SO_KEEPALIVE }, /* alias for so-keepalive, as tcp is the only option actually using it */
   { "tcp_keepalive_time", KW_TCP_KEEPALIVE_TIME },
@@ -73,8 +82,15 @@ static CfgLexerKeyword afsocket_keywords[] = {
   { "transport",          KW_TRANSPORT },
   { "ip_protocol",        KW_IP_PROTOCOL },
   { "max_connections",    KW_MAX_CONNECTIONS },
+  { "listen_backlog",     KW_LISTEN_BACKLOG },
   { "keep_alive",         KW_KEEP_ALIVE },
   { "systemd_syslog",     KW_SYSTEMD_SYSLOG  },
+  { "failover_servers",   KW_FAILOVER_SERVERS, KWS_OBSOLETE, "failover-servers has been deprecated, try failover() and use servers() option inside it." },
+  { "failover",           KW_FAILOVER },
+  { "failback",           KW_FAILBACK },
+  { "servers",            KW_SERVERS },
+  { "tcp_probe_interval", KW_TCP_PROBE_INTERVAL },
+  { "successful_probes_required", KW_SUCCESSFUL_PROBES_REQUIRED },
   { NULL }
 };
 

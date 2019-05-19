@@ -1,0 +1,22 @@
+From c70ae1a33543a9d9b61dcdf5446832e4d525db53 Mon Sep 17 00:00:00 2001
+From: Kokan <kokaipeter@gmail.com>
+Date: Thu, 21 Feb 2019 12:39:46 +0100
+Subject: [PATCH] test_file_list: fix leak
+
+Signed-off-by: Kokan <kokaipeter@gmail.com>
+---
+ modules/affile/tests/test_file_list.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/modules/affile/tests/test_file_list.c b/modules/affile/tests/test_file_list.c
+index d98fe21b33..474958247c 100644
+--- a/modules/affile/tests/test_file_list.c
++++ b/modules/affile/tests/test_file_list.c
+@@ -122,6 +122,7 @@ Test(hashed_queue, delete_non_existent)
+ 
+   g_free(f1);
+   g_free(f2);
++  g_free(f3);
+   pending_file_list_free(queue);
+ }
+ 

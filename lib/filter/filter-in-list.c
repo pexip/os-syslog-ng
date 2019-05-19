@@ -42,14 +42,19 @@ static gboolean
 filter_in_list_eval(FilterExprNode *s, LogMessage **msgs, gint num_msg)
 {
   FilterInList *self = (FilterInList *)s;
-  LogMessage *msg = msgs[0];
+  LogMessage *msg = msgs[num_msg - 1];
   const gchar *value;
   gssize len = 0;
 
   value = log_msg_get_value(msg, self->value_handle, &len);
   APPEND_ZERO(value, value, len);
 
-  return (g_tree_lookup(self->tree, value) != NULL) ^ s->comp;
+  gboolean result = (g_tree_lookup(self->tree, value) != NULL);
+  msg_trace("in-list() evaluation started",
+            evt_tag_str("value", value),
+            evt_tag_printf("msg", "%p", msg));
+
+  return result ^ s->comp;
 }
 
 static void
@@ -72,7 +77,7 @@ filter_in_list_new(const gchar *list_file, const gchar *property)
     {
       msg_error("Error opening in-list filter list file",
                 evt_tag_str("file", list_file),
-                evt_tag_errno("errno", errno));
+                evt_tag_error("errno"));
       return NULL;
     }
 

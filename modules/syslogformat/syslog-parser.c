@@ -25,14 +25,28 @@
 #include "syslog-format.h"
 
 static gboolean
-syslog_parser_process(LogParser *s, LogMessage **pmsg, const LogPathOptions *path_options, const gchar *input, gsize input_len G_GNUC_UNUSED)
+syslog_parser_process(LogParser *s, LogMessage **pmsg, const LogPathOptions *path_options, const gchar *input,
+                      gsize input_len)
 {
   SyslogParser *self = (SyslogParser *) s;
   LogMessage *msg;
 
   msg = log_msg_make_writable(pmsg, path_options);
-  syslog_format_handler(&self->parse_options, (guchar *) input, strlen(input), msg);
+  msg_trace("syslog-parser message processing started",
+            evt_tag_str ("input", input),
+            evt_tag_printf("msg", "%p", *pmsg));
+
+  syslog_format_handler(&self->parse_options, (guchar *) input, input_len, msg);
   return TRUE;
+}
+
+static gboolean
+syslog_parser_init(LogPipe *s)
+{
+  SyslogParser *self = (SyslogParser *) s;
+
+  msg_format_options_init(&self->parse_options, log_pipe_get_config(s));
+  return log_parser_init_method(s);
 }
 
 static LogPipe *
@@ -43,7 +57,17 @@ syslog_parser_clone(LogPipe *s)
 
   cloned = (SyslogParser *) syslog_parser_new(s->cfg);
   cloned->super.template = log_template_ref(self->super.template);
+  msg_format_options_copy(&cloned->parse_options, &self->parse_options);
   return &cloned->super.super;
+}
+
+static void
+syslog_parser_free(LogPipe *s)
+{
+  SyslogParser *self = (SyslogParser *) s;
+
+  msg_format_options_destroy(&self->parse_options);
+  log_parser_free_method(s);
 }
 
 /*
@@ -55,7 +79,10 @@ syslog_parser_new(GlobalConfig *cfg)
   SyslogParser *self = g_new0(SyslogParser, 1);
 
   log_parser_init_instance(&self->super, cfg);
+  self->super.super.free_fn = syslog_parser_free;
   self->super.super.clone = syslog_parser_clone;
+  self->super.super.init = syslog_parser_init;
   self->super.process = syslog_parser_process;
+  msg_format_options_defaults(&self->parse_options);
   return &self->super;
 }

@@ -24,16 +24,20 @@
 
 #include "cfg-lexer.h"
 #include "cfg-lexer-subst.h"
+#include "cfg-block-generator.h"
 #include "cfg-lex.h"
 #include "cfg-grammar.h"
 #include "block-ref-parser.h"
 #include "pragma-parser.h"
 #include "messages.h"
 #include "pathutils.h"
+#include "plugin.h"
+#include "plugin-types.h"
 
 #include <string.h>
 #include <glob.h>
 #include <sys/stat.h>
+
 
 /*
  * A token block is a series of tokens to be injected into the tokens
@@ -44,25 +48,6 @@ struct _CfgTokenBlock
 {
   gint pos;
   GArray *tokens;
-};
-
-/**
- * CfgBlockGenerator:
- *
- * This class describes a block generator, e.g. a function callback
- * that returns a configuration snippet in a given context. Each
- * user-defined "block" results in a generator to be registered, but
- * theoretically this mechanism can be used to write plugins that
- * generate syslog-ng configuration on the fly, based on system
- * settings for example.
- **/
-struct _CfgBlockGenerator
-{
-  gint context;
-  gchar *name;
-  CfgBlockGeneratorFunc generator;
-  gpointer generator_data;
-  GDestroyNotify generator_data_free;
 };
 
 /**
@@ -81,6 +66,13 @@ typedef struct _CfgLexerContext
   CfgLexerKeyword *keywords;
   gchar desc[0];
 } CfgLexerContext;
+
+typedef enum
+{
+  CLPR_ERROR,
+  CLPR_OK,
+  CLPR_LEX_AGAIN
+} CfgLexerPreprocessResult;
 
 /*
  * cfg_lexer_push_context:
@@ -148,15 +140,41 @@ cfg_lexer_get_context_description(CfgLexer *self)
   return "configuration";
 }
 
-gchar *
-cfg_lexer_subst_args(CfgArgs *globals, CfgArgs *defs, CfgArgs *args, const gchar *input, gssize input_length, gsize *output_length, GError **error)
+/* this can only be called from the grammar */
+static CfgIncludeLevel *
+_find_closest_file_inclusion(CfgLexer *self, YYLTYPE *yylloc)
 {
-  CfgLexerSubst *subst = cfg_lexer_subst_new(cfg_args_ref(globals), cfg_args_ref(defs), cfg_args_ref(args));
-  gchar *result;
+  for (gint level_ndx = self->include_depth; level_ndx >= 0; level_ndx--)
+    {
+      CfgIncludeLevel *level = &self->include_stack[level_ndx];
 
-  result = cfg_lexer_subst_invoke(subst, input, input_length, output_length, error);
-  cfg_lexer_subst_free(subst);
-  return result;
+      if (level->include_type == CFGI_FILE)
+        return level;
+    }
+  return NULL;
+}
+
+const gchar *
+cfg_lexer_format_location(CfgLexer *self, YYLTYPE *yylloc, gchar *buf, gsize buf_len)
+{
+  CfgIncludeLevel *level;
+
+  level = _find_closest_file_inclusion(self, yylloc);
+  if (level)
+    g_snprintf(buf, buf_len, "%s:%d:%d",
+               level->name,
+               level->lloc.first_line, level->lloc.first_column);
+  else
+    g_snprintf(buf, buf_len, "%s:%d:%d", "#buffer", yylloc->first_line, yylloc->first_column);
+  return buf;
+}
+
+EVTTAG *
+cfg_lexer_format_location_tag(CfgLexer *self, YYLTYPE *yylloc)
+{
+  gchar buf[256];
+
+  return evt_tag_str("location", cfg_lexer_format_location(self, yylloc, buf, sizeof(buf)));
 }
 
 int
@@ -201,7 +219,8 @@ cfg_lexer_lookup_keyword(CfgLexer *self, YYSTYPE *yylval, YYLTYPE *yylloc, const
                     case KWS_OBSOLETE:
                       msg_warning("WARNING: Your configuration file uses an obsoleted keyword, please update your configuration",
                                   evt_tag_str("keyword", keywords[i].kw_name),
-                                  evt_tag_str("change", keywords[i].kw_explain));
+                                  evt_tag_str("change", keywords[i].kw_explain),
+                                  cfg_lexer_format_location_tag(self, yylloc));
                       break;
                     default:
                       break;
@@ -218,6 +237,28 @@ cfg_lexer_lookup_keyword(CfgLexer *self, YYSTYPE *yylval, YYLTYPE *yylloc, const
   yylval->type = LL_IDENTIFIER;
   yylval->cptr = strdup(token);
   return LL_IDENTIFIER;
+}
+
+void
+cfg_lexer_clear_include_level(CfgLexer *self, CfgIncludeLevel *level)
+{
+  g_free(level->name);
+  if (level->yybuf)
+    _cfg_lexer__delete_buffer(level->yybuf, self->state);
+
+  if (level->include_type == CFGI_FILE)
+    {
+      if (level->file.include_file)
+        fclose(level->file.include_file);
+      g_slist_foreach(level->file.files, (GFunc) g_free, NULL);
+      g_slist_free(level->file.files);
+    }
+  else if (level->include_type == CFGI_BUFFER)
+    {
+      g_free(level->buffer.content);
+      g_free(level->buffer.original_content);
+    }
+  memset(level, 0, sizeof(*level));
 }
 
 gboolean
@@ -242,13 +283,17 @@ cfg_lexer_start_next_include(CfgLexer *self)
 
   /* reset the include state, should also handle initial invocations, in which case everything is NULL */
   if (level->yybuf)
-    _cfg_lexer__delete_buffer(level->yybuf, self->state);
+    {
+      _cfg_lexer__delete_buffer(level->yybuf, self->state);
+      level->yybuf = NULL;
+    }
 
   if (level->include_type == CFGI_FILE)
     {
       if (level->file.include_file)
         {
           fclose(level->file.include_file);
+          level->file.include_file = NULL;
         }
     }
 
@@ -257,10 +302,22 @@ cfg_lexer_start_next_include(CfgLexer *self)
     {
       /* we finished with an include statement that included a series of
        * files (e.g.  directory include). */
+
+
+      /* NOTE: this couple of lines should become just a call to
+       * cfg_lexer_clear_include_level(), however this entire function is
+       * playing nasty tricks with the data members within the
+       * CfgIncludeLevel, which I can't decipher right now, so I am leaving
+       * this as is. Memory management in the lexer is clearly messed
+       * up.  */
+
       g_free(level->name);
 
       if (level->include_type == CFGI_BUFFER)
-        g_free(level->buffer.content);
+        {
+          g_free(level->buffer.content);
+          g_free(level->buffer.original_content);
+        }
 
       memset(level, 0, sizeof(*level));
 
@@ -337,8 +394,8 @@ cfg_lexer_include_file_simple(CfgLexer *self, const gchar *filename)
       if (!dir)
         {
           msg_error("Error opening directory for reading",
-                evt_tag_str("filename", filename),
-                evt_tag_str("error", error->message));
+                    evt_tag_str("filename", filename),
+                    evt_tag_str("error", error->message));
           goto drop_level;
         }
       while ((entry = g_dir_read_name(dir)))
@@ -353,9 +410,9 @@ cfg_lexer_include_file_simple(CfgLexer *self, const gchar *filename)
           for (p = entry; *p; p++)
             {
               if (!((*p >= 'a' && *p <= 'z') ||
-                   (*p >= 'A' && *p <= 'Z') ||
-                   (*p >= '0' && *p <= '9') ||
-                   (*p == '_') || (*p == '-') || (*p == '.')))
+                    (*p >= 'A' && *p <= 'Z') ||
+                    (*p >= '0' && *p <= '9') ||
+                    (*p == '_') || (*p == '-') || (*p == '.')))
                 {
                   msg_debug("Skipping include file, does not match pattern [\\-_a-zA-Z0-9]+",
                             evt_tag_str("filename", entry));
@@ -395,7 +452,7 @@ cfg_lexer_include_file_simple(CfgLexer *self, const gchar *filename)
       level->file.files = g_slist_prepend(level->file.files, g_strdup(filename));
     }
   return cfg_lexer_start_next_include(self);
- drop_level:
+drop_level:
   g_slist_foreach(level->file.files, (GFunc) g_free, NULL);
   g_slist_free(level->file.files);
   level->file.files = NULL;
@@ -507,10 +564,16 @@ cfg_lexer_include_file_glob_at(CfgLexer *self, const gchar *pattern)
   return TRUE;
 }
 
+static const gchar *
+_get_include_path(CfgLexer *self)
+{
+  return self->cfg ? cfg_args_get(self->cfg->globals, "include-path") : NULL;
+}
+
 static gboolean
 cfg_lexer_include_file_glob(CfgLexer *self, const gchar *filename_)
 {
-  const gchar *path = cfg_args_get(self->globals, "include-path");
+  const gchar *path = _get_include_path(self);
   gboolean process = FALSE;
 
   self->include_depth++;
@@ -550,6 +613,10 @@ cfg_lexer_include_file(CfgLexer *self, const gchar *filename_)
   struct stat st;
   gchar *filename;
 
+  msg_debug("Processing @include statement",
+            evt_tag_str("filename", filename_),
+            evt_tag_str("include-path", _get_include_path(self)));
+
   if (self->include_depth >= MAX_INCLUDE_DEPTH - 1)
     {
       msg_error("Include file depth is too deep, increase MAX_INCLUDE_DEPTH and recompile",
@@ -558,16 +625,19 @@ cfg_lexer_include_file(CfgLexer *self, const gchar *filename_)
       return FALSE;
     }
 
-  filename = find_file_in_path(cfg_args_get(self->globals, "include-path"), filename_, G_FILE_TEST_EXISTS);
+  filename = find_file_in_path(_get_include_path(self), filename_, G_FILE_TEST_EXISTS);
   if (!filename || stat(filename, &st) < 0)
     {
+      if (filename)
+        g_free(filename);
+
       if (cfg_lexer_include_file_glob(self, filename_))
         return TRUE;
 
       msg_error("Include file/directory not found",
                 evt_tag_str("filename", filename_),
-                evt_tag_str("include-path", cfg_args_get(self->globals, "include-path")),
-                evt_tag_errno("error", errno));
+                evt_tag_str("include-path", _get_include_path(self)),
+                evt_tag_error("error"));
       return FALSE;
     }
   else
@@ -581,12 +651,13 @@ cfg_lexer_include_file(CfgLexer *self, const gchar *filename_)
 }
 
 gboolean
-cfg_lexer_include_buffer_without_backtick_substitution(CfgLexer *self, const gchar *name, const gchar *buffer, gsize length)
+cfg_lexer_include_buffer_without_backtick_substitution(CfgLexer *self, const gchar *name, const gchar *buffer,
+                                                       gsize length)
 {
   CfgIncludeLevel *level;
   gchar *lexer_buffer;
   gsize lexer_buffer_len;
-  
+
   g_assert(length >= 0);
 
   if (self->include_depth >= MAX_INCLUDE_DEPTH - 1)
@@ -610,6 +681,7 @@ cfg_lexer_include_buffer_without_backtick_substitution(CfgLexer *self, const gch
   level->include_type = CFGI_BUFFER;
   level->buffer.content = lexer_buffer;
   level->buffer.content_length = lexer_buffer_len;
+  level->buffer.original_content = g_strdup(lexer_buffer);
   level->name = g_strdup(name);
 
   return cfg_lexer_start_next_include(self);
@@ -625,7 +697,8 @@ cfg_lexer_include_buffer(CfgLexer *self, const gchar *name, const gchar *buffer,
   GError *error = NULL;
   gboolean result = FALSE;
 
-  substituted_buffer = cfg_lexer_subst_args(self->globals, NULL, NULL, buffer, length, &substituted_length, &error);
+  substituted_buffer = cfg_lexer_subst_args_in_input(self->cfg ? self->cfg->globals : NULL, NULL, NULL, buffer, length,
+                                                     &substituted_length, &error);
   if (!substituted_buffer)
     {
       msg_error("Error resolving backtick references in block or buffer",
@@ -646,54 +719,63 @@ cfg_lexer_inject_token_block(CfgLexer *self, CfgTokenBlock *block)
   self->token_blocks = g_list_append(self->token_blocks, block);
 }
 
-static CfgBlockGenerator *
-cfg_lexer_find_generator(CfgLexer *self, gint context, const gchar *name)
+
+typedef struct _GeneratorPlugin
 {
-  GList *l;
+  Plugin super;
+  CfgBlockGenerator *gen;
+} GeneratorPlugin;
 
-  for (l = self->generators; l; l = l->next)
-    {
-      CfgBlockGenerator *gen = (CfgBlockGenerator *) l->data;
+static gpointer
+_generator_plugin_construct(Plugin *s)
+{
+  GeneratorPlugin *self = (GeneratorPlugin *) s;
 
-      if ((gen->context == 0 || gen->context == context) && strcmp(gen->name, name) == 0)
-        {
-          return gen;
-        }
-    }
-  return NULL;
+  return self->gen;
 }
 
-gboolean
-cfg_lexer_register_block_generator(CfgLexer *self, gint context, const gchar *name, CfgBlockGeneratorFunc generator, gpointer generator_data, GDestroyNotify generator_data_free)
+static void
+_generator_plugin_free(Plugin *s)
 {
-  CfgBlockGenerator *gen;
-  gboolean res = FALSE;
+  GeneratorPlugin *self = (GeneratorPlugin *) s;
 
-  gen = cfg_lexer_find_generator(self, context, name);
-  if (gen)
-    {
-      gen->generator_data_free(gen->generator_data);
-      g_free(gen->name);
-    }
-  else
-    {
-      gen = g_new0(CfgBlockGenerator, 1);
-      self->generators = g_list_append(self->generators, gen);
-      res = TRUE;
-    }
+  cfg_block_generator_free(self->gen);
+  g_free((gchar *) self->super.name);
+  g_free(s);
+}
 
-  gen->context = context;
-  gen->name = g_strdup(name);
-  gen->generator = generator;
-  gen->generator_data = generator_data;
-  gen->generator_data_free = generator_data_free;
-  return res;
+void
+cfg_lexer_register_generator_plugin(PluginContext *context, CfgBlockGenerator *gen)
+{
+  GeneratorPlugin *plugin = g_new0(GeneratorPlugin, 1);
+
+  plugin->super.type = gen->context | LL_CONTEXT_FLAG_GENERATOR;
+  plugin->super.name = g_strdup(gen->name);
+  plugin->super.free_fn = _generator_plugin_free;
+  plugin->super.construct = _generator_plugin_construct;
+  plugin->gen = gen;
+
+  plugin_register(context, &plugin->super, 1);
 }
 
 static gboolean
-cfg_lexer_generate_block(CfgLexer *self, gint context, const gchar *name, CfgBlockGenerator *gen, CfgArgs *args)
+_is_generator_plugin(Plugin *p)
 {
-  return gen->generator(self, context, name, args, gen->generator_data);
+  return p->type & LL_CONTEXT_FLAG_GENERATOR;
+}
+
+static CfgBlockGenerator *
+cfg_lexer_find_generator(CfgLexer *self, GlobalConfig *cfg, gint context, const gchar *name)
+{
+  Plugin *p;
+  CfgBlockGenerator *gen;
+
+  p = plugin_find(&cfg->plugin_context, context | LL_CONTEXT_FLAG_GENERATOR, name);
+  if (!p || !_is_generator_plugin(p))
+    return NULL;
+
+  gen = plugin_construct(p);
+  return gen;
 }
 
 static YYSTYPE
@@ -708,8 +790,8 @@ cfg_lexer_copy_token(const YYSTYPE *original)
       dest.token = original->token;
     }
   else if (type == LL_IDENTIFIER ||
-          type == LL_STRING ||
-          type == LL_BLOCK)
+           type == LL_STRING ||
+           type == LL_BLOCK)
     {
       dest.cptr = strdup(original->cptr);
     }
@@ -760,18 +842,12 @@ _invoke__cfg_lexer_lex(CfgLexer *self, YYSTYPE *yylval, YYLTYPE *yylloc)
   return _cfg_lexer_lex(yylval, yylloc, self->state);
 }
 
-int
-cfg_lexer_lex(CfgLexer *self, YYSTYPE *yylval, YYLTYPE *yylloc)
+static gboolean
+cfg_lexer_consume_next_injected_token(CfgLexer *self, gint *tok, YYSTYPE *yylval, YYLTYPE *yylloc)
 {
-  CfgBlockGenerator *gen;
   CfgTokenBlock *block;
   YYSTYPE *token;
-  gint tok;
-  gboolean injected;
 
- relex:
-
-  injected = FALSE;
   while (self->token_blocks)
     {
       block = self->token_blocks->data;
@@ -781,14 +857,13 @@ cfg_lexer_lex(CfgLexer *self, YYSTYPE *yylval, YYLTYPE *yylloc)
         {
           *yylval = *token;
           *yylloc = self->include_stack[self->include_depth].lloc;
-          tok = token->type;
-          if (token->type == LL_TOKEN)
-            {
-              tok = token->token;
-              injected = TRUE;
-            }
 
-          goto exit;
+          if (token->type == LL_TOKEN)
+            *tok = token->token;
+          else
+            *tok = token->type;
+
+          return TRUE;
         }
       else
         {
@@ -797,133 +872,263 @@ cfg_lexer_lex(CfgLexer *self, YYSTYPE *yylval, YYLTYPE *yylloc)
         }
     }
 
-  if (cfg_lexer_get_context_type(self) == LL_CONTEXT_BLOCK_CONTENT)
-    cfg_lexer_start_block_state(self, "{}");
-  else if (cfg_lexer_get_context_type(self) == LL_CONTEXT_BLOCK_ARG)
-    cfg_lexer_start_block_state(self, "()");
+  return FALSE;
+}
 
+static gint
+cfg_lexer_lex_next_token(CfgLexer *self, YYSTYPE *yylval, YYLTYPE *yylloc)
+{
   yylval->type = 0;
 
   g_string_truncate(self->token_text, 0);
   g_string_truncate(self->token_pretext, 0);
 
-  tok = _invoke__cfg_lexer_lex(self, yylval, yylloc);
+  gint tok = _invoke__cfg_lexer_lex(self, yylval, yylloc);
   if (yylval->type == 0)
     yylval->type = tok;
 
-  if (self->preprocess_output)
-    g_string_append_printf(self->preprocess_output, "%s", self->token_pretext->str);
- exit:
+  return tok;
+}
 
-  if (self->ignore_pragma)
+static void
+cfg_lexer_append_preprocessed_output(CfgLexer *self, const gchar *token_text)
+{
+  if (self->preprocess_output)
+    g_string_append_printf(self->preprocess_output, "%s", token_text);
+}
+
+static gboolean
+cfg_lexer_parse_and_run_block_generator(CfgLexer *self, CfgBlockGenerator *gen, YYSTYPE *yylval)
+{
+  CfgArgs *args;
+  CfgIncludeLevel *level = &self->include_stack[self->include_depth];
+
+  self->preprocess_suppress_tokens++;
+
+  gint saved_line = level->lloc.first_line;
+  gint saved_column = level->lloc.first_column;
+  if (!cfg_parser_parse(&block_ref_parser, self, (gpointer *) &args, NULL))
     {
-      /* only process @pragma/@include tokens in case pragma allowed is set */
+      level->lloc.first_line = saved_line;
+      level->lloc.first_column = saved_column;
+      free(yylval->cptr);
+      self->preprocess_suppress_tokens--;
+      return FALSE;
+    }
+
+  GString *result = g_string_sized_new(256);
+  gchar buf[256];
+  level->lloc.first_line = saved_line;
+  level->lloc.first_column = saved_column;
+  self->preprocess_suppress_tokens--;
+  gboolean success = cfg_block_generator_generate(gen, self->cfg, args, result,
+                                                  cfg_lexer_format_location(self, &level->lloc, buf, sizeof(buf)));
+
+  free(yylval->cptr);
+  cfg_args_unref(args);
+
+  if (!success)
+    {
+      g_string_free(result, TRUE);
+      return FALSE;
+    }
+
+  cfg_block_generator_format_name(gen, buf, sizeof(buf));
+
+  if (gen->suppress_backticks)
+    success = cfg_lexer_include_buffer_without_backtick_substitution(self, buf, result->str, result->len);
+  else
+    success = cfg_lexer_include_buffer(self, buf, result->str, result->len);
+  g_string_free(result, TRUE);
+
+  if (!success)
+    return FALSE;
+
+  return TRUE;
+}
+
+static gboolean
+cfg_lexer_parse_include(CfgLexer *self, YYSTYPE *yylval, YYLTYPE *yylloc)
+{
+  self->preprocess_suppress_tokens++;
+  gint tok = cfg_lexer_lex(self, yylval, yylloc);
+  if (tok != LL_STRING && tok != LL_IDENTIFIER)
+    {
+      self->preprocess_suppress_tokens--;
+      return FALSE;
+    }
+
+  gchar *include_file = g_strdup(yylval->cptr);
+  free(yylval->cptr);
+
+  tok = cfg_lexer_lex(self, yylval, yylloc);
+  if (tok != ';')
+    {
+      self->preprocess_suppress_tokens--;
+      g_free(include_file);
+      return FALSE;
+    }
+
+  if (!cfg_lexer_include_file(self, include_file))
+    {
+      g_free(include_file);
+      self->preprocess_suppress_tokens--;
+      return FALSE;
+    }
+
+  self->preprocess_suppress_tokens--;
+  g_free(include_file);
+
+  return TRUE;
+}
+
+static gboolean
+cfg_lexer_parse_pragma(CfgLexer *self)
+{
+  gpointer dummy;
+  CfgIncludeLevel *level = &self->include_stack[self->include_depth];
+
+  cfg_lexer_append_preprocessed_output(self, "@");
+
+  gint saved_line = level->lloc.first_line;
+  gint saved_column = level->lloc.first_column;
+
+  if (!cfg_parser_parse(&pragma_parser, self, &dummy, NULL))
+    {
+      level->lloc.first_line = saved_line;
+      level->lloc.first_column = saved_column;
+      return FALSE;
+    }
+
+  return TRUE;
+}
+
+static CfgLexerPreprocessResult
+cfg_lexer_preprocess(CfgLexer *self, gint tok, YYSTYPE *yylval, YYLTYPE *yylloc)
+{
+  /*
+   * NOTE:
+   *
+   * This code is deeply coupled with GlobalConfig and most of it does
+   * not make sense to execute if self->cfg is NULL.  Thus, some of the
+   * conditionals contain an explicit self->cfg check, in other cases it is
+   * implicitly checked by the first conditional of a series of if-then-else
+   * statements.
+   *
+   */
+
+  CfgBlockGenerator *gen;
+
+  if (tok == LL_IDENTIFIER &&
+      self->cfg &&
+      (gen = cfg_lexer_find_generator(self, self->cfg, cfg_lexer_get_context_type(self), yylval->cptr)))
+    {
+      if (!cfg_lexer_parse_and_run_block_generator(self, gen, yylval))
+        return CLPR_ERROR;
+
+      return CLPR_LEX_AGAIN;
+    }
+
+  if (self->ignore_pragma || self->cfg == NULL)
+    {
+      /* only process @pragma/@include tokens in case pragma allowed is set
+       * and the associated configuration is not NULL */
       ;
     }
   else if (tok == LL_PRAGMA)
     {
-      gpointer dummy;
+      if (!cfg_lexer_parse_pragma(self))
+        return CLPR_ERROR;
 
-      if (self->preprocess_output)
-        g_string_append_printf(self->preprocess_output, "@");
-      if (!cfg_parser_parse(&pragma_parser, self, &dummy, NULL))
-        {
-          return LL_ERROR;
-        }
-      goto relex;
+      return CLPR_LEX_AGAIN;
     }
   else if (tok == KW_INCLUDE && cfg_lexer_get_context_type(self) != LL_CONTEXT_PRAGMA)
     {
-      gchar *include_file;
+      if (!cfg_lexer_parse_include(self, yylval, yylloc))
+        return CLPR_ERROR;
 
-      self->preprocess_suppress_tokens++;
-      tok = cfg_lexer_lex(self, yylval, yylloc);
-      if (tok != LL_STRING && tok != LL_IDENTIFIER)
-        {
-          self->preprocess_suppress_tokens--;
-          return LL_ERROR;
-        }
-
-      include_file = g_strdup(yylval->cptr);
-      free(yylval->cptr);
-
-      tok = cfg_lexer_lex(self, yylval, yylloc);
-      if (tok != ';')
-        {
-          self->preprocess_suppress_tokens--;
-          return LL_ERROR;
-        }
-
-      if (!cfg_lexer_include_file(self, include_file))
-        {
-          self->preprocess_suppress_tokens--;
-          return LL_ERROR;
-        }
-      self->preprocess_suppress_tokens--;
-      goto relex;
+      return CLPR_LEX_AGAIN;
     }
-  else if (tok == LL_IDENTIFIER && (gen = cfg_lexer_find_generator(self, cfg_lexer_get_context_type(self), yylval->cptr)))
+  else if (self->cfg->user_version == 0 && self->cfg->parsed_version != 0)
     {
-      CfgArgs *args;
-
-      self->preprocess_suppress_tokens++;
-      if (cfg_parser_parse(&block_ref_parser, self, (gpointer *) &args, NULL))
-        {
-          gboolean success;
-
-          self->preprocess_suppress_tokens--;
-          success = cfg_lexer_generate_block(self, cfg_lexer_get_context_type(self), yylval->cptr, gen, args);
-          cfg_args_unref(args);
-          if (success)
-            {
-              goto relex;
-            }
-        }
-      else
-        {
-          self->preprocess_suppress_tokens--;
-        }
-      return LL_ERROR;
-    }
-  else if (configuration->user_version == 0 && configuration->parsed_version != 0)
-    {
-      cfg_set_version(configuration, configuration->parsed_version);
+      if (!cfg_set_version(self->cfg, configuration->parsed_version))
+        return CLPR_ERROR;
     }
   else if (cfg_lexer_get_context_type(self) != LL_CONTEXT_PRAGMA && !self->non_pragma_seen)
     {
       /* first non-pragma token */
 
-      if (configuration->user_version == 0 && configuration->parsed_version == 0)
+      if (self->cfg->user_version == 0 && self->cfg->parsed_version == 0)
         {
-          /* no version selected yet, and we have a non-pragma token, this
-           * means that the configuration is meant for syslog-ng 2.1 */
-          msg_warning("WARNING: Configuration file has no version number, assuming syslog-ng 2.1 format. Please add @version: maj.min to the beginning of the file to indicate this explicitly");
-          cfg_set_version(configuration, 0x0201);
+          msg_error("ERROR: configuration files without a version number has become unsupported in " VERSION_3_13
+                    ", please specify a version number using @version and update your configuration accordingly");
+          return CLPR_ERROR;
         }
-      cfg_load_candidate_modules(configuration);
+
+      cfg_load_candidate_modules(self->cfg);
+
+      cfg_load_forced_modules(self->cfg);
+
       self->non_pragma_seen = TRUE;
     }
 
-  if (!injected)
+  return CLPR_OK;
+}
+
+int
+cfg_lexer_lex(CfgLexer *self, YYSTYPE *yylval, YYLTYPE *yylloc)
+{
+  /*
+   * NOTE:
+   *
+   * String tokens are allocated by malloc/free and not
+   * g_malloc/g_free, this is significant.  The grammar contains the free()
+   * call, so getting rid of that would require a lot of changes to the
+   * grammar. (on Windows glib, malloc/g_malloc are NOT equivalent)
+   *
+   */
+
+  gint tok;
+  gboolean is_token_injected;
+  CfgLexerPreprocessResult preprocess_result;
+
+  do
     {
-      if (self->preprocess_suppress_tokens == 0 && self->preprocess_output)
+      is_token_injected = cfg_lexer_consume_next_injected_token(self, &tok, yylval, yylloc);
+
+      if (!is_token_injected)
         {
-          g_string_append_printf(self->preprocess_output, "%s", self->token_text->str);
+          if (cfg_lexer_get_context_type(self) == LL_CONTEXT_BLOCK_CONTENT)
+            cfg_lexer_start_block_state(self, "{}");
+          else if (cfg_lexer_get_context_type(self) == LL_CONTEXT_BLOCK_ARG)
+            cfg_lexer_start_block_state(self, "()");
+
+          tok = cfg_lexer_lex_next_token(self, yylval, yylloc);
+          cfg_lexer_append_preprocessed_output(self, self->token_pretext->str);
         }
+
+      preprocess_result = cfg_lexer_preprocess(self, tok, yylval, yylloc);
+      if (preprocess_result == CLPR_ERROR)
+        return LL_ERROR;
     }
+  while (preprocess_result == CLPR_LEX_AGAIN);
+
+  if (!is_token_injected && self->preprocess_suppress_tokens == 0)
+    cfg_lexer_append_preprocessed_output(self, self->token_text->str);
+
   return tok;
 }
 
 static void
-cfg_lexer_init(CfgLexer *self)
+cfg_lexer_init(CfgLexer *self, GlobalConfig *cfg)
 {
-  self->globals = cfg_args_new();
   CfgIncludeLevel *level;
 
   _cfg_lexer_lex_init_extra(self, &self->state);
   self->string_buffer = g_string_sized_new(32);
   self->token_text = g_string_sized_new(32);
   self->token_pretext = g_string_sized_new(32);
+  self->cfg = cfg;
 
   level = &self->include_stack[0];
   level->lloc.first_line = level->lloc.last_line = 1;
@@ -931,14 +1136,19 @@ cfg_lexer_init(CfgLexer *self)
   level->lloc.level = level;
 }
 
+
+/* NOTE: cfg might be NULL in some call sites, but in those cases the lexer
+ * should remain operational, obviously skipping cases where it would be
+ * using the configuration instance.  The lexer and the configuration stuff
+ * should be one-way dependent, right now it is a circular dependency. */
 CfgLexer *
-cfg_lexer_new(FILE *file, const gchar *filename, GString *preprocess_output)
+cfg_lexer_new(GlobalConfig *cfg, FILE *file, const gchar *filename, GString *preprocess_output)
 {
   CfgLexer *self;
   CfgIncludeLevel *level;
 
   self = g_new0(CfgLexer, 1);
-  cfg_lexer_init(self);
+  cfg_lexer_init(self, cfg);
   self->preprocess_output = preprocess_output;
 
   level = &self->include_stack[0];
@@ -951,17 +1161,18 @@ cfg_lexer_new(FILE *file, const gchar *filename, GString *preprocess_output)
 }
 
 CfgLexer *
-cfg_lexer_new_buffer(const gchar *buffer, gsize length)
+cfg_lexer_new_buffer(GlobalConfig *cfg, const gchar *buffer, gsize length)
 {
   CfgLexer *self;
   CfgIncludeLevel *level;
 
   self = g_new0(CfgLexer, 1);
-  cfg_lexer_init(self);
+  cfg_lexer_init(self, cfg);
   self->ignore_pragma = TRUE;
 
   level = &self->include_stack[0];
   level->include_type = CFGI_BUFFER;
+  level->buffer.original_content = g_strdup(buffer);
   level->buffer.content = g_malloc(length + 2);
   memcpy(level->buffer.content, buffer, length);
   level->buffer.content[length] = 0;
@@ -980,25 +1191,8 @@ cfg_lexer_free(CfgLexer *self)
   gint i;
 
   for (i = 0; i <= self->include_depth; i++)
-    {
-      CfgIncludeLevel *level = &self->include_stack[i];
+    cfg_lexer_clear_include_level(self, &self->include_stack[i]);
 
-      g_free(level->name);
-      if (level->yybuf)
-        _cfg_lexer__delete_buffer(level->yybuf, self->state);
-
-      if (level->include_type == CFGI_FILE)
-        {
-          if (level->file.include_file)
-            fclose(level->file.include_file);
-          g_slist_foreach(level->file.files, (GFunc) g_free, NULL);
-          g_slist_free(level->file.files);
-        }
-      else if (level->include_type == CFGI_BUFFER)
-        {
-          g_free(level->buffer.content);
-        }
-    }
   self->include_depth = 0;
   _cfg_lexer_lex_destroy(self->state);
   g_string_free(self->string_buffer, TRUE);
@@ -1009,17 +1203,6 @@ cfg_lexer_free(CfgLexer *self)
 
   while (self->context_stack)
     cfg_lexer_pop_context(self);
-  while (self->generators)
-    {
-      CfgBlockGenerator *gen = self->generators->data;
-
-      if (gen->generator_data && gen->generator_data_free)
-        gen->generator_data_free(gen->generator_data);
-      g_free(gen->name);
-      g_free(gen);
-      self->generators = g_list_delete_link(self->generators, self->generators);
-    }
-  cfg_args_unref(self->globals);
   g_list_foreach(self->token_blocks, (GFunc) cfg_token_block_free, NULL);
   g_list_free(self->token_blocks);
   g_free(self);
@@ -1044,6 +1227,7 @@ static const gchar *lexer_contexts[] =
   [LL_CONTEXT_INNER_SRC] = "inner-src",
   [LL_CONTEXT_CLIENT_PROTO] = "client-proto",
   [LL_CONTEXT_SERVER_PROTO] = "server-proto",
+  [LL_CONTEXT_OPTIONS] = "options",
 };
 
 gint
@@ -1062,6 +1246,7 @@ cfg_lexer_lookup_context_type_by_name(const gchar *name)
 const gchar *
 cfg_lexer_lookup_context_name_by_type(gint type)
 {
+  type &= ~LL_CONTEXT_FLAGS;
   g_assert(type < G_N_ELEMENTS(lexer_contexts));
   return lexer_contexts[type];
 }
@@ -1097,7 +1282,7 @@ cfg_token_block_get_token(CfgTokenBlock *self)
 }
 
 CfgTokenBlock *
-cfg_token_block_new()
+cfg_token_block_new(void)
 {
   CfgTokenBlock *self = g_new0(CfgTokenBlock, 1);
 
@@ -1119,110 +1304,6 @@ cfg_token_block_free(CfgTokenBlock *self)
     }
 
   g_array_free(self->tokens, TRUE);
-  g_free(self);
-}
-
-/* user defined blocks */
-
-/*
- * This class encapsulates a configuration block that the user defined
- * via the configuration file. It behaves like a macro, e.g. when
- * referenced the content of the block is expanded.
- *
- * Each block is identified by its name and the context (source,
- * destination, etc.) where it is meant to be used.
- *
- * A block has a set of name-value pairs to allow expansion to be
- * parameterized. The set of allowed NV pairs is defined at block
- * definition time
- */
-struct _CfgBlock
-{
-  gchar *content;
-  CfgArgs *arg_defs;
-};
-
-static void
-_resolve_unknown_blockargs_as_varargs(gpointer key, gpointer value, gpointer user_data)
-{
-  CfgArgs *defs = ((gpointer *) user_data)[0];
-  GString *varargs = ((gpointer *) user_data)[1];
-
-  if (cfg_args_get(defs, key) == NULL)
-    {
-      g_string_append_printf(varargs, "%s(%s) ", (gchar *)key, (gchar *)value);
-    }
-}
-
-static void
-_fill_varargs(CfgBlock *block, CfgArgs *args)
-{
-  GString *varargs = g_string_new("");
-  gpointer user_data[] = { block->arg_defs, varargs };
-
-  cfg_args_foreach(args, _resolve_unknown_blockargs_as_varargs, user_data);
-  cfg_args_set(args, "__VARARGS__", varargs->str);
-  g_string_free(varargs, TRUE);
-}
-
-/*
- * cfg_block_generate:
- *
- * This is a CfgBlockGeneratorFunc, which takes a CfgBlock defined by
- * the user, substitutes backtick values and generates input tokens
- * for the lexer.
- */
-gboolean
-cfg_block_generate(CfgLexer *lexer, gint context, const gchar *name, CfgArgs *args, gpointer user_data)
-{
-  CfgBlock *block = (CfgBlock *) user_data;
-  gchar *value;
-  gchar buf[256];
-  gsize length;
-  GError *error = NULL;
-  gboolean result;
-
-  g_snprintf(buf, sizeof(buf), "%s block %s", cfg_lexer_lookup_context_name_by_type(context), name);
-  _fill_varargs(block, args);
-
-  value = cfg_lexer_subst_args(lexer->globals, block->arg_defs, args, block->content, -1, &length, &error);
-
-  if (!value)
-    {
-      msg_warning("Syntax error while resolving backtick references in block",
-                  evt_tag_str("context", cfg_lexer_lookup_context_name_by_type(context)),
-                  evt_tag_str("block", name),
-                  evt_tag_str("error", error->message));
-      g_clear_error(&error);
-      return FALSE;
-    }
-
-  result = cfg_lexer_include_buffer_without_backtick_substitution(lexer, buf, value, length);
-  g_free(value);
-  return result;
-}
-
-/*
- * Construct a user defined block.
- */
-CfgBlock *
-cfg_block_new(const gchar *content, CfgArgs *arg_defs)
-{
-  CfgBlock *self = g_new0(CfgBlock, 1);
-
-  self->content = g_strdup(content);
-  self->arg_defs = arg_defs;
-  return self;
-}
-
-/*
- * Free a user defined block.
- */
-void
-cfg_block_free(CfgBlock *self)
-{
-  g_free(self->content);
-  cfg_args_unref(self->arg_defs);
   g_free(self);
 }
 

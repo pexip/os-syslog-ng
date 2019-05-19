@@ -34,14 +34,15 @@ typedef void (*PatternDBEmitFunc)(LogMessage *msg, gboolean synthetic, gpointer 
 void pattern_db_set_emit_func(PatternDB *self, PatternDBEmitFunc emit_func, gpointer emit_data);
 
 PDBRuleSet *pattern_db_get_ruleset(PatternDB *self);
-TimerWheel *pattern_db_get_timer_wheel(PatternDB *self);
 const gchar *pattern_db_get_ruleset_version(PatternDB *self);
 const gchar *pattern_db_get_ruleset_pub_date(PatternDB *self);
 gboolean pattern_db_reload_ruleset(PatternDB *self, GlobalConfig *cfg, const gchar *pdb_file);
 
+void pattern_db_advance_time(PatternDB *self, gint timeout);
 void pattern_db_timer_tick(PatternDB *self);
 gboolean pattern_db_process(PatternDB *self, LogMessage *msg);
-gboolean pattern_db_process_with_custom_message(PatternDB *self, LogMessage *msg, const gchar *message, gssize message_len);
+gboolean pattern_db_process_with_custom_message(PatternDB *self, LogMessage *msg, const gchar *message,
+                                                gssize message_len);
 void pattern_db_debug_ruleset(PatternDB *self, LogMessage *msg, GArray *dbg_list);
 void pattern_db_expire_state(PatternDB *self);
 void pattern_db_forget_state(PatternDB *self);

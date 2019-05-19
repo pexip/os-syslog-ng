@@ -21,11 +21,10 @@
  *
  */
 
-#ifndef AFPROG_PARSER_H_INCLUDED
-#define AFPROG_PARSER_H_INCLUDED
+#ifndef SYSTEMD_JOURNAL_PARSER_H_INCLUDED
+#define SYSTEMD_JOURNAL_PARSER_H_INCLUDED
 
 #include "cfg-parser.h"
-#include "cfg-lexer.h"
 #include "driver.h"
 
 extern CfgParser systemd_journal_parser;

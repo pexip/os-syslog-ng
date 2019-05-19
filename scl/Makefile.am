@@ -1,22 +1,37 @@
 SCL_SUBDIRS	= \
-	system		\
-	pacct		\
-	syslogconf	\
-	rewrite		\
-	nodejs		\
-	graphite	\
-	cim		\
-	solaris		\
-	mbox		\
-	elasticsearch	\
-	kafka		\
-	hdfs		\
 	apache		\
+	cim		\
+	cisco		\
+	default-network-drivers	\
+	elasticsearch	\
+	ewmm		\
+	graphite	\
+	graylog2	\
+	hdfs		\
+	iptables	\
+	kafka		\
+	linux-audit	\
+	loadbalancer	\
 	loggly		\
-	logmatic
+	logmatic	\
+	mbox		\
+	nodejs		\
+	osquery	\
+	pacct		\
+	rewrite	\
+	slack \
+	snmptrap	\
+	solaris	\
+	sudo		\
+	syslogconf	\
+	system		\
+	telegram	\
+	windowseventlog
+
+
 SCL_CONFIGS	= scl.conf syslog-ng.conf
 
-EXTRA_DIST	+= $(addprefix scl/,$(SCL_CONFIGS) $(SCL_SUBDIRS))
+EXTRA_DIST	+= $(addprefix scl/,$(SCL_CONFIGS) $(SCL_SUBDIRS)) scl/CMakeLists.txt
 
 scl-install-data-local:
 	for cfg in $(SCL_CONFIGS); do \

@@ -1,0 +1,21 @@
+#!/bin/bash
+
+set -e
+
+cd /source
+VERSION=`cat VERSION`
+RPMBUILD=${HOME}/rpmbuild
+RPMBUILD_SOURCES=$RPMBUILD/SOURCES
+
+# CzP's spec file expect it in the pwd
+# where the build was initiated
+cp packaging/rhel/syslog-ng.* /build
+
+cd /build
+mkdir -p $RPMBUILD_SOURCES
+cp  syslog-ng-${VERSION}.tar.gz $RPMBUILD_SOURCES
+
+rpmbuild -ta syslog-ng-${VERSION}.tar.gz
+mv $RPMBUILD/RPMS/*/*.rpm /build
+mv $RPMBUILD/SRPMS/*.rpm /build
+echo "Your rpms are in /build, also available on the host in \$(top_srcdir)/dbld/build"

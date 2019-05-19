@@ -32,17 +32,35 @@ typedef struct _TransportMapperInet
 
   gint server_port;
   const gchar *server_port_change_warning;
+  guint32 flags;
   gboolean require_tls;
   gboolean allow_tls;
+  gboolean require_tls_when_has_tls_context;
   TLSContext *tls_context;
-  TLSSessionVerifyFunc tls_verify_callback;
-  gpointer tls_verify_data;
+  TLSVerifier *tls_verifier;
+  gpointer secret_store_cb_data;
 } TransportMapperInet;
 
+static inline void
+transport_mapper_inet_set_allow_compress(TransportMapper *s, gboolean value)
+{
+  TransportMapperInet *self = (TransportMapperInet *) s;
+  if (value)
+    self->flags |= TMI_ALLOW_COMPRESS;
+  else
+    self->flags &= ~TMI_ALLOW_COMPRESS;
+}
+
 static inline gint
-transport_mapper_inet_get_server_port(TransportMapper *self)
+transport_mapper_inet_get_server_port(const TransportMapper *self)
 {
   return ((TransportMapperInet *) self)->server_port;
+}
+
+static inline void
+transport_mapper_inet_set_server_port(TransportMapper *self, gint server_port)
+{
+  ((TransportMapperInet *) self)->server_port = server_port;
 }
 
 static inline const gchar *
@@ -54,11 +72,10 @@ transport_mapper_inet_get_port_change_warning(TransportMapper *s)
 }
 
 static inline void
-transport_mapper_inet_set_tls_context(TransportMapperInet *self, TLSContext *tls_context, TLSSessionVerifyFunc tls_verify_callback, gpointer tls_verify_data)
+transport_mapper_inet_set_tls_context(TransportMapperInet *self, TLSContext *tls_context, TLSVerifier *tls_verifier)
 {
   self->tls_context = tls_context;
-  self->tls_verify_callback = tls_verify_callback;
-  self->tls_verify_data = tls_verify_data;
+  self->tls_verifier = tls_verifier;
 }
 
 void transport_mapper_inet_init_instance(TransportMapperInet *self, const gchar *transport);

@@ -65,9 +65,9 @@ stats_format_csv(StatsCluster *sc, gint type, StatsCounterItem *counter, gpointe
   gchar buf[32];
   gchar state;
 
-  s_id = stats_format_csv_escapevar(sc->id);
-  s_instance = stats_format_csv_escapevar(sc->instance);
-  
+  s_id = stats_format_csv_escapevar(sc->key.id);
+  s_instance = stats_format_csv_escapevar(sc->key.instance);
+
   if (sc->dynamic)
     state = 'd';
   else if (sc->use_count == 0)
@@ -75,10 +75,10 @@ stats_format_csv(StatsCluster *sc, gint type, StatsCounterItem *counter, gpointe
   else
     state = 'a';
 
-  tag_name = stats_format_csv_escapevar(stats_cluster_get_type_name(type));
-  g_string_append_printf(csv, "%s;%s;%s;%c;%s;%u\n",
+  tag_name = stats_format_csv_escapevar(stats_cluster_get_type_name(sc, type));
+  g_string_append_printf(csv, "%s;%s;%s;%c;%s;%"G_GSIZE_FORMAT"\n",
                          stats_cluster_get_component_name(sc, buf, sizeof(buf)),
-                         s_id, s_instance, state, tag_name, stats_counter_get(&sc->counters[type]));
+                         s_id, s_instance, state, tag_name, stats_counter_get(&sc->counter_group.counters[type]));
   g_free(tag_name);
   g_free(s_id);
   g_free(s_instance);
@@ -90,7 +90,8 @@ stats_generate_csv(void)
 {
   GString *csv = g_string_sized_new(1024);
 
-  g_string_append_printf(csv, "%s;%s;%s;%s;%s;%s\n", "SourceName", "SourceId", "SourceInstance", "State", "Type", "Number");
+  g_string_append_printf(csv, "%s;%s;%s;%s;%s;%s\n", "SourceName", "SourceId", "SourceInstance", "State", "Type",
+                         "Number");
   stats_lock();
   stats_foreach_counter(stats_format_csv, csv);
   stats_unlock();

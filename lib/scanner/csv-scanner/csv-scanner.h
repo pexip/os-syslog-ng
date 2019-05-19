@@ -37,7 +37,6 @@ typedef enum
 
 #define CSV_SCANNER_STRIP_WHITESPACE   0x0001
 #define CSV_SCANNER_GREEDY             0x0002
-#define CSV_SCANNER_DROP_INVALID       0x0004
 
 typedef struct _CSVScannerOptions
 {
@@ -59,14 +58,23 @@ void csv_scanner_options_set_flags(CSVScannerOptions *options, guint32 flags);
 void csv_scanner_options_set_columns(CSVScannerOptions *options, GList *columns);
 void csv_scanner_options_set_delimiters(CSVScannerOptions *options, const gchar *delimiters);
 void csv_scanner_options_set_string_delimiters(CSVScannerOptions *options, GList *string_delimiters);
-void csv_scanner_options_set_quotes_start_and_end(CSVScannerOptions *options, const gchar *quotes_start, const gchar *quotes_end);
+void csv_scanner_options_set_quotes_start_and_end(CSVScannerOptions *options, const gchar *quotes_start,
+                                                  const gchar *quotes_end);
 void csv_scanner_options_set_quotes(CSVScannerOptions *options, const gchar *quotes);
 void csv_scanner_options_set_quote_pairs(CSVScannerOptions *options, const gchar *quote_pairs);
 void csv_scanner_options_set_null_value(CSVScannerOptions *options, const gchar *null_value);
 
-typedef struct _CSVScanner
+typedef struct
 {
   CSVScannerOptions *options;
+  enum
+  {
+    CSV_STATE_INITIAL,
+    CSV_STATE_COLUMNS,
+    CSV_STATE_GREEDY_COLUMN,
+    CSV_STATE_PARTIAL_INPUT,
+    CSV_STATE_FINISH,
+  } state;
   GList *current_column;
   const gchar *src;
   GString *current_value;
@@ -77,12 +85,10 @@ const gchar *csv_scanner_get_current_name(CSVScanner *pstate);
 const gchar *csv_scanner_get_current_value(CSVScanner *pstate);
 gint csv_scanner_get_current_value_len(CSVScanner *self);
 gboolean csv_scanner_scan_next(CSVScanner *pstate);
-gboolean csv_scanner_is_scan_finished(CSVScanner *pstate);
+gboolean csv_scanner_is_scan_complete(CSVScanner *pstate);
 gchar *csv_scanner_dup_current_value(CSVScanner *self);
 
-void csv_scanner_input(CSVScanner *pstate, const gchar *input);
-gboolean csv_scanner_parse_input(CSVScanner *pstate);
-void csv_scanner_state_init(CSVScanner *pstate, CSVScannerOptions *options);
-void csv_scanner_state_clean(CSVScanner *pstate);
+void csv_scanner_init(CSVScanner *pstate, CSVScannerOptions *options, const gchar *input);
+void csv_scanner_deinit(CSVScanner *pstate);
 
 #endif

@@ -44,8 +44,8 @@ typedef struct _LogProtoFramedServer
   gboolean half_message_in_buffer;
 } LogProtoFramedServer;
 
-static gboolean
-log_proto_framed_server_prepare(LogProtoServer *s, GIOCondition *cond)
+static LogProtoPrepareAction
+log_proto_framed_server_prepare(LogProtoServer *s, GIOCondition *cond, gint *timeout G_GNUC_UNUSED)
 {
   LogProtoFramedServer *self = (LogProtoFramedServer *) s;
 
@@ -57,7 +57,7 @@ log_proto_framed_server_prepare(LogProtoServer *s, GIOCondition *cond)
       if (self->buffer_pos != self->buffer_end)
         {
           /* we have a full message in our buffer so parse it without reading new data from the transport layer */
-          return TRUE;
+          return LPPA_FORCE_SCHEDULE_FETCH;
         }
     }
 
@@ -65,11 +65,11 @@ log_proto_framed_server_prepare(LogProtoServer *s, GIOCondition *cond)
   if (*cond == 0)
     *cond = G_IO_IN;
 
-  return FALSE;
+  return LPPA_POLL_IO;
 }
 
 static LogProtoStatus
-log_proto_framed_server_fetch_data(LogProtoFramedServer *self, gboolean *may_read)
+log_proto_framed_server_fetch_data(LogProtoFramedServer *self, gboolean *may_read, LogTransportAuxData *aux)
 {
   gint rc;
 
@@ -90,15 +90,16 @@ log_proto_framed_server_fetch_data(LogProtoFramedServer *self, gboolean *may_rea
   if (!(*may_read))
     return LPS_SUCCESS;
 
-  rc = log_transport_read(self->super.transport, &self->buffer[self->buffer_end], self->buffer_size - self->buffer_end, NULL);
+  rc = log_transport_read(self->super.transport, &self->buffer[self->buffer_end], self->buffer_size - self->buffer_end,
+                          aux);
 
   if (rc < 0)
     {
       if (errno != EAGAIN)
         {
-          msg_error("Error reading RFC5428 style framed data",
+          msg_error("Error reading RFC6587 style framed data",
                     evt_tag_int("fd", self->super.transport->fd),
-                    evt_tag_errno("error", errno));
+                    evt_tag_error("error"));
           return LPS_ERROR;
         }
       else
@@ -109,8 +110,8 @@ log_proto_framed_server_fetch_data(LogProtoFramedServer *self, gboolean *may_rea
     }
   else if (rc == 0)
     {
-      msg_verbose("EOF occurred while reading",
-                  evt_tag_int(EVT_TAG_FD, self->super.transport->fd));
+      msg_trace("EOF occurred while reading",
+                evt_tag_int(EVT_TAG_FD, self->super.transport->fd));
       return LPS_EOF;
     }
   else
@@ -152,7 +153,8 @@ log_proto_framed_server_extract_frame_length(LogProtoFramedServer *self, gboolea
 }
 
 static LogProtoStatus
-log_proto_framed_server_fetch(LogProtoServer *s, const guchar **msg, gsize *msg_len, gboolean *may_read, LogTransportAuxData *aux, Bookmark *bookmark)
+log_proto_framed_server_fetch(LogProtoServer *s, const guchar **msg, gsize *msg_len, gboolean *may_read,
+                              LogTransportAuxData *aux, Bookmark *bookmark)
 {
   LogProtoFramedServer *self = (LogProtoFramedServer *) s;
   LogProtoStatus status;
@@ -170,17 +172,21 @@ log_proto_framed_server_fetch(LogProtoServer *s, const guchar **msg, gsize *msg_
 
       try_read = TRUE;
 
-    read_frame:
+read_frame:
       if (!log_proto_framed_server_extract_frame_length(self, &need_more_data))
         {
           /* invalid frame header */
+          log_transport_aux_data_reinit(aux);
           return LPS_ERROR;
         }
       if (need_more_data && try_read)
         {
-          status = log_proto_framed_server_fetch_data(self, may_read);
+          status = log_proto_framed_server_fetch_data(self, may_read, aux);
           if (status != LPS_SUCCESS)
-            return status;
+            {
+              log_transport_aux_data_reinit(aux);
+              return status;
+            }
           try_read = FALSE;
           goto read_frame;
         }
@@ -193,6 +199,7 @@ log_proto_framed_server_fetch(LogProtoServer *s, const guchar **msg, gsize *msg_
               msg_error("Incoming frame larger than log_msg_size()",
                         evt_tag_int("log_msg_size", self->super.options->max_msg_size),
                         evt_tag_int("frame_length", self->frame_len));
+              log_transport_aux_data_reinit(aux);
               return LPS_ERROR;
             }
           if (self->buffer_size < self->super.options->max_buffer_size &&
@@ -226,7 +233,7 @@ log_proto_framed_server_fetch(LogProtoServer *s, const guchar **msg, gsize *msg_
     case LPFSS_MESSAGE_READ:
 
       try_read = TRUE;
-    read_message:
+read_message:
       /* NOTE: here we can assume that the complete message fits into
        * the buffer because of the checks/move operation in the
        * LPFSS_FRAME_READ state */
@@ -245,9 +252,12 @@ log_proto_framed_server_fetch(LogProtoServer *s, const guchar **msg, gsize *msg_
         }
       if (try_read)
         {
-          status = log_proto_framed_server_fetch_data(self, may_read);
+          status = log_proto_framed_server_fetch_data(self, may_read, aux);
           if (status != LPS_SUCCESS)
-            return status;
+            {
+              log_transport_aux_data_reinit(aux);
+              return status;
+            }
           try_read = FALSE;
           goto read_message;
         }

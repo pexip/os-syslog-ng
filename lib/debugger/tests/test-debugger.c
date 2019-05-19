@@ -22,21 +22,30 @@
  *
  */
 
+#include <criterion/criterion.h>
+
 #include "debugger/debugger.h"
 #include "apphook.h"
 
 void
-test_debugger(void)
+setup(void)
 {
-  Debugger *debugger = debugger_new(configuration);
+  app_startup();
+  configuration = cfg_new_snippet();
+}
+
+void
+teardown(void)
+{
+  cfg_free(configuration);
+}
+
+TestSuite(debugger, .init = setup, .fini = teardown);
+
+Test(debugger, test_debugger)
+{
+  MainLoop *main_loop = main_loop_get_instance();
+  Debugger *debugger = debugger_new(main_loop, configuration);
   debugger_free(debugger);
 }
 
-int
-main()
-{
-  app_startup();
-  configuration = cfg_new(VERSION_VALUE);
-  test_debugger();
-  cfg_free(configuration);
-}

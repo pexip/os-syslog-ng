@@ -1,3 +1,225 @@
+syslog-ng (3.19.1-5) unstable; urgency=high
+
+  * Backport security fixes:
+    - fix app-parser() per reload memory leak,
+    - logger: fix leaking file handlers,
+    - DNS memory leak/segfault fix,
+    - cmake: add missing detection for O_LARGEFILE,
+    - threaded-dest: fix integer overflow,
+    - threaded-dest: move last_worker to DestDriver,
+    - cmake: fix typo in HAVE_STRNLEN,
+    - http: add missing free for self->body_template,
+    - test_pathutils: fix leak,
+    - test_file_list: fix leak,
+    - template: tf_simple_func_prepare leak fix,
+    - gorupingby: fix memory leak,
+    - groupingby: fix invalid memory access.
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.org>  Sun, 19 May 2019 11:03:30 +0000
+
+syslog-ng (3.19.1-4) unstable; urgency=medium
+
+  * Add dns_cache(no) to options (closes: #922524).
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.org>  Mon, 22 Apr 2019 11:02:19 +0000
+
+syslog-ng (3.19.1-3) unstable; urgency=medium
+
+  * Correct syslog-ng-mod-examples description (closes: #920846).
+  * Disable pacctformat building on non-Linux systems.
+  * Disable buggy upgrade self-test.
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.org>  Mon, 04 Feb 2019 18:47:26 +0000
+
+syslog-ng (3.19.1-2) unstable; urgency=medium
+
+  * Install SCL files from source (closes: #920512).
+  * Make syslog-ng-mod-pacctformat linux-any.
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.org>  Sat, 26 Jan 2019 13:57:58 +0000
+
+syslog-ng (3.19.1-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Remove merged in patches.
+  * Don't try to run self-tests until its Criterion dependency packaged.
+  * Merge syslog-ng-mod-json into syslog-ng-core.
+  * Add syslog-ng-mod-geoip2 module.
+  * Add syslog-ng-mod-pacctformat module.
+  * Add syslog-ng-mod-examples module.
+  * Update syslog-ng-mod-extra install.
+  * Install all SCL files.
+  * Update configuration version.
+  * Update self-tests.
+  * Remove own compression option.
+  * Prepare for Python 3 module.
+  * Build with libcurl4-openssl-dev.
+  * Patch to remove outdated documentation.
+  * Remove own ABI virtual package.
+  * Add http destination module to -core.
+  * Add hook commands module to -core.
+  * Add loggen modules to -core.
+  * Add secret storage module to -core.
+  * Install pkg-config files to MultiArch directory.
+  * Update Standards-Version to 4.3.0 .
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.org>  Tue, 25 Dec 2018 09:40:28 +0000
+
+syslog-ng (3.13.2-5) unstable; urgency=medium
+
+  * Update maintainer email address.
+  * Add libcurl4-openssl-dev to Build-Conflicts.
+  * Correct wording of patch short description.
+  * Don't specify parallel to debhelper.
+  * Update Standards-Version to 4.2.1 .
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.org>  Mon, 15 Oct 2018 21:32:24 +0000
+
+syslog-ng (3.13.2-4.2) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * [ebb81d1] Ignore PEP8 W504 warning (Closes: #910896)
+
+ -- Vincent Bernat <bernat@debian.org>  Mon, 15 Oct 2018 08:22:59 +0200
+
+syslog-ng (3.13.2-4.1) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * [a611875] Change maintainer address to @tracker.debian.org (Closes: #899867)
+  * [fcd4051] Fix installation step of syslog-ng-mod-extra when building with -A
+    (Closes: #901117)
+
+ -- Vincent Bernat <bernat@debian.org>  Fri, 10 Aug 2018 09:15:56 +0200
+
+syslog-ng (3.13.2-4) unstable; urgency=medium
+
+  * [a514e12] Fix testcase issue in GNU Hurd
+
+ -- SZALAY Attila <sasa@debian.org>  Sun, 04 Mar 2018 13:52:53 +0100
+
+syslog-ng (3.13.2-3) unstable; urgency=medium
+
+  * [afa41f8] Fixed pylint reported new issues.
+    The new version of pylint has an added
+    check which triggered by some of the
+    python code within the project. (Closes: #889303)
+
+ -- SZALAY Attila <sasa@debian.org>  Sun, 11 Feb 2018 17:06:23 +0100
+
+syslog-ng (3.13.2-2) unstable; urgency=medium
+
+  * [776dd44] Removed two typo from the get_path_max code.
+    Thanks to Aaron M. Ucko for the investigation of this bug (Closes: #885248)
+  * [e4bb74a] Added the new packages to the test suit
+  * [f8de833] Added required dependency of modules extra
+
+ -- SZALAY Attila <sasa@debian.org>  Thu, 28 Dec 2017 19:15:55 +0100
+
+syslog-ng (3.13.2-1) unstable; urgency=medium
+
+  * [a088324] New upstream version 3.12.1
+  * [029bb36] Removed unneeded dh-systemd (build) dependency
+  * [aadc721] Temporally add libsnappy-dev dependency until libmongoc-dev fix it
+  * [aa6e18e] Updated config version to 3.12
+  * [eb5e839] Fixed filter expression of gbp import-orig
+  * [dea804c] New upstream version 3.13.2
+  * [abeab4a] Adapt patches to the new version
+  * [8a82a05] Fixed new pylint issues
+  * [4355398] Changed package priority to optional
+  * [831da62] Enable fail-missing option of dh_missing
+  * [251a0bc] Added new plugins
+  * [cf80b16] Update the config version
+  * [cff2c3e] Added a (disabled) test to compile incubator
+  * [a8f4557] Remove obsoleted eventlog dependency (Closes: #881705)
+  * [5e715ce] Upgrade ABI version because of incompatible changes
+
+ -- SZALAY Attila <sasa@debian.org>  Wed, 20 Dec 2017 09:52:22 +0100
+
+syslog-ng (3.11.1-2) unstable; urgency=medium
+
+  * [eb1ad8a] Remove dh-autoreconf dependency.
+    This not needed any more with debhelper version >= 10
+  * [90a2d31] Removed upstart init file.
+    It does not needed any more
+  * [621acc1] Added try-restart option to the init script
+  * [0e76829] Testing SystemV init script too
+  * [c4156ea] Add libevtlog.so to the -dev package
+  * [6e4bde9] Adapt mongodb test code to the new version
+    libmongoc version 1.7.0 changed the syntax of the unix domain socket type of
+    connection. This change is to adapt the test case to the new situation.
+
+ -- SZALAY Attila <sasa@debian.org>  Fri, 01 Sep 2017 22:46:28 +0200
+
+syslog-ng (3.11.1-1) unstable; urgency=medium
+
+  * [1601fce] New upstream version 3.11.1
+  * [e33d51d] Refreshed debian/patches.
+    Removed patches merged upstream and fixed
+    a conflict caused by upstream changes.
+  * [2c0ec3c] Added python dependency for syslog-ng-dev
+  * [5584829] Re-added the old system control file.
+    The new upstream version contains an enhanced systemd control file which
+    allow one to start more than one instance.  Unfortunately this change would
+    cause issues with already installed systems.  Until that situation can be
+    enhanced, the old systemd file will be used.
+  * [4f4c274] Added the new man pages
+  * [3e5e19f] Upgrade configs version 3.11
+
+ -- SZALAY Attila <sasa@debian.org>  Mon, 07 Aug 2017 10:15:09 -0400
+
+syslog-ng (3.10.1-3) unstable; urgency=medium
+
+  * [6318b4b] getent module conflicts with old incubator package.
+    The getent module was moved from the incubator and therefore
+    contains the same files. (Closes: #869159)
+
+ -- SZALAY Attila <sasa@debian.org>  Tue, 25 Jul 2017 22:06:15 +0200
+
+syslog-ng (3.10.1-2) unstable; urgency=medium
+
+  * [a776121] Added new plugins.
+      - getent
+      - stardate
+      - mod-value-pairs
+      - snmptrapd-parser
+  * [b030059] Added scl to the .install file
+  * [e4f5ac4] Bump the debhelper compat level to 10
+  * [4e27f27] Fixed debhelper dependency
+  * [ff8e0ff] Install new scl files and explicitly mention skipped ones
+  * [50b4c13] Fixed 32 bit compile issues.
+    This patch is suggested by upstream in github issue 1545.
+  * [ae5e271] Remove obsoleted files from debian/
+  * [cccc2bb] Added the new packages to the testing
+  * [8661982] Removed unneeded prebuild step
+
+ -- SZALAY Attila <sasa@debian.org>  Tue, 04 Jul 2017 22:05:34 +0200
+
+syslog-ng (3.10.1-1) unstable; urgency=medium
+
+  * [e47c9a6] Re-generated openssl patch to make the gbp pq happy
+    And a patch were a next session start before the previous
+    is finished can be called weird anyway.
+  * [114f0e0] Try again using tagged git release as orig.tar.gz
+    Now, after some time I'm a bit more confident that using a naked git
+    release is better than the full-featured and all-including release.
+    First, it is much smaller.  Especially because it does not contain all
+    of the third party libraries which are not used in Debian.  Second
+    reason is that this can be followed much easily, because this is the
+    same as any particular state in the git repo, so a snapshot can be more
+    easily used if this is the daily routine.
+  * [9c410bb] New upstream version 3.10.1 (closes: #866056)
+  * [fa5c024] Preparing for upstream version 3.10.X
+  * [c0f99c0] Updated the patches to the new upstream version
+    This mainly means deleting patches which already
+    merged upstream.
+  * [a7b8153] Added new build dependency (autoconf-archive)
+  * [9a197e2] Removed version fixation
+  * [f52837d] Upgrade test config version
+  * [bf45a65] Upgraded default config version to 3.10
+  * [fc82e19] Added a new test to test the default config
+
+ -- SZALAY Attila <sasa@debian.org>  Fri, 30 Jun 2017 22:15:28 +0200
+
 syslog-ng (3.8.1-10) unstable; urgency=medium
 
   * Fix segfault in X509_STORE_CTX_get_app_data(ctx) (closes: #850743).

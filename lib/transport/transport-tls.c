@@ -46,6 +46,14 @@ log_transport_tls_read_method(LogTransport *s, gpointer buf, gsize buflen, LogTr
    * SSL_ERROR_WANT_WRITE is specified by libssl */
   self->super.cond = G_IO_IN;
 
+  /* if we have found the peer has a certificate */
+  if( self->tls_session->peer_info.found )
+    {
+      log_transport_aux_data_add_nv_pair(aux, ".tls.x509_cn", self->tls_session->peer_info.cn );
+      log_transport_aux_data_add_nv_pair(aux, ".tls.x509_o", self->tls_session->peer_info.o );
+      log_transport_aux_data_add_nv_pair(aux, ".tls.x509_ou", self->tls_session->peer_info.ou );
+    }
+
   do
     {
       rc = SSL_read(self->tls_session->ssl, buf, buflen);
@@ -59,7 +67,7 @@ log_transport_tls_read_method(LogTransport *s, gpointer buf, gsize buflen, LogTr
               errno = EAGAIN;
               break;
             case SSL_ERROR_WANT_WRITE:
-              /* although we are writing this fd, libssl wants to write. This
+              /* although we are reading this fd, libssl wants to write. This
                * happens during renegotiation for example */
               self->super.cond = G_IO_OUT;
               errno = EAGAIN;
@@ -73,13 +81,17 @@ log_transport_tls_read_method(LogTransport *s, gpointer buf, gsize buflen, LogTr
         }
     }
   while (rc == -1 && errno == EINTR);
+  if (rc != -1)
+    {
+      self->super.cond = 0;
+    }
 
   return rc;
- tls_error:
+tls_error:
 
-  ssl_error = ERR_get_error();
   msg_error("SSL error while reading stream",
-            evt_tag_printf("tls_error", "%s:%s:%s", ERR_lib_error_string(ssl_error), ERR_func_error_string(ssl_error), ERR_reason_error_string(ssl_error)));
+            tls_context_format_tls_error_tag(self->tls_session->ctx),
+            tls_context_format_location_tag(self->tls_session->ctx));
   ERR_clear_error();
 
   errno = ECONNRESET;
@@ -122,14 +134,18 @@ log_transport_tls_write_method(LogTransport *s, const gpointer buf, gsize buflen
           goto tls_error;
         }
     }
+  else
+    {
+      self->super.cond = 0;
+    }
 
   return rc;
 
- tls_error:
+tls_error:
 
-  ssl_error = ERR_get_error();
   msg_error("SSL error while writing stream",
-            evt_tag_printf("tls_error", "%s:%s:%s", ERR_lib_error_string(ssl_error), ERR_func_error_string(ssl_error), ERR_reason_error_string(ssl_error)));
+            tls_context_format_tls_error_tag(self->tls_session->ctx),
+            tls_context_format_location_tag(self->tls_session->ctx));
   ERR_clear_error();
 
   errno = EPIPE;

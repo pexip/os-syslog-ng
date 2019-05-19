@@ -33,30 +33,30 @@ log_rewrite_set_condition(LogRewrite *self, FilterExprNode *condition)
 }
 
 static void
-log_rewrite_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options, gpointer user_data)
+log_rewrite_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options)
 {
   LogRewrite *self = (LogRewrite *) s;
-  gssize length;
-  const gchar *value;
 
+  msg_trace(">>>>>> rewrite rule evaluation begin",
+            evt_tag_str("rule", self->name),
+            log_pipe_location_tag(s),
+            evt_tag_printf("msg", "%p", msg));
   if (self->condition && !filter_expr_eval_root(self->condition, &msg, path_options))
     {
-      msg_debug("Rewrite condition unmatched, skipping rewrite",
-                evt_tag_str("value", log_msg_get_value_name(self->value_handle, NULL)));
+      msg_trace("Rewrite condition unmatched, skipping rewrite",
+                evt_tag_str("value", log_msg_get_value_name(self->value_handle, NULL)),
+                evt_tag_str("rule", self->name),
+                log_pipe_location_tag(s),
+                evt_tag_printf("msg", "%p", msg));
     }
   else
     {
       self->process(self, &msg, path_options);
     }
-  if (G_UNLIKELY(debug_flag))
-    {
-      value = log_msg_get_value(msg, self->value_handle, &length);
-      msg_debug("Rewrite expression evaluation result",
-                evt_tag_str("value", log_msg_get_value_name(self->value_handle, NULL)),
-                evt_tag_printf("new_value", "%.*s", (gint) length, value),
-                evt_tag_str("rule", self->name),
-                log_pipe_location_tag(s));
-    }
+  msg_trace("<<<<<< rewrite rule evaluation finished",
+            evt_tag_str("rule", self->name),
+            log_pipe_location_tag(s),
+            evt_tag_printf("msg", "%p", msg));
   log_pipe_forward_msg(s, msg, path_options);
 }
 
@@ -66,8 +66,8 @@ log_rewrite_init_method(LogPipe *s)
   LogRewrite *self = (LogRewrite *) s;
   GlobalConfig *cfg = log_pipe_get_config(s);
 
-  if (self->condition && self->condition->init)
-    self->condition->init(self->condition, log_pipe_get_config(s));
+  if (self->condition)
+    filter_expr_init(self->condition, cfg);
 
   if (!self->name)
     self->name = cfg_tree_get_rule_name(&cfg->tree, ENC_REWRITE, s->expr_node);

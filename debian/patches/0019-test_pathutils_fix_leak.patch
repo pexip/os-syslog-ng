@@ -1,0 +1,33 @@
+From 76a79cf25ab1bbb011284c4bd50320385b3280c7 Mon Sep 17 00:00:00 2001
+From: Kokan <kokaipeter@gmail.com>
+Date: Thu, 21 Feb 2019 12:06:52 +0100
+Subject: [PATCH] test_pathutils: fix leak
+
+Signed-off-by: Kokan <kokaipeter@gmail.com>
+---
+ lib/tests/test_pathutils.c | 12 +++++++++---
+ 1 file changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/lib/tests/test_pathutils.c b/lib/tests/test_pathutils.c
+index 5fe660762b..5662846381 100644
+--- a/lib/tests/test_pathutils.c
++++ b/lib/tests/test_pathutils.c
+@@ -66,9 +66,15 @@ Test(test_pathutils, test_is_file_device)
+ 
+ Test(test_pathutils, test_find_file_in_path)
+ {
+-  cr_assert_str_eq(find_file_in_path("/dev", "null", G_FILE_TEST_EXISTS), "/dev/null", "wrong path returned)");
+-  cr_assert_str_eq(find_file_in_path("/home:/dev:/root", "null", G_FILE_TEST_EXISTS),  "/dev/null",
+-                   "wrong path returned");
++  gchar *file;
++
++  file = find_file_in_path("/dev", "null", G_FILE_TEST_EXISTS);
++  cr_assert_str_eq(file, "/dev/null");
++  g_free(file);
++
++  file = find_file_in_path("/home:/dev:/root", "null", G_FILE_TEST_EXISTS);
++  cr_assert_str_eq(file, "/dev/null");
++  g_free(file);
+ }
+ 
+ Test(test_pathutils, test_get_filename_extension)

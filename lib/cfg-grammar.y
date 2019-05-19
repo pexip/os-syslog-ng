@@ -29,6 +29,7 @@
    with care. If you need additional headers, please look for a
    massive list of includes further below. */
 
+#pragma GCC diagnostic ignored "-Wswitch-default"
 /* YYSTYPE and YYLTYPE is defined by the lexer */
 #include "cfg-lexer.h"
 #include "afinter.h"
@@ -39,6 +40,8 @@
 #include "rewrite/rewrite-expr-parser.h"
 #include "logmatcher.h"
 #include "logthrdestdrv.h"
+#include "logthrsource/logthrsourcedrv.h"
+#include "str-utils.h"
 
 /* uses struct declarations instead of the typedefs to avoid having to
  * include logreader/logwriter/driver.h, which defines the typedefs.  This
@@ -48,6 +51,7 @@
 extern struct _LogSourceOptions *last_source_options;
 extern struct _LogReaderOptions *last_reader_options;
 extern struct _LogProtoServerOptions *last_proto_server_options;
+extern struct _LogProtoClientOptions *last_proto_client_options;
 extern struct _LogWriterOptions *last_writer_options;
 extern struct _FilePermOptions *last_file_perm_options;
 extern struct _MsgFormatOptions *last_msg_format_options;
@@ -158,6 +162,8 @@ extern struct _StatsOptions *last_stats_options;
 %token LL_CONTEXT_INNER_SRC           16
 %token LL_CONTEXT_CLIENT_PROTO        17
 %token LL_CONTEXT_SERVER_PROTO        18
+%token LL_CONTEXT_OPTIONS             19
+
 
 /* statements */
 %token KW_SOURCE                      10000
@@ -170,10 +176,12 @@ extern struct _StatsOptions *last_stats_options;
 %token KW_BLOCK                       10007
 %token KW_JUNCTION                    10008
 %token KW_CHANNEL                     10009
+%token KW_IF			      10010
+%token KW_ELSE			      10011
+%token KW_ELIF			      10012
 
 /* source & destination items */
-%token KW_INTERNAL                    10010
-%token KW_FILE                        10011
+%token KW_INTERNAL                    10020
 %token KW_SYSLOG                      10060
 
 /* option items */
@@ -190,6 +198,10 @@ extern struct _StatsOptions *last_stats_options;
 %token KW_MARK_MODE                   10081
 %token KW_ENCODING                    10082
 %token KW_TYPE                        10083
+%token KW_STATS_MAX_DYNAMIC           10084
+%token KW_MIN_IW_SIZE_PER_READER      10085
+%token KW_BATCH_LINES                 10087
+%token KW_BATCH_TIMEOUT               10088
 
 %token KW_CHAIN_HOSTNAMES             10090
 %token KW_NORMALIZE_HOSTNAMES         10091
@@ -230,6 +242,8 @@ extern struct _StatsOptions *last_stats_options;
 %token KW_PASS_UNIX_CREDENTIALS       10231
 
 %token KW_PERSIST_NAME                10302
+
+%token KW_READ_OLD_RECORDS            10304
 
 /* log statement options */
 %token KW_FLAGS                       10190
@@ -300,16 +314,17 @@ extern struct _StatsOptions *last_stats_options;
 %token KW_ENDIF                       10411
 
 %token LL_DOTDOT                      10420
+%token LL_DOTDOTDOT                   10421
 
-%token <cptr> LL_IDENTIFIER           10421
-%token <num>  LL_NUMBER               10422
-%token <fnum> LL_FLOAT                10423
-%token <cptr> LL_STRING               10424
-%token <token> LL_TOKEN               10425
-%token <cptr> LL_BLOCK                10426
-%token LL_PRAGMA                      10427
-%token LL_EOL                         10428
-%token LL_ERROR                       10429
+%token <cptr> LL_IDENTIFIER           10422
+%token <num>  LL_NUMBER               10423
+%token <fnum> LL_FLOAT                10424
+%token <cptr> LL_STRING               10425
+%token <token> LL_TOKEN               10426
+%token <cptr> LL_BLOCK                10427
+%token LL_PRAGMA                      10428
+%token LL_EOL                         10429
+%token LL_ERROR                       10430
 
 %destructor { free($$); } <cptr>
 
@@ -320,13 +335,14 @@ extern struct _StatsOptions *last_stats_options;
 %token KW_KEY                         10504
 %token KW_SCOPE                       10505
 %token KW_SHIFT                       10506
-%token KW_REKEY                       10507
-%token KW_ADD_PREFIX                  10508
-%token KW_REPLACE_PREFIX              10509
+%token KW_SHIFT_LEVELS                10507
+%token KW_REKEY                       10508
+%token KW_ADD_PREFIX                  10509
+%token KW_REPLACE_PREFIX              10510
 
-%token KW_ON_ERROR                    10510
+%token KW_ON_ERROR                    10511
 
-%token KW_RETRIES                     10511
+%token KW_RETRIES                     10512
 
 /* END_DECLS */
 
@@ -335,6 +351,7 @@ extern struct _StatsOptions *last_stats_options;
 #include "cfg-parser.h"
 #include "cfg.h"
 #include "cfg-tree.h"
+#include "cfg-block.h"
 #include "template/templates.h"
 #include "template/user-function.h"
 #include "logreader.h"
@@ -363,6 +380,7 @@ LogDriver *last_driver;
 LogParser *last_parser;
 LogSourceOptions *last_source_options;
 LogProtoServerOptions *last_proto_server_options;
+LogProtoClientOptions *last_proto_client_options;
 LogReaderOptions *last_reader_options;
 LogWriterOptions *last_writer_options;
 MsgFormatOptions *last_msg_format_options;
@@ -416,6 +434,8 @@ DNSCacheOptions *last_dns_cache_options;
 %type   <ptr> log_last_junction
 %type   <ptr> log_junction
 %type   <ptr> log_content
+%type   <ptr> log_conditional
+%type   <ptr> log_if
 %type   <ptr> log_forks
 %type   <ptr> log_fork
 
@@ -430,10 +450,16 @@ DNSCacheOptions *last_dns_cache_options;
 
 %type	<cptr> string
 %type	<cptr> string_or_number
+%type	<cptr> normalized_flag
 %type   <ptr> string_list
 %type   <ptr> string_list_build
 %type   <num> facility_string
 %type   <num> level_string
+
+%type   <num> positive_integer
+%type   <num> positive_integer64
+%type   <num> nonnegative_integer
+%type   <num> nonnegative_integer64
 
 /* END_DECLS */
 
@@ -524,7 +550,7 @@ rewrite_stmt
 
 log_stmt
         : KW_LOG
-          { cfg_lexer_push_context(lexer, LL_CONTEXT_LOG, NULL, "log"); }
+          { cfg_lexer_push_context(lexer, LL_CONTEXT_LOG, NULL, "log statement"); }
           '{' log_content '}'
           { cfg_lexer_pop_context(lexer); }
           {
@@ -541,10 +567,10 @@ plugin_stmt
             gint context = LL_CONTEXT_ROOT;
             gpointer result;
 
-            p = plugin_find(configuration, context, $1);
+            p = cfg_find_plugin(configuration, context, $1);
             CHECK_ERROR(p, @1, "%s plugin %s not found", cfg_lexer_lookup_context_name_by_type(context), $1);
 
-            result = plugin_parse_config(p, configuration, &@1, NULL);
+            result = cfg_parse_plugin(configuration, p, &@1, NULL);
             free($1);
             if (!result)
               YYERROR;
@@ -555,7 +581,7 @@ plugin_stmt
 
 source_content
         :
-          { cfg_lexer_push_context(lexer, LL_CONTEXT_SOURCE, NULL, "source"); }
+          { cfg_lexer_push_context(lexer, LL_CONTEXT_SOURCE, NULL, "source statement"); }
           source_items
           { cfg_lexer_pop_context(lexer); }
           {
@@ -580,10 +606,10 @@ source_plugin
             Plugin *p;
             gint context = LL_CONTEXT_SOURCE;
 
-            p = plugin_find(configuration, context, $1);
+            p = cfg_find_plugin(configuration, context, $1);
             CHECK_ERROR(p, @1, "%s plugin %s not found", cfg_lexer_lookup_context_name_by_type(context), $1);
 
-            last_driver = (LogDriver *) plugin_parse_config(p, configuration, &@1, NULL);
+            last_driver = (LogDriver *) cfg_parse_plugin(configuration, p, &@1, NULL);
             free($1);
             if (!last_driver)
               {
@@ -646,7 +672,7 @@ rewrite_content
         ;
 
 dest_content
-         : { cfg_lexer_push_context(lexer, LL_CONTEXT_DESTINATION, NULL, "destination"); }
+         : { cfg_lexer_push_context(lexer, LL_CONTEXT_DESTINATION, NULL, "destination statement"); }
             dest_items
            { cfg_lexer_pop_context(lexer); }
            {
@@ -672,10 +698,10 @@ dest_plugin
             Plugin *p;
             gint context = LL_CONTEXT_DESTINATION;
 
-            p = plugin_find(configuration, context, $1);
+            p = cfg_find_plugin(configuration, context, $1);
             CHECK_ERROR(p, @1, "%s plugin %s not found", cfg_lexer_lookup_context_name_by_type(context), $1);
 
-            last_driver = (LogDriver *) plugin_parse_config(p, configuration, &@1, NULL);
+            last_driver = (LogDriver *) cfg_parse_plugin(configuration, p, &@1, NULL);
             free($1);
             if (!last_driver)
               {
@@ -701,6 +727,7 @@ log_item
         | KW_REWRITE '{' rewrite_content '}'    { $$ = log_expr_node_new_rewrite(NULL, $3, &@$); }
         | KW_DESTINATION '(' string ')'		{ $$ = log_expr_node_new_destination_reference($3, &@$); free($3); }
         | KW_DESTINATION '{' dest_content '}'   { $$ = log_expr_node_new_destination(NULL, $3, &@$); }
+        | log_conditional			{ $$ = $1; }
         | log_junction                          { $$ = $1; }
 	;
 
@@ -731,6 +758,42 @@ log_fork
         | KW_CHANNEL '{' log_content '}'        { $$ = $3; }
         ;
 
+log_conditional
+        : log_if				{ $$ = $1; }
+        | log_if KW_ELSE '{' log_content '}'
+          {
+            log_expr_node_conditional_set_false_branch_of_the_last_if($1, $4);
+            $$ = $1;
+          }
+        ;
+
+log_if
+        : KW_IF '(' filter_content ')' '{' log_content '}'
+          {
+            $$ = log_expr_node_new_conditional_with_filter($3, $6, &@$);
+          }
+        | KW_IF '{' log_content '}'
+          {
+            $$ = log_expr_node_new_conditional_with_block($3, &@$);
+          }
+        | log_if KW_ELIF '(' filter_content ')' '{' log_content '}'
+          {
+            LogExprNode *false_branch;
+
+            false_branch = log_expr_node_new_conditional_with_filter($4, $7, &@$);
+            log_expr_node_conditional_set_false_branch_of_the_last_if($1, false_branch);
+            $$ = $1;
+          }
+        | log_if KW_ELIF '{' log_content '}'
+          {
+            LogExprNode *false_branch;
+
+            false_branch = log_expr_node_new_conditional_with_block($4, &@$);
+            log_expr_node_conditional_set_false_branch_of_the_last_if($1, false_branch);
+            $$ = $1;
+          }
+        ;
+
 log_content
         : log_items log_last_junction log_flags                { $$ = log_expr_node_new_log(log_expr_node_append_tail($1, $2), $3, &@$); }
         ;
@@ -741,7 +804,7 @@ log_flags
 	;
 
 log_flags_items
-	: string log_flags_items		{ $$ = log_expr_node_lookup_flag($1) | $2; free($1); }
+	: normalized_flag log_flags_items	{ $$ = log_expr_node_lookup_flag($1) | $2; free($1); }
 	|					{ $$ = 0; }
 	;
 
@@ -750,7 +813,7 @@ log_flags_items
 options_stmt
         : KW_OPTIONS '{' options_items '}'
 	;
-	
+
 template_stmt
         : template_def
           {
@@ -792,7 +855,7 @@ template_fn
           }
           template_content_inner						{ $$ = last_template; free($2); }
 	;
-	
+
 template_items
 	: template_item ';' template_items
 	|
@@ -836,24 +899,32 @@ block_stmt
         : KW_BLOCK
           { cfg_lexer_push_context(lexer, LL_CONTEXT_BLOCK_DEF, block_def_keywords, "block definition"); }
           LL_IDENTIFIER LL_IDENTIFIER
-          '(' { last_block_args = cfg_args_new(); } block_args ')'
+          '(' { last_block_args = cfg_args_new(); } block_definition ')'
           { cfg_lexer_push_context(lexer, LL_CONTEXT_BLOCK_CONTENT, NULL, "block content"); }
           LL_BLOCK
           {
-            CfgBlock *block;
+            CfgBlockGenerator *block;
 
             /* block content */
             cfg_lexer_pop_context(lexer);
             /* block definition */
             cfg_lexer_pop_context(lexer);
 
-            block = cfg_block_new($10, last_block_args);
-            CHECK_ERROR(cfg_lexer_register_block_generator(lexer, cfg_lexer_lookup_context_type_by_name($3), $4, cfg_block_generate, block, (GDestroyNotify) cfg_block_free) || cfg_allow_config_dups(configuration), @4, "duplicate block definition");
+            gint context_type = cfg_lexer_lookup_context_type_by_name($3);
+            CHECK_ERROR(context_type, @3, "unknown context \"%s\"", $3);
+
+            block = cfg_block_new(context_type, $4, $10, last_block_args, &@1);
+            cfg_lexer_register_generator_plugin(&configuration->plugin_context, block);
             free($3);
             free($4);
             free($10);
             last_block_args = NULL;
           }
+        ;
+
+block_definition
+        : block_args
+        | block_args LL_DOTDOTDOT			{ cfg_args_accept_varargs(last_block_args); }
         ;
 
 block_args
@@ -879,8 +950,8 @@ options_items
 	;
 
 options_item
-	: KW_MARK_FREQ '(' LL_NUMBER ')'		{ configuration->mark_freq = $3; }
-	| KW_FLUSH_LINES '(' LL_NUMBER ')'		{ configuration->flush_lines = $3; }
+	: KW_MARK_FREQ '(' nonnegative_integer ')'		{ configuration->mark_freq = $3; }
+	| KW_FLUSH_LINES '(' nonnegative_integer ')'		{ configuration->flush_lines = $3; }
         | KW_MARK_MODE '(' KW_INTERNAL ')'         { cfg_set_mark_mode(configuration, "internal"); }
         | KW_MARK_MODE '(' string ')'
           {
@@ -888,46 +959,59 @@ options_item
             cfg_set_mark_mode(configuration, $3);
             free($3);
           }
-	| KW_FLUSH_TIMEOUT '(' LL_NUMBER ')'	{ configuration->flush_timeout = $3; }
+	| KW_FLUSH_TIMEOUT '(' positive_integer ')'     { }
 	| KW_CHAIN_HOSTNAMES '(' yesno ')'	{ configuration->chain_hostnames = $3; }
 	| KW_KEEP_HOSTNAME '(' yesno ')'	{ configuration->keep_hostname = $3; }
 	| KW_CHECK_HOSTNAME '(' yesno ')'	{ configuration->check_hostname = $3; }
 	| KW_BAD_HOSTNAME '(' string ')'	{ cfg_bad_hostname_set(configuration, $3); free($3); }
-	| KW_TIME_REOPEN '(' LL_NUMBER ')'		{ configuration->time_reopen = $3; }
-	| KW_TIME_REAP '(' LL_NUMBER ')'		{ configuration->time_reap = $3; }
-	| KW_TIME_SLEEP '(' LL_NUMBER ')'	{}
-	| KW_SUPPRESS '(' LL_NUMBER ')'		{ configuration->suppress = $3; }
+	| KW_TIME_REOPEN '(' positive_integer ')'		{ configuration->time_reopen = $3; }
+	| KW_TIME_REAP '(' positive_integer ')'		{ configuration->time_reap = $3; }
+	| KW_TIME_SLEEP '(' nonnegative_integer ')'	{}
+	| KW_SUPPRESS '(' nonnegative_integer ')'		{ configuration->suppress = $3; }
 	| KW_THREADED '(' yesno ')'		{ configuration->threaded = $3; }
 	| KW_PASS_UNIX_CREDENTIALS '(' yesno ')' { configuration->pass_unix_credentials = $3; }
 	| KW_USE_RCPTID '(' yesno ')'		{ cfg_set_use_uniqid($3); }
 	| KW_USE_UNIQID '(' yesno ')'		{ cfg_set_use_uniqid($3); }
-	| KW_LOG_FIFO_SIZE '(' LL_NUMBER ')'	{ configuration->log_fifo_size = $3; }
-	| KW_LOG_IW_SIZE '(' LL_NUMBER ')'	{ msg_error("Using a global log-iw-size() option was removed, please use a per-source log-iw-size()"); }
-	| KW_LOG_FETCH_LIMIT '(' LL_NUMBER ')'	{ msg_error("Using a global log-fetch-limit() option was removed, please use a per-source log-fetch-limit()"); }
-	| KW_LOG_MSG_SIZE '(' LL_NUMBER ')'	{ configuration->log_msg_size = $3; }
+	| KW_LOG_FIFO_SIZE '(' positive_integer ')'	{ configuration->log_fifo_size = $3; }
+	| KW_LOG_IW_SIZE '(' positive_integer ')'	{ msg_warning("WARNING: Support for the global log-iw-size() option was removed, please use a per-source log-iw-size()", cfg_lexer_format_location_tag(lexer, &@1)); }
+	| KW_LOG_FETCH_LIMIT '(' positive_integer ')'	{ msg_warning("WARNING: Support for the global log-fetch-limit() option was removed, please use a per-source log-fetch-limit()", cfg_lexer_format_location_tag(lexer, &@1)); }
+	| KW_LOG_MSG_SIZE '(' positive_integer ')'	{ configuration->log_msg_size = $3; }
 	| KW_KEEP_TIMESTAMP '(' yesno ')'	{ configuration->keep_timestamp = $3; }
 	| KW_CREATE_DIRS '(' yesno ')'		{ configuration->create_dirs = $3; }
-        | KW_CUSTOM_DOMAIN '(' string ')'       { configuration->custom_domain = g_strdup($3); free($3); }
+  | KW_CUSTOM_DOMAIN '(' string ')'       { configuration->custom_domain = g_strdup($3); free($3); }
 	| KW_FILE_TEMPLATE '(' string ')'	{ configuration->file_template_name = g_strdup($3); free($3); }
 	| KW_PROTO_TEMPLATE '(' string ')'	{ configuration->proto_template_name = g_strdup($3); free($3); }
 	| KW_RECV_TIME_ZONE '(' string ')'      { configuration->recv_time_zone = g_strdup($3); free($3); }
+	| KW_MIN_IW_SIZE_PER_READER '(' positive_integer ')' { configuration->min_iw_size_per_reader = $3; }
 	| { last_template_options = &configuration->template_options; } template_option
 	| { last_host_resolve_options = &configuration->host_resolve_options; } host_resolve_option
 	| { last_stats_options = &configuration->stats_options; } stat_option
 	| { last_dns_cache_options = &configuration->dns_cache_options; } dns_cache_option
 	| { last_file_perm_options = &configuration->file_perm_options; } file_perm_option
+	| LL_IDENTIFIER
+          {
+            Plugin *p;
+            gint context = LL_CONTEXT_OPTIONS;
+
+            p = cfg_find_plugin(configuration, context, $1);
+            CHECK_ERROR(p, @1, "%s plugin %s not found", cfg_lexer_lookup_context_name_by_type(context), $1);
+
+            cfg_parse_plugin(configuration, p, &@1, NULL);
+            free($1);
+          }
 	;
 
 stat_option
-	: KW_STATS_FREQ '(' LL_NUMBER ')'          { last_stats_options->log_freq = $3; }
-	| KW_STATS_LEVEL '(' LL_NUMBER ')'         { last_stats_options->level = $3; }
-	| KW_STATS_LIFETIME '(' LL_NUMBER ')'      { last_stats_options->lifetime = $3; }
+	: KW_STATS_FREQ '(' nonnegative_integer ')'          { last_stats_options->log_freq = $3; }
+	| KW_STATS_LEVEL '(' nonnegative_integer ')'         { last_stats_options->level = $3; }
+	| KW_STATS_LIFETIME '(' positive_integer ')'      { last_stats_options->lifetime = $3; }
+  | KW_STATS_MAX_DYNAMIC '(' nonnegative_integer ')'   { last_stats_options->max_dynamic = $3; }
 	;
 
 dns_cache_option
-	: KW_DNS_CACHE_SIZE '(' LL_NUMBER ')'	{ last_dns_cache_options->cache_size = $3; }
-	| KW_DNS_CACHE_EXPIRE '(' LL_NUMBER ')'	{ last_dns_cache_options->expire = $3; }
-	| KW_DNS_CACHE_EXPIRE_FAILED '(' LL_NUMBER ')'
+	: KW_DNS_CACHE_SIZE '(' positive_integer ')'	{ last_dns_cache_options->cache_size = $3; }
+	| KW_DNS_CACHE_EXPIRE '(' positive_integer ')'	{ last_dns_cache_options->expire = $3; }
+	| KW_DNS_CACHE_EXPIRE_FAILED '(' positive_integer ')'
 	                                        { last_dns_cache_options->expire_failed = $3; }
 	| KW_DNS_CACHE_HOSTS '(' string ')'     { last_dns_cache_options->hosts = g_strdup($3); free($3); }
         ;
@@ -952,18 +1036,50 @@ dnsmode
 	| KW_PERSIST_ONLY                       { $$ = 2; }
 	;
 
+nonnegative_integer64
+        : LL_NUMBER
+          {
+            CHECK_ERROR(($1 >= 0), @1, "It cannot be negative");
+          }
+        ;
+
+nonnegative_integer
+        : nonnegative_integer64
+          {
+            CHECK_ERROR(($1 <= G_MAXINT32), @1, "Must be smaller than 2^31");
+          }
+        ;
+
+positive_integer64
+        : LL_NUMBER
+          {
+            CHECK_ERROR(($1 > 0), @1, "Must be positive");
+          }
+        ;
+
+positive_integer
+        : positive_integer64
+          {
+            CHECK_ERROR(($1 <= G_MAXINT32), @1, "Must be smaller than 2^31");
+          }
+        ;
+
 string_or_number
         : string                                { $$ = $1; }
         | LL_NUMBER                             { $$ = strdup(lexer->token_text->str); }
         | LL_FLOAT                              { $$ = strdup(lexer->token_text->str); }
         ;
 
+normalized_flag
+        : string                                { $$ = normalize_flag($1); free($1); }
+        ;
+
 string_list
-        : string_list_build                     { $$ = g_list_reverse($1); }
+        : string_list_build                     { $$ = $1; }
         ;
 
 string_list_build
-        : string string_list_build		{ $$ = g_list_append($2, g_strdup($1)); free($1); }
+        : string string_list_build		{ $$ = g_list_prepend($2, g_strdup($1)); free($1); }
         |					{ $$ = NULL; }
         ;
 
@@ -1007,21 +1123,132 @@ parser_opt
                                                 }
         ;
 
+driver_option
+        : KW_PERSIST_NAME '(' string ')' { log_pipe_set_persist_name(&last_driver->super, $3); free($3); }
+        ;
+
+/* All source drivers should incorporate this rule, implies driver_option */
+source_driver_option
+        : LL_IDENTIFIER
+          {
+            Plugin *p;
+            gint context = LL_CONTEXT_INNER_SRC;
+            gpointer value;
+
+            p = cfg_find_plugin(configuration, context, $1);
+            CHECK_ERROR(p, @1, "%s plugin %s not found", cfg_lexer_lookup_context_name_by_type(context), $1);
+
+            value = cfg_parse_plugin(configuration, p, &@1, last_driver);
+
+            free($1);
+            if (!value)
+              {
+                YYERROR;
+              }
+            if (!log_driver_add_plugin(last_driver, (LogDriverPlugin *) value))
+              {
+                log_driver_plugin_free(value);
+                CHECK_ERROR(TRUE, @1, "Error while registering the plugin %s in this destination", $1);
+              }
+          }
+        | driver_option
+        ;
+
+/* implies driver_option */
+dest_driver_option
+        /* NOTE: plugins need to set "last_driver" in order to incorporate this rule in their grammar */
+
+	: KW_LOG_FIFO_SIZE '(' positive_integer ')'	{ ((LogDestDriver *) last_driver)->log_fifo_size = $3; }
+	| KW_THROTTLE '(' nonnegative_integer ')'         { ((LogDestDriver *) last_driver)->throttle = $3; }
+        | LL_IDENTIFIER
+          {
+            Plugin *p;
+            gint context = LL_CONTEXT_INNER_DEST;
+            gpointer value;
+
+            p = cfg_find_plugin(configuration, context, $1);
+            CHECK_ERROR(p, @1, "%s plugin %s not found", cfg_lexer_lookup_context_name_by_type(context), $1);
+
+            value = cfg_parse_plugin(configuration, p, &@1, last_driver);
+
+            free($1);
+            if (!value)
+              {
+                YYERROR;
+              }
+            if (!log_driver_add_plugin(last_driver, (LogDriverPlugin *) value))
+              {
+                log_driver_plugin_free(value);
+                CHECK_ERROR(TRUE, @1, "Error while registering the plugin %s in this destination", $1);
+              }
+          }
+        | driver_option
+        ;
+
+/* implies dest_driver_option */
+threaded_dest_driver_option
+	: KW_RETRIES '(' positive_integer ')'
+        {
+          log_threaded_dest_driver_set_max_retries(last_driver, $3);
+        }
+        | KW_BATCH_LINES '(' nonnegative_integer ')' { log_threaded_dest_driver_set_batch_lines(last_driver, $3); }
+        | KW_BATCH_TIMEOUT '(' positive_integer ')' { log_threaded_dest_driver_set_batch_timeout(last_driver, $3); }
+        | dest_driver_option
+        ;
+
+/* implies source_driver_option and source_option */
+threaded_source_driver_option
+	: KW_FORMAT '(' string ')' { log_threaded_source_driver_get_parse_options(last_driver)->format = g_strdup($3); free($3); }
+        | KW_FLAGS '(' threaded_source_driver_option_flags ')'
+        | { last_msg_format_options = log_threaded_source_driver_get_parse_options(last_driver); } msg_format_option
+        | { last_source_options = log_threaded_source_driver_get_source_options(last_driver); } source_option
+        | source_driver_option
+        ;
+
+threaded_source_driver_option_flags
+	: string threaded_source_driver_option_flags
+        {
+          CHECK_ERROR(msg_format_options_process_flag(log_threaded_source_driver_get_parse_options(last_driver), $1), @1, "Unknown flag %s", $1);
+          free($1);
+        }
+        |
+        ;
+
 /* LogSource related options */
 source_option
         /* NOTE: plugins need to set "last_source_options" in order to incorporate this rule in their grammar */
-	: KW_LOG_IW_SIZE '(' LL_NUMBER ')'	{ last_source_options->init_window_size = $3; }
+	: KW_LOG_IW_SIZE '(' positive_integer ')'	{ last_source_options->init_window_size = $3; }
 	| KW_CHAIN_HOSTNAMES '(' yesno ')'	{ last_source_options->chain_hostnames = $3; }
 	| KW_KEEP_HOSTNAME '(' yesno ')'	{ last_source_options->keep_hostname = $3; }
 	| KW_PROGRAM_OVERRIDE '(' string ')'	{ last_source_options->program_override = g_strdup($3); free($3); }
 	| KW_HOST_OVERRIDE '(' string ')'	{ last_source_options->host_override = g_strdup($3); free($3); }
 	| KW_LOG_PREFIX '(' string ')'	        { gchar *p = strrchr($3, ':'); if (p) *p = 0; last_source_options->program_override = g_strdup($3); free($3); }
 	| KW_KEEP_TIMESTAMP '(' yesno ')'	{ last_source_options->keep_timestamp = $3; }
+	| KW_READ_OLD_RECORDS '(' yesno ')'	{ last_source_options->read_old_records = $3; }
         | KW_TAGS '(' string_list ')'		{ log_source_options_set_tags(last_source_options, $3); }
         | { last_host_resolve_options = &last_source_options->host_resolve_options; } host_resolve_option
-        | driver_option
         ;
 
+/* LogReader related options, implies source_option */
+source_reader_option
+        /* NOTE: plugins need to set "last_reader_options" in order to incorporate this rule in their grammar */
+
+	: KW_CHECK_HOSTNAME '(' yesno ')'	{ last_reader_options->check_hostname = $3; }
+	| KW_FLAGS '(' source_reader_option_flags ')'
+	| KW_LOG_FETCH_LIMIT '(' positive_integer ')'	{ last_reader_options->fetch_limit = $3; }
+        | KW_FORMAT '(' string ')'              { last_reader_options->parse_options.format = g_strdup($3); free($3); }
+        | { last_source_options = &last_reader_options->super; } source_option
+        | { last_proto_server_options = &last_reader_options->proto_options.super; } source_proto_option
+        | { last_msg_format_options = &last_reader_options->parse_options; } msg_format_option
+	;
+
+source_reader_option_flags
+        : string source_reader_option_flags     { CHECK_ERROR(log_reader_options_process_flag(last_reader_options, $1), @1, "Unknown flag %s", $1); free($1); }
+        | KW_CHECK_HOSTNAME source_reader_option_flags     { log_reader_options_process_flag(last_reader_options, "check-hostname"); }
+	|
+	;
+
+/* LogProtoSource related options */
 source_proto_option
         : KW_ENCODING '(' string ')'
           {
@@ -1030,12 +1257,8 @@ source_proto_option
                         "unknown encoding %s", $3);
             free($3);
           }
-	| KW_LOG_MSG_SIZE '(' LL_NUMBER ')'	{ last_proto_server_options->max_msg_size = $3; }
+	| KW_LOG_MSG_SIZE '(' positive_integer ')'	{ last_proto_server_options->max_msg_size = $3; }
         ;
-
-source_reader_options
-	: source_reader_option source_reader_options
-	;
 
 host_resolve_option
         : KW_USE_FQDN '(' yesno ')'             { last_host_resolve_options->use_fqdn = $3; }
@@ -1060,62 +1283,6 @@ msg_format_option
           }
         ;
 
-
-/* LogReader related options, inherits from LogSource */
-source_reader_option
-        /* NOTE: plugins need to set "last_reader_options" in order to incorporate this rule in their grammar */
-
-	: KW_CHECK_HOSTNAME '(' yesno ')'	{ last_reader_options->check_hostname = $3; }
-	| KW_FLAGS '(' source_reader_option_flags ')'
-	| KW_LOG_FETCH_LIMIT '(' LL_NUMBER ')'	{ last_reader_options->fetch_limit = $3; }
-        | KW_FORMAT '(' string ')'              { last_reader_options->parse_options.format = g_strdup($3); free($3); }
-        | { last_source_options = &last_reader_options->super; } source_option
-        | { last_proto_server_options = &last_reader_options->proto_options.super; } source_proto_option
-        | { last_msg_format_options = &last_reader_options->parse_options; } msg_format_option
-	;
-
-source_reader_option_flags
-        : string source_reader_option_flags     { CHECK_ERROR(log_reader_options_process_flag(last_reader_options, $1), @1, "Unknown flag %s", $1); free($1); }
-        | KW_CHECK_HOSTNAME source_reader_option_flags     { log_reader_options_process_flag(last_reader_options, "check-hostname"); }
-	|
-	;
-
-driver_option
-    : KW_PERSIST_NAME '(' string ')' { log_pipe_set_persist_name(&last_driver->super, g_strdup($3)); free($3); }
-    ;
-
-threaded_dest_driver_option
-	: KW_RETRIES '(' LL_NUMBER ')'
-        {
-          log_threaded_dest_driver_set_max_retries(last_driver, $3);
-        }
-
-dest_driver_option
-        /* NOTE: plugins need to set "last_driver" in order to incorporate this rule in their grammar */
-
-	: KW_LOG_FIFO_SIZE '(' LL_NUMBER ')'	{ ((LogDestDriver *) last_driver)->log_fifo_size = $3; }
-	| KW_THROTTLE '(' LL_NUMBER ')'         { ((LogDestDriver *) last_driver)->throttle = $3; }
-        | LL_IDENTIFIER
-          {
-            Plugin *p;
-            gint context = LL_CONTEXT_INNER_DEST;
-            gpointer value;
-
-            p = plugin_find(configuration, context, $1);
-            CHECK_ERROR(p, @1, "%s plugin %s not found", cfg_lexer_lookup_context_name_by_type(context), $1);
-
-            value = plugin_parse_config(p, configuration, &@1, last_driver);
-
-            free($1);
-            if (!value)
-              {
-                YYERROR;
-              }
-            log_driver_add_plugin(last_driver, (LogDriverPlugin *) value);
-          }
-    | driver_option
-        ;
-
 dest_writer_options
 	: dest_writer_option dest_writer_options
 	|
@@ -1125,9 +1292,9 @@ dest_writer_option
         /* NOTE: plugins need to set "last_writer_options" in order to incorporate this rule in their grammar */
 
 	: KW_FLAGS '(' dest_writer_options_flags ')' { last_writer_options->options = $3; }
-	| KW_FLUSH_LINES '(' LL_NUMBER ')'		{ last_writer_options->flush_lines = $3; }
-	| KW_FLUSH_TIMEOUT '(' LL_NUMBER ')'	{ last_writer_options->flush_timeout = $3; }
-        | KW_SUPPRESS '(' LL_NUMBER ')'            { last_writer_options->suppress = $3; }
+	| KW_FLUSH_LINES '(' nonnegative_integer ')'		{ last_writer_options->flush_lines = $3; }
+	| KW_FLUSH_TIMEOUT '(' positive_integer ')'	{ }
+        | KW_SUPPRESS '(' nonnegative_integer ')'            { last_writer_options->suppress = $3; }
 	| KW_TEMPLATE '(' string ')'       	{
                                                   GError *error = NULL;
 
@@ -1136,8 +1303,8 @@ dest_writer_option
 	                                          free($3);
 	                                        }
 	| KW_TEMPLATE_ESCAPE '(' yesno ')'	{ log_writer_options_set_template_escape(last_writer_options, $3); }
-	| KW_PAD_SIZE '(' LL_NUMBER ')'         { last_writer_options->padding = $3; }
-	| KW_MARK_FREQ '(' LL_NUMBER ')'        { last_writer_options->mark_freq = $3; }
+	| KW_PAD_SIZE '(' nonnegative_integer ')'         { last_writer_options->padding = $3; }
+	| KW_MARK_FREQ '(' nonnegative_integer ')'        { last_writer_options->mark_freq = $3; }
         | KW_MARK_MODE '(' KW_INTERNAL ')'      { log_writer_options_set_mark_mode(last_writer_options, "internal"); }
 	| KW_MARK_MODE '(' string ')'
 	  {
@@ -1149,8 +1316,8 @@ dest_writer_option
 	;
 
 dest_writer_options_flags
-	: string dest_writer_options_flags      { $$ = log_writer_options_lookup_flag($1) | $2; free($1); }
-	|					{ $$ = 0; }
+	: normalized_flag dest_writer_options_flags   { $$ = log_writer_options_lookup_flag($1) | $2; free($1); }
+	|					      { $$ = 0; }
 	;
 
 file_perm_option
@@ -1170,7 +1337,7 @@ file_perm_option
 
 template_option
 	: KW_TS_FORMAT '(' string ')'		{ last_template_options->ts_format = cfg_ts_format_value($3); free($3); }
-	| KW_FRAC_DIGITS '(' LL_NUMBER ')'	{ last_template_options->frac_digits = $3; }
+	| KW_FRAC_DIGITS '(' nonnegative_integer ')'	{ last_template_options->frac_digits = $3; }
 	| KW_TIME_ZONE '(' string ')'		{ last_template_options->time_zone[LTZ_SEND] = g_strdup($3); free($3); }
 	| KW_SEND_TIME_ZONE '(' string ')'      { last_template_options->time_zone[LTZ_SEND] = g_strdup($3); free($3); }
 	| KW_LOCAL_TIME_ZONE '(' string ')'     { last_template_options->time_zone[LTZ_LOCAL] = g_strdup($3); free($3); }
@@ -1211,36 +1378,35 @@ vp_options
 
 vp_option
         : KW_PAIR '(' string ':' template_content ')'
-        {
-          value_pairs_add_pair(last_value_pairs, $3, $5);
-          free($3);
-        }
+          {
+            value_pairs_add_pair(last_value_pairs, $3, $5);
+            free($3);
+          }
         | KW_PAIR '(' string template_content ')'
-        {
-          value_pairs_add_pair(last_value_pairs, $3, $4);
-          free($3);
-        }
+          {
+            value_pairs_add_pair(last_value_pairs, $3, $4);
+            free($3);
+          }
         | KW_KEY '(' string KW_REKEY '('
-        {
-          last_vp_transset = value_pairs_transform_set_new($3);
-          value_pairs_add_glob_pattern(last_value_pairs, $3, TRUE);
-          free($3);
-        }
-        vp_rekey_options
-        ')' { value_pairs_add_transforms(last_value_pairs, last_vp_transset); } ')'
+          {
+            last_vp_transset = value_pairs_transform_set_new($3);
+            value_pairs_add_glob_pattern(last_value_pairs, $3, TRUE);
+            free($3);
+          }
+          vp_rekey_options ')'                           { value_pairs_add_transforms(last_value_pairs, last_vp_transset); } ')'
 	| KW_KEY '(' string_list ')'		         { value_pairs_add_glob_patterns(last_value_pairs, $3, TRUE); }
         | KW_REKEY '(' string
-        {
-          last_vp_transset = value_pairs_transform_set_new($3);
-          free($3);
-        }
-        vp_rekey_options ')'                     { value_pairs_add_transforms(last_value_pairs, last_vp_transset); }
-        | KW_EXCLUDE '(' string_list ')'         { value_pairs_add_glob_patterns(last_value_pairs, $3, FALSE); }
+          {
+            last_vp_transset = value_pairs_transform_set_new($3);
+            free($3);
+          }
+          vp_rekey_options ')'                           { value_pairs_add_transforms(last_value_pairs, last_vp_transset); }
+        | KW_EXCLUDE '(' string_list ')'                 { value_pairs_add_glob_patterns(last_value_pairs, $3, FALSE); }
 	| KW_SCOPE '(' vp_scope_list ')'
 	;
 
 vp_scope_list
-	: string vp_scope_list              { value_pairs_add_scope(last_value_pairs, $1); free($1); }
+	: string vp_scope_list                           { value_pairs_add_scope(last_value_pairs, $1); free($1); }
 	|
 	;
 
@@ -1250,7 +1416,8 @@ vp_rekey_options
 	;
 
 vp_rekey_option
-	: KW_SHIFT '(' LL_NUMBER ')' { value_pairs_transform_set_add_func(last_vp_transset, value_pairs_new_transform_shift($3)); }
+	: KW_SHIFT '(' positive_integer ')' { value_pairs_transform_set_add_func(last_vp_transset, value_pairs_new_transform_shift($3)); }
+	| KW_SHIFT_LEVELS '(' positive_integer ')' { value_pairs_transform_set_add_func(last_vp_transset, value_pairs_new_transform_shift_levels($3)); }
 	| KW_ADD_PREFIX '(' string ')' { value_pairs_transform_set_add_func(last_vp_transset, value_pairs_new_transform_add_prefix($3)); free($3); }
 	| KW_REPLACE_PREFIX '(' string string ')' { value_pairs_transform_set_add_func(last_vp_transset, value_pairs_new_transform_replace_prefix($3, $4)); free($3); free($4); }
 	;
@@ -1259,4 +1426,3 @@ vp_rekey_option
 
 
 %%
-

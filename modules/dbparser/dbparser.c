@@ -44,6 +44,7 @@ struct _LogDBParser
   ino_t db_file_inode;
   time_t db_file_mtime;
   gboolean db_file_reloading;
+  gboolean drop_unmatched;
 };
 
 static void
@@ -155,7 +156,7 @@ log_db_parser_init(LogPipe *s)
   iv_timer_register(&self->tick);
   if (!self->db)
     return FALSE;
-  return log_parser_init_method(s);
+  return stateful_parser_init_method(s);
 }
 
 static gboolean
@@ -171,15 +172,18 @@ log_db_parser_deinit(LogPipe *s)
 
   cfg_persist_config_add(cfg, log_db_parser_format_persist_name(self), self->db, (GDestroyNotify) pattern_db_free, FALSE);
   self->db = NULL;
-  return TRUE;
+  return stateful_parser_deinit_method(s);
 }
 
 static gboolean
-log_db_parser_process(LogParser *s, LogMessage **pmsg, const LogPathOptions *path_options, const char *input, gsize input_len)
+log_db_parser_process(LogParser *s, LogMessage **pmsg, const LogPathOptions *path_options, const char *input,
+                      gsize input_len)
 {
   LogDBParser *self = (LogDBParser *) s;
+  gboolean matched = FALSE;
 
-  if (G_UNLIKELY(!self->db_file_reloading && (self->db_file_last_check == 0 || self->db_file_last_check < (*pmsg)->timestamps[LM_TS_RECVD].tv_sec - 5)))
+  if (G_UNLIKELY(!self->db_file_reloading && (self->db_file_last_check == 0
+                                              || self->db_file_last_check < (*pmsg)->timestamps[LM_TS_RECVD].tv_sec - 5)))
     {
       /* first check if we need to reload without doing a lock, then grab
        * the lock, recheck the condition to rule out parallel database
@@ -187,7 +191,8 @@ log_db_parser_process(LogParser *s, LogMessage **pmsg, const LogPathOptions *pat
 
       g_static_mutex_lock(&self->lock);
 
-      if (!self->db_file_reloading && (self->db_file_last_check == 0 || self->db_file_last_check < (*pmsg)->timestamps[LM_TS_RECVD].tv_sec - 5))
+      if (!self->db_file_reloading && (self->db_file_last_check == 0
+                                       || self->db_file_last_check < (*pmsg)->timestamps[LM_TS_RECVD].tv_sec - 5))
         {
           self->db_file_last_check = (*pmsg)->timestamps[LM_TS_RECVD].tv_sec;
           self->db_file_reloading = TRUE;
@@ -204,13 +209,24 @@ log_db_parser_process(LogParser *s, LogMessage **pmsg, const LogPathOptions *pat
   if (self->db)
     {
       log_msg_make_writable(pmsg, path_options);
-
+      msg_trace("db-parser message processing started",
+                evt_tag_str ("input", input),
+                evt_tag_printf("msg", "%p", *pmsg));
       if (G_UNLIKELY(self->super.super.template))
-        pattern_db_process_with_custom_message(self->db, *pmsg, input, input_len);
+        matched = pattern_db_process_with_custom_message(self->db, *pmsg, input, input_len);
       else
-        pattern_db_process(self->db, *pmsg);
+        matched = pattern_db_process(self->db, *pmsg);
     }
-  return TRUE;
+
+  if (self->drop_unmatched && !matched)
+    {
+      msg_debug("db-parser failed",
+                evt_tag_str("error", "db-parser() failed to parse its input and drop-unmatched flag was specified"),
+                evt_tag_str("input", input));
+    }
+  if (!self->drop_unmatched)
+    matched = TRUE;
+  return matched;
 }
 
 void
@@ -219,6 +235,12 @@ log_db_parser_set_db_file(LogDBParser *self, const gchar *db_file)
   if (self->db_file)
     g_free(self->db_file);
   self->db_file = g_strdup(db_file);
+}
+
+void
+log_db_parser_set_drop_unmatched(LogDBParser *self, gboolean setting)
+{
+  self->drop_unmatched = setting;
 }
 
 /*
@@ -265,7 +287,8 @@ log_db_parser_new(GlobalConfig *cfg)
   g_static_mutex_init(&self->lock);
   if (cfg_is_config_version_older(cfg, 0x0303))
     {
-      msg_warning_once("WARNING: The default behaviour for injecting messages in db-parser() has changed in " VERSION_3_3 " from internal to pass-through, use an explicit inject-mode(internal) option for old behaviour");
+      msg_warning_once("WARNING: The default behaviour for injecting messages in db-parser() has changed in " VERSION_3_3
+                       " from internal to pass-through, use an explicit inject-mode(internal) option for old behaviour");
       self->super.inject_mode = LDBP_IM_INTERNAL;
     }
   return &self->super.super;

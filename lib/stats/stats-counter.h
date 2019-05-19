@@ -25,53 +25,72 @@
 #define STATS_COUNTER_H_INCLUDED 1
 
 #include "syslog-ng.h"
+#include "atomic-gssize.h"
 
 typedef struct _StatsCounterItem
 {
-  gint value;
+  atomic_gssize value;
+  gchar *name;
+  gint type;
 } StatsCounterItem;
 
 
 static inline void
-stats_counter_add(StatsCounterItem *counter, gint add)
+stats_counter_add(StatsCounterItem *counter, gssize add)
 {
   if (counter)
-    g_atomic_int_add(&counter->value, add);
+    atomic_gssize_add(&counter->value, add);
+}
+
+static inline void
+stats_counter_sub(StatsCounterItem *counter, gssize sub)
+{
+  if (counter)
+    atomic_gssize_sub(&counter->value, sub);
 }
 
 static inline void
 stats_counter_inc(StatsCounterItem *counter)
 {
   if (counter)
-    g_atomic_int_inc(&counter->value);
+    atomic_gssize_inc(&counter->value);
 }
 
 static inline void
 stats_counter_dec(StatsCounterItem *counter)
 {
   if (counter)
-    g_atomic_int_add(&counter->value, -1);
+    atomic_gssize_dec(&counter->value);
 }
 
 /* NOTE: this is _not_ atomic and doesn't have to be as sets would race anyway */
 static inline void
-stats_counter_set(StatsCounterItem *counter, guint32 value)
+stats_counter_set(StatsCounterItem *counter, gsize value)
 {
   if (counter)
-    counter->value = value;
+    atomic_gssize_racy_set(&counter->value, value);
 }
 
 /* NOTE: this is _not_ atomic and doesn't have to be as sets would race anyway */
-static inline guint32
+static inline gsize
 stats_counter_get(StatsCounterItem *counter)
 {
-  guint32 result = 0;
+  gsize result = 0;
 
   if (counter)
-    result = counter->value;
+    result = atomic_gssize_get_unsigned(&counter->value);
   return result;
 }
 
-void stats_reset_non_stored_counters(void);
+static inline gchar *
+stats_counter_get_name(StatsCounterItem *counter)
+{
+  if (counter)
+    return counter->name;
+  return NULL;
+}
+
+void stats_reset_counters(void);
+void stats_counter_free(StatsCounterItem *counter);
 
 #endif
