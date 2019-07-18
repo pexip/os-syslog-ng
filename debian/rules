@@ -146,12 +146,9 @@ override_dh_installchangelogs:
 override_dh_installinit:
 	dh_installinit --name syslog-ng --no-start
 
-# Logrotate and Logcheck files were moved from syslog-ng to
+# Logcheck files were moved from syslog-ng to
 # syslog-ng-core too, and like in init's case, we want to keep the old
 # name.
-override_dh_installlogrotate:
-	dh_installlogrotate --name syslog-ng
-
 override_dh_installlogcheck:
 	dh_installlogcheck --name syslog-ng
 

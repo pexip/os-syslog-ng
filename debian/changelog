@@ -1,3 +1,10 @@
+syslog-ng (3.8.1-10pexip3) pexip; urgency=medium
+
+  * Remove default logrotate configuration
+  * debian/control: declare Breaks on pexip-common-overrides
+
+ -- John-Mark Bell <jmb@pexip.com>  Thu, 18 Jul 2019 17:36:31 +0100
+
 syslog-ng (3.8.1-10pexip2) pexip; urgency=medium
 
   * debian/patches/systemd_default_prio.patch: default to LOG_SYSLOG
