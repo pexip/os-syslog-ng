@@ -37,8 +37,13 @@
 
 static const char aix_fwd_string[] = "Message forwarded from ";
 static const char repeat_msg_string[] = "last message repeated";
-static NVHandle is_synced;
-static NVHandle cisco_seqid;
+static struct
+{
+  gboolean initialized;
+  NVHandle is_synced;
+  NVHandle cisco_seqid;
+  NVHandle raw_message;
+} handles;
 
 static gboolean
 log_msg_parse_pri(LogMessage *self, const guchar **data, gint *length, guint flags, guint16 default_pri)
@@ -55,17 +60,17 @@ log_msg_parse_pri(LogMessage *self, const guchar **data, gint *length, guint fla
       pri = 0;
       while (left && *src != '>')
         {
-	  if (isdigit(*src))
-	    {
-	      pri = pri * 10 + ((*src) - '0');
-	    }
-	  else
-	    {
-	      return FALSE;
-	    }
-	  src++;
-	  left--;
-	}
+          if (isdigit(*src))
+            {
+              pri = pri * 10 + ((*src) - '0');
+            }
+          else
+            {
+              return FALSE;
+            }
+          src++;
+          left--;
+        }
       self->pri = pri;
       if (left)
         {
@@ -184,7 +189,7 @@ log_msg_parse_seq(LogMessage *self, const guchar **data, gint *length)
   while (left && *src != ':')
     {
       if (!isdigit(*src))
-          return FALSE;
+        return FALSE;
       src++;
       left--;
     }
@@ -196,7 +201,7 @@ log_msg_parse_seq(LogMessage *self, const guchar **data, gint *length)
   if (*src != ' ')
     return FALSE;
 
-  log_msg_set_value(self, cisco_seqid, (gchar *) *data, *length - left - 1);
+  log_msg_set_value(self, handles.cisco_seqid, (gchar *) *data, *length - left - 1);
 
   *data = src;
   *length = left;
@@ -278,7 +283,7 @@ __has_iso_timezone(const guchar *src, gint length)
 }
 
 static gboolean
-__parse_iso_stamp(const GTimeVal *now, LogMessage *self, struct tm* tm, const guchar **data, gint *length)
+__parse_iso_stamp(const GTimeVal *now, LogMessage *self, struct tm *tm, const guchar **data, gint *length)
 {
   /* RFC3339 timestamp, expected format: YYYY-MM-DDTHH:MM:SS[.frac]<+/->ZZ:ZZ */
   time_t now_tv_sec = (time_t) now->tv_sec;
@@ -308,8 +313,11 @@ __parse_iso_stamp(const GTimeVal *now, LogMessage *self, struct tm* tm, const gu
     }
   else if (__has_iso_timezone(src, *length))
     {
-
       self->timestamps[LM_TS_STAMP].zone_offset = __parse_iso_timezone(&src, length);
+    }
+  else
+    {
+      self->timestamps[LM_TS_STAMP].zone_offset = -1;
     }
 
   *data = src;
@@ -354,7 +362,7 @@ __is_bsd_linksys(const guchar *src, guint32 left)
 }
 
 static gboolean
-__parse_bsd_timestamp(const guchar **data, gint *length, const GTimeVal *now, struct tm* tm, glong *usec)
+__parse_bsd_timestamp(const guchar **data, gint *length, const GTimeVal *now, struct tm *tm, glong *usec)
 {
   gint left = *length;
   const guchar *src = *data;
@@ -398,36 +406,65 @@ __parse_bsd_timestamp(const guchar **data, gint *length, const GTimeVal *now, st
 }
 
 static inline void
-__set_zone_offset(LogStamp * const timestamp, glong const assumed_timezone)
+__determine_recv_timezone_offset(LogStamp *const timestamp, glong const recv_timezone_ofs)
 {
-  if(timestamp->zone_offset == -1)
-    {
-      timestamp->zone_offset = assumed_timezone;
-    }
-  if (timestamp->zone_offset == -1)
-    {
-      timestamp->zone_offset = get_local_timezone_ofs(timestamp->tv_sec);
-    }
+  if (!log_stamp_is_timezone_set(timestamp))
+    timestamp->zone_offset = recv_timezone_ofs;
+
+  if (!log_stamp_is_timezone_set(timestamp))
+    timestamp->zone_offset = get_local_timezone_ofs(timestamp->tv_sec);
 }
 
-static inline time_t
-__get_normalized_time(LogStamp const timestamp, gint const normalized_hour, gint const unnormalized_hour)
+static void
+__fixup_hour_in_struct_tm_within_transition_periods(LogStamp *stamp, struct tm *tm, glong recv_timezone_ofs)
 {
-  return timestamp.tv_sec
-         + get_local_timezone_ofs(timestamp.tv_sec)
-         - (normalized_hour - unnormalized_hour) * 3600
-         - timestamp.zone_offset;
+  /* save the tm_hour value as received from the client */
+  gint unnormalized_hour = tm->tm_hour;
+
+  /* NOTE: mktime() returns the time assuming that the timestamp we
+   * received was in local time. */
+
+  /* tell cached_mktime() that we have no clue whether Daylight Saving is enabled or not */
+  tm->tm_isdst = -1;
+  stamp->tv_sec = cached_mktime(tm);
+
+  /* We need to determine the timezone we want to assume the message was
+   * received from.  This depends on the recv-time-zone() setting and the
+   * the tv_sec value as converted by mktime() above. */
+  __determine_recv_timezone_offset(stamp, recv_timezone_ofs);
+
+  /* save the tm_hour as adjusted by mktime() */
+  gint normalized_hour = tm->tm_hour;
+
+  /* fix up the tv_sec value by transposing it into the target timezone:
+   *
+   * First we add the local time zone offset then subtract the target time
+   * zone offset.  This is not trivial however, as we have to determine
+   * exactly what the local timezone offset is at the current second, as
+   * used by mktime(). It is composed of these values:
+   *
+   *  1) get_local_timezone_ofs()
+   *  2) then in transition periods, mktime() will change tm->tm_hour
+   *     according to its understanding (e.g.  sprint time, 02:01 is changed
+   *     to 03:01), which is an additional factor that needs to be taken care
+   *     of.  This is the (normalized_hour - unnormalized_hour) part below
+   *
+   */
+  stamp->tv_sec = stamp->tv_sec
+                  /* these two components are the zone offset as used by mktime() */
+                  + get_local_timezone_ofs(stamp->tv_sec)
+                  - (normalized_hour - unnormalized_hour) * 3600
+                  /* this is the zone offset value we want to be */
+                  - stamp->zone_offset;
 }
 
 /* FIXME: this function should really be exploded to a lot of smaller functions... (Bazsi) */
 static gboolean
-log_msg_parse_date(LogMessage *self, const guchar **data, gint *length, guint parse_flags, glong assume_timezone)
+log_msg_parse_date_unnormalized(LogMessage *self, const guchar **data, gint *length, guint parse_flags, struct tm *tm)
 {
   const guchar *src = *data;
   gint left = *length;
   GTimeVal now;
-  struct tm tm;
-  gint unnormalized_hour;
 
   cached_g_current_time(&now);
 
@@ -437,13 +474,15 @@ log_msg_parse_date(LogMessage *self, const guchar **data, gint *length, guint pa
        * unsynced, '.' if it is known to be synced */
       if (G_UNLIKELY(src[0] == '*'))
         {
-          log_msg_set_value(self, is_synced, "0", 1);
+          if (!(parse_flags & LP_NO_PARSE_DATE))
+            log_msg_set_value(self, handles.is_synced, "0", 1);
           src++;
           left--;
         }
       else if (G_UNLIKELY(src[0] == '.'))
         {
-          log_msg_set_value(self, is_synced, "1", 1);
+          if (!(parse_flags & LP_NO_PARSE_DATE))
+            log_msg_set_value(self, handles.is_synced, "1", 1);
           src++;
           left--;
         }
@@ -451,14 +490,13 @@ log_msg_parse_date(LogMessage *self, const guchar **data, gint *length, guint pa
   /* If the next chars look like a date, then read them as a date. */
   if (__is_iso_stamp((const gchar *)src, left))
     {
-      if (!__parse_iso_stamp(&now, self, &tm, &src, &left))
+      if (!__parse_iso_stamp(&now, self, tm, &src, &left))
         goto error;
-      tm.tm_isdst = -1;
     }
   else if ((parse_flags & LP_SYSLOG_PROTOCOL) == 0)
     {
       glong usec = 0;
-      if (!__parse_bsd_timestamp(&src, &left, &now, &tm, &usec))
+      if (!__parse_bsd_timestamp(&src, &left, &now, tm, &usec))
         goto error;
       self->timestamps[LM_TS_STAMP].tv_usec = usec;
     }
@@ -476,19 +514,49 @@ log_msg_parse_date(LogMessage *self, const guchar **data, gint *length, guint pa
         return FALSE;
     }
 
-  unnormalized_hour = tm.tm_hour;
-  self->timestamps[LM_TS_STAMP].tv_sec = cached_mktime(&tm);
-  __set_zone_offset(&(self->timestamps[LM_TS_STAMP]), assume_timezone);
-  self->timestamps[LM_TS_STAMP].tv_sec = __get_normalized_time(self->timestamps[LM_TS_STAMP], tm.tm_hour, unnormalized_hour);
 
+  if (*src == ':')
+    {
+      ++src;
+      --left;
+    }
   *data = src;
   *length = left;
   return TRUE;
- error:
+error:
   /* no recognizable timestamp, use current time */
 
   self->timestamps[LM_TS_STAMP] = self->timestamps[LM_TS_RECVD];
   return FALSE;
+}
+
+
+static gboolean
+log_msg_parse_date(LogMessage *self, const guchar **data, gint *length, guint parse_flags, glong recv_timezone_ofs)
+{
+  struct tm tm;
+
+  LogStamp *stamp = &self->timestamps[LM_TS_STAMP];
+  stamp->tv_sec = -1;
+  stamp->tv_usec = 0;
+  stamp->zone_offset = -1;
+
+  if (!log_msg_parse_date_unnormalized(self, data, length, parse_flags, &tm))
+    {
+      *stamp = self->timestamps[LM_TS_RECVD];
+      return FALSE;
+    }
+
+  if (parse_flags & LP_NO_PARSE_DATE)
+    {
+      *stamp = self->timestamps[LM_TS_RECVD];
+    }
+  else
+    {
+      __fixup_hour_in_struct_tm_within_transition_periods(stamp, &tm, recv_timezone_ofs);
+    }
+
+  return TRUE;
 }
 
 static gboolean
@@ -566,7 +634,6 @@ log_msg_parse_legacy_program_name(LogMessage *self, const guchar **data, gint *l
   if ((flags & LP_STORE_LEGACY_MSGHDR))
     {
       log_msg_set_value(self, LM_V_LEGACY_MSGHDR, (gchar *) *data, *length - left);
-      self->flags |= LF_LEGACY_MSGHDR;
     }
   *data = src;
   *length = left;
@@ -599,6 +666,47 @@ _init_parse_hostname_invalid_chars(void)
     }
 }
 
+typedef struct _IPv6Heuristics
+{
+  gint8 current_segment;
+  gint8 digits_in_segment;
+  gboolean heuristic_failed;
+} IPv6Heuristics;
+
+static gboolean
+ipv6_heuristics_feed_gchar(IPv6Heuristics *self, gchar c)
+{
+  if (self->heuristic_failed)
+    return FALSE;
+
+  if (c != ':' && !g_ascii_isxdigit(c))
+    {
+      self->heuristic_failed = TRUE;
+      return FALSE;
+    }
+
+  if (g_ascii_isxdigit(c))
+    {
+      if (++self->digits_in_segment > 4)
+        {
+          self->heuristic_failed = TRUE;
+          return FALSE;
+        }
+    }
+
+  if (c == ':')
+    {
+      self->digits_in_segment = 0;
+      if (++self->current_segment >= 8)
+        {
+          self->heuristic_failed = TRUE;
+          return FALSE;
+        }
+    }
+
+  return TRUE;
+}
+
 static void
 log_msg_parse_hostname(LogMessage *self, const guchar **data, gint *length,
                        const guchar **hostname_start, int *hostname_len,
@@ -610,6 +718,8 @@ log_msg_parse_hostname(LogMessage *self, const guchar **data, gint *length,
   gchar hostname_buf[256];
   gint dst = 0;
 
+  IPv6Heuristics ipv6_heuristics = {0};
+
   src = *data;
   left = *length;
 
@@ -619,8 +729,15 @@ log_msg_parse_hostname(LogMessage *self, const guchar **data, gint *length,
   oldsrc = src;
   oldleft = left;
 
-  while (left && *src != ' ' && *src != ':' && *src != '[' && dst < sizeof(hostname_buf) - 1)
+  while (left && *src != ' ' && *src != '[' && dst < sizeof(hostname_buf) - 1)
     {
+      ipv6_heuristics_feed_gchar(&ipv6_heuristics, *src);
+
+      if (*src == ':' && ipv6_heuristics.heuristic_failed)
+        {
+          break;
+        }
+
       if (G_UNLIKELY((flags & LP_CHECK_HOSTNAME) && (invalid_chars[((guint) *src) >> 8] & (1 << (((guint) *src) % 8)))))
         {
           break;
@@ -660,7 +777,7 @@ log_msg_parse_hostname(LogMessage *self, const guchar **data, gint *length,
 
 
 static inline void
-sd_step_and_store(LogMessage *self, const guchar **data, gint *left)
+sd_step(const guchar **data, gint *left)
 {
   (*data)++;
   (*left)--;
@@ -719,7 +836,7 @@ log_msg_parse_sd(LogMessage *self, const guchar **data, gint *length, const MsgF
     }
   else if (left && src[0] == '[')
     {
-      sd_step_and_store(self, &src, &left);
+      sd_step(&src, &left);
       open_sd++;
       do
         {
@@ -746,7 +863,7 @@ log_msg_parse_sd(LogMessage *self, const guchar **data, gint *length, const MsgF
                 {
                   goto error;
                 }
-              sd_step_and_store(self, &src, &left);
+              sd_step(&src, &left);
             }
 
           if (pos == 0)
@@ -770,7 +887,7 @@ log_msg_parse_sd(LogMessage *self, const guchar **data, gint *length, const MsgF
           while (left && *src != ']')
             {
               if (left && *src == ' ') /* skip the ' ' before the parameter name */
-                sd_step_and_store(self, &src, &left);
+                sd_step(&src, &left);
               else
                 goto error;
 
@@ -795,13 +912,14 @@ log_msg_parse_sd(LogMessage *self, const guchar **data, gint *length, const MsgF
                     {
                       goto error;
                     }
-                  sd_step_and_store(self, &src, &left);
+                  sd_step(&src, &left);
                 }
               sd_param_name[pos] = 0;
-              strncpy(&sd_value_name[logmsg_sd_prefix_len + 1 + sd_id_len], sd_param_name, sizeof(sd_value_name) - logmsg_sd_prefix_len - 1 - sd_id_len);
+              strncpy(&sd_value_name[logmsg_sd_prefix_len + 1 + sd_id_len], sd_param_name,
+                      sizeof(sd_value_name) - logmsg_sd_prefix_len - 1 - sd_id_len);
 
               if (left && *src == '=')
-                sd_step_and_store(self, &src, &left);
+                sd_step(&src, &left);
               else
                 goto error;
 
@@ -811,7 +929,7 @@ log_msg_parse_sd(LogMessage *self, const guchar **data, gint *length, const MsgF
                 {
                   gboolean quote = FALSE;
                   /* opening quote */
-                  sd_step_and_store(self, &src, &left);
+                  sd_step(&src, &left);
                   pos = 0;
 
                   while (left && (*src != '"' || quote))
@@ -821,30 +939,31 @@ log_msg_parse_sd(LogMessage *self, const guchar **data, gint *length, const MsgF
                           quote = TRUE;
                         }
                       else
-                       {
-                         if (quote && *src != '"' && *src != ']' && *src != '\\' && pos < sizeof(sd_param_value) - 1)
-                           {
-                             sd_param_value[pos] = '\\';
-                             pos++;
-                           }
-                         else if (!quote &&  *src == ']')
-                           {
-                             goto error;
-                           }
-                         if (pos < sizeof(sd_param_value) - 1)
-                           {
-                             sd_param_value[pos] = *src;
-                             pos++;
-                           }
-                         quote = FALSE;
-                       }
-                      sd_step_and_store(self, &src, &left);
+                        {
+                          if (quote && *src != '"' && *src != ']' && *src != '\\' && pos < sizeof(sd_param_value) - 1)
+                            {
+                              sd_param_value[pos] = '\\';
+                              pos++;
+                            }
+                          else if (!quote &&  *src == ']')
+                            {
+                              sd_step(&src, &left);
+                              goto error;
+                            }
+                          if (pos < sizeof(sd_param_value) - 1)
+                            {
+                              sd_param_value[pos] = *src;
+                              pos++;
+                            }
+                          quote = FALSE;
+                        }
+                      sd_step(&src, &left);
                     }
                   sd_param_value[pos] = 0;
                   sd_param_value_len = pos;
 
                   if (left && *src == '"')/* closing quote */
-                    sd_step_and_store(self, &src, &left);
+                    sd_step(&src, &left);
                   else
                     goto error;
                 }
@@ -858,7 +977,7 @@ log_msg_parse_sd(LogMessage *self, const guchar **data, gint *length, const MsgF
 
           if (left && *src == ']')
             {
-              sd_step_and_store(self, &src, &left);
+              sd_step(&src, &left);
               open_sd--;
             }
           else
@@ -870,14 +989,14 @@ log_msg_parse_sd(LogMessage *self, const guchar **data, gint *length, const MsgF
           if (left && *src == '[')
             {
               /* new structured data begins, thus continue iteration */
-              sd_step_and_store(self, &src, &left);
+              sd_step(&src, &left);
               open_sd++;
             }
         }
       while (left && open_sd != 0);
     }
   ret = TRUE;
- error:
+error:
   /* FIXME: what happens if an error occurs? there's no way to return a
    * failure from here, but nevertheless we should do something sane, e.g.
    * don't parse the SD string, but skip to the end so that the $MSG
@@ -902,7 +1021,7 @@ log_msg_parse_sd(LogMessage *self, const guchar **data, gint *length, const MsgF
 static gboolean
 log_msg_parse_legacy(const MsgFormatOptions *parse_options,
                      const guchar *data, gint length,
-                     LogMessage *self)
+                     LogMessage *self, gint *position)
 {
   const guchar *src;
   gint left;
@@ -913,13 +1032,14 @@ log_msg_parse_legacy(const MsgFormatOptions *parse_options,
 
   if (!log_msg_parse_pri(self, &src, &left, parse_options->flags, parse_options->default_pri))
     {
-      return FALSE;
+      goto error;
     }
 
   log_msg_parse_seq(self, &src, &left);
   log_msg_parse_skip_chars(self, &src, &left, " ", -1);
   cached_g_current_time(&now);
-  if (log_msg_parse_date(self, &src, &left, parse_options->flags & ~LP_SYSLOG_PROTOCOL, time_zone_info_get_offset(parse_options->recv_time_zone_info, (time_t)now.tv_sec)))
+  if (log_msg_parse_date(self, &src, &left, parse_options->flags & ~LP_SYSLOG_PROTOCOL,
+                         time_zone_info_get_offset(parse_options->recv_time_zone_info, (time_t)now.tv_sec)))
     {
       /* Expected format: hostname program[pid]: */
       /* Possibly: Message forwarded from hostname: ... */
@@ -951,7 +1071,8 @@ log_msg_parse_legacy(const MsgFormatOptions *parse_options,
             {
               /* Don't parse a hostname if it is local */
               /* It's a regular ol' message. */
-              log_msg_parse_hostname(self, &src, &left, &hostname_start, &hostname_len, parse_options->flags, parse_options->bad_hostname);
+              log_msg_parse_hostname(self, &src, &left, &hostname_start, &hostname_len, parse_options->flags,
+                                     parse_options->bad_hostname);
 
               /* Skip whitespace. */
               log_msg_parse_skip_chars(self, &src, &left, " ", -1);
@@ -1016,6 +1137,9 @@ log_msg_parse_legacy(const MsgFormatOptions *parse_options,
     }
 
   return TRUE;
+error:
+  *position = src - data;
+  return FALSE;
 }
 
 /**
@@ -1024,11 +1148,12 @@ log_msg_parse_legacy(const MsgFormatOptions *parse_options,
  * Parse a message according to the latest syslog-protocol drafts.
  **/
 static gboolean
-log_msg_parse_syslog_proto(const MsgFormatOptions *parse_options, const guchar *data, gint length, LogMessage *self)
+log_msg_parse_syslog_proto(const MsgFormatOptions *parse_options, const guchar *data, gint length, LogMessage *self,
+                           gint *position)
 {
   /**
-   *	SYSLOG-MSG      = HEADER SP STRUCTURED-DATA [SP MSG]
-   *	HEADER          = PRI VERSION SP TIMESTAMP SP HOSTNAME
+   *  SYSLOG-MSG      = HEADER SP STRUCTURED-DATA [SP MSG]
+   *  HEADER          = PRI VERSION SP TIMESTAMP SP HOSTNAME
    *                        SP APP-NAME SP PROCID SP MSGID
    *    SP              = ' ' (space)
    *
@@ -1048,24 +1173,29 @@ log_msg_parse_syslog_proto(const MsgFormatOptions *parse_options, const guchar *
   if (!log_msg_parse_pri(self, &src, &left, parse_options->flags, parse_options->default_pri) ||
       !log_msg_parse_version(self, &src, &left))
     {
-      return log_msg_parse_legacy(parse_options, data, length, self);
+      return log_msg_parse_legacy(parse_options, data, length, self, position);
     }
 
   if (!log_msg_parse_skip_space(self, &src, &left))
-    return FALSE;
+    {
+      goto error;
+    }
 
   /* ISO time format */
-  if (!log_msg_parse_date(self, &src, &left, parse_options->flags, time_zone_info_get_offset(parse_options->recv_time_zone_info, time(NULL))))
-    return FALSE;
+  if (!log_msg_parse_date(self, &src, &left, parse_options->flags,
+                          time_zone_info_get_offset(parse_options->recv_time_zone_info, time(NULL))))
+    goto error;
 
   if (!log_msg_parse_skip_space(self, &src, &left))
-    return FALSE;
+    goto error;
 
   /* hostname 255 ascii */
   log_msg_parse_hostname(self, &src, &left, &hostname_start, &hostname_len, parse_options->flags, NULL);
   if (!log_msg_parse_skip_space(self, &src, &left))
-    return FALSE;
-
+    {
+      src++;
+      goto error;
+    }
   /* If we did manage to find a hostname, store it. */
   if (hostname_start && hostname_len == 1 && *hostname_start == '-')
     ;
@@ -1077,21 +1207,21 @@ log_msg_parse_syslog_proto(const MsgFormatOptions *parse_options, const guchar *
   /* application name 48 ascii*/
   log_msg_parse_column(self, LM_V_PROGRAM, &src, &left, 48);
   if (!log_msg_parse_skip_space(self, &src, &left))
-    return FALSE;
+    goto error;
 
   /* process id 128 ascii */
   log_msg_parse_column(self, LM_V_PID, &src, &left, 128);
   if (!log_msg_parse_skip_space(self, &src, &left))
-    return FALSE;
+    goto error;
 
   /* message id 32 ascii */
   log_msg_parse_column(self, LM_V_MSGID, &src, &left, 32);
   if (!log_msg_parse_skip_space(self, &src, &left))
-    return FALSE;
+    goto error;
 
   /* structured data part */
   if (!log_msg_parse_sd(self, &src, &left, parse_options))
-    return FALSE;
+    goto error;
 
   /* checking if there are remaining data in log message */
   if (left == 0)
@@ -1103,7 +1233,7 @@ log_msg_parse_syslog_proto(const MsgFormatOptions *parse_options, const guchar *
   /* optional part of the log message [SP MSG] */
   if (!log_msg_parse_skip_space(self, &src, &left))
     {
-      return FALSE;
+      goto error;
     }
 
   if (left >= 3 && memcmp(src, "\xEF\xBB\xBF", 3) == 0)
@@ -1119,6 +1249,9 @@ log_msg_parse_syslog_proto(const MsgFormatOptions *parse_options, const guchar *
     }
   log_msg_set_value(self, LM_V_MESSAGE, (gchar *) src, left);
   return TRUE;
+error:
+  *position = src - data;
+  return FALSE;
 }
 
 
@@ -1128,10 +1261,14 @@ syslog_format_handler(const MsgFormatOptions *parse_options,
                       LogMessage *self)
 {
   gboolean success;
+  gint problem_position = 0;
   gchar *p;
 
   while (length > 0 && (data[length - 1] == '\n' || data[length - 1] == '\0'))
     length--;
+
+  if (parse_options->flags & LP_STORE_RAW_MESSAGE)
+    log_msg_set_value(self, handles.raw_message, (gchar *) data, length);
 
   if (parse_options->flags & LP_NOPARSE)
     {
@@ -1148,14 +1285,14 @@ syslog_format_handler(const MsgFormatOptions *parse_options,
 
   self->initial_parse = TRUE;
   if (parse_options->flags & LP_SYSLOG_PROTOCOL)
-    success = log_msg_parse_syslog_proto(parse_options, data, length, self);
+    success = log_msg_parse_syslog_proto(parse_options, data, length, self, &problem_position);
   else
-    success = log_msg_parse_legacy(parse_options, data, length, self);
+    success = log_msg_parse_legacy(parse_options, data, length, self, &problem_position);
   self->initial_parse = FALSE;
 
   if (G_UNLIKELY(!success))
     {
-      msg_format_inject_parse_error(self, data, length);
+      msg_format_inject_parse_error(self, data, length, problem_position);
       return;
     }
 
@@ -1177,13 +1314,12 @@ syslog_format_handler(const MsgFormatOptions *parse_options,
 void
 syslog_format_init(void)
 {
-  static gboolean handles_initialized = FALSE;
-
-  if (!handles_initialized)
+  if (!handles.initialized)
     {
-      is_synced = log_msg_get_value_handle(".SDATA.timeQuality.isSynced");
-      cisco_seqid = log_msg_get_value_handle(".SDATA.meta.sequenceId");
-      handles_initialized = TRUE;
+      handles.is_synced = log_msg_get_value_handle(".SDATA.timeQuality.isSynced");
+      handles.cisco_seqid = log_msg_get_value_handle(".SDATA.meta.sequenceId");
+      handles.raw_message = log_msg_get_value_handle("RAWMSG");
+      handles.initialized = TRUE;
     }
 
   _init_parse_hostname_invalid_chars();

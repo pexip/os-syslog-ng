@@ -27,10 +27,10 @@
 #define _RUN_ID_H
 #include "persist-state.h"
 
-void run_id_init(PersistState *state);
+gboolean run_id_init(PersistState *state);
 void run_id_deinit(void);
 int run_id_get(void);
 gboolean run_id_is_same_run(gint other_run_id);
-void run_id_append_formatted_id(GString* str);
+void run_id_append_formatted_id(GString *str);
 
 #endif

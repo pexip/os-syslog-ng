@@ -21,7 +21,7 @@
  * COPYING for details.
  *
  */
-  
+
 #ifndef TIMEUTILS_H_INCLUDED
 #define TIMEUTILS_H_INCLUDED
 
@@ -45,7 +45,7 @@ gboolean check_nanosleep(void);
 int format_zone_info(gchar *buf, size_t buflen, long gmtoff);
 glong g_time_val_diff(GTimeVal *t1, GTimeVal *t2);
 void timespec_add_msec(struct timespec *ts, glong msec);
-glong timespec_diff_msec(struct timespec *t1, struct timespec *t2);
+glong timespec_diff_msec(const struct timespec *t1, const struct timespec *t2);
 glong timespec_diff_nsec(struct timespec *t1, struct timespec *t2);
 gint determine_year_for_month(gint month, const struct tm *now);
 
@@ -53,7 +53,7 @@ typedef struct _ZoneInfo ZoneInfo;
 typedef struct _TimeZoneInfo TimeZoneInfo;
 
 gint32 time_zone_info_get_offset(const TimeZoneInfo *self, time_t stamp);
-TimeZoneInfo* time_zone_info_new(const gchar *tz);
+TimeZoneInfo *time_zone_info_new(const gchar *tz);
 void time_zone_info_free(TimeZoneInfo *self);
 
 extern const char *month_names_abbrev[];

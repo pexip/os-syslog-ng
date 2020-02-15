@@ -26,7 +26,7 @@
 #include <ctype.h>
 
 static void
-tf_echo(LogMessage *msg, gint argc, GString *argv[], GString *result)
+_append_args_with_separator(gint argc, GString *argv[], GString *result, gchar separator)
 {
   gint i;
 
@@ -34,8 +34,15 @@ tf_echo(LogMessage *msg, gint argc, GString *argv[], GString *result)
     {
       g_string_append_len(result, argv[i]->str, argv[i]->len);
       if (i < argc - 1)
-        g_string_append_c(result, ' ');
+        g_string_append_c(result, separator);
     }
+}
+
+
+static void
+tf_echo(LogMessage *msg, gint argc, GString *argv[], GString *result)
+{
+  _append_args_with_separator(argc, argv, result, ' ');
 }
 
 TEMPLATE_FUNCTION_SIMPLE(tf_echo);
@@ -70,28 +77,35 @@ tf_substr(LogMessage *msg, gint argc, GString *argv[], GString *result)
    * completely wrong calculations, so we'll just return nothing (alternative
    * would be to return original string and perhaps print an error...)
    */
-  if (argv[0]->len >= G_MAXLONG) {
-    msg_error("$(substr) error: string is too long");
-    return;
-  }
+  if (argv[0]->len >= G_MAXLONG)
+    {
+      msg_error("$(substr) error: string is too long");
+      return;
+    }
 
   /* check number of arguments */
   if (argc < 2 || argc > 3)
     return;
 
   /* get offset position from second argument */
-  if (!parse_number(argv[1]->str, &start)) {
-    msg_error("$(substr) parsing failed, start could not be parsed", evt_tag_str("start", argv[1]->str));
-    return;
-  }
-
-  /* if we were called with >2 arguments, third was desired length */
-  if (argc > 2) {
-    if (!parse_number(argv[2]->str, &len)) {
-      msg_error("$(substr) parsing failed, length could not be parsed", evt_tag_str("length", argv[2]->str));
+  if (!parse_dec_number(argv[1]->str, &start))
+    {
+      msg_error("$(substr) parsing failed, start could not be parsed",
+                evt_tag_str("start", argv[1]->str));
       return;
     }
-  } else
+
+  /* if we were called with >2 arguments, third was desired length */
+  if (argc > 2)
+    {
+      if (!parse_dec_number(argv[2]->str, &len))
+        {
+          msg_error("$(substr) parsing failed, length could not be parsed",
+                    evt_tag_str("length", argv[2]->str));
+          return;
+        }
+    }
+  else
     len = (glong)argv[0]->len;
 
   /*
@@ -115,31 +129,33 @@ tf_substr(LogMessage *msg, gint argc, GString *argv[], GString *result)
 
   /* with negative length, see if we don't end up with start > end */
   if (len < 0 && ((start < 0 && start > len) ||
-		  (start >= 0 && (len + ((glong)argv[0]->len) - start) < 0)))
+                  (start >= 0 && (len + ((glong)argv[0]->len) - start) < 0)))
     return;
 
   /* if requested offset is negative, move start it accordingly */
-  if (start < 0) {
-    start = start + (glong)argv[0]->len;
-    /*
-     * this shouldn't actually happen, as earlier we tested for
-     * (start < 0 && -start > argv0len), but better safe than sorry
-     */
-    if (start < 0)
-      start = 0;
-  }
+  if (start < 0)
+    {
+      start = start + (glong)argv[0]->len;
+      /*
+       * this shouldn't actually happen, as earlier we tested for
+       * (start < 0 && -start > argv0len), but better safe than sorry
+       */
+      if (start < 0)
+        start = 0;
+    }
 
   /*
    * if requested length is negative, "resize" len to include exactly as many
    * characters as needed from the end of the string, given our start position.
    * (start is always non-negative here already)
    */
-  if (len < 0) {
-    len = ((glong)argv[0]->len) - start + len;
-    /* this also shouldn't happen, but - again - better safe than sorry */
-    if (len < 0)
-      return;
-  }
+  if (len < 0)
+    {
+      len = ((glong)argv[0]->len) - start + len;
+      /* this also shouldn't happen, but - again - better safe than sorry */
+      if (len < 0)
+        return;
+    }
 
   /* if we're beyond string end, do nothing */
   if (start >= (glong)argv[0]->len)
@@ -164,32 +180,29 @@ TEMPLATE_FUNCTION_SIMPLE(tf_substr);
 static void
 tf_strip(LogMessage *msg, gint argc, GString *argv[], GString *result)
 {
+  gsize initial_len = result->len;
   gint i;
 
   for (i = 0; i < argc; i++)
     {
-      gint spaces_end, spaces_start;
-
       if (argv[i]->len == 0)
         continue;
 
-      spaces_end = 0;
-      while (isspace(argv[i]->str[argv[i]->len - spaces_end - 1]))
+      gint spaces_end = 0;
+      while (isspace(argv[i]->str[argv[i]->len - spaces_end - 1]) && spaces_end < argv[i]->len)
         spaces_end++;
 
       if (argv[i]->len == spaces_end)
         continue;
 
-      spaces_start = 0;
+      gint spaces_start = 0;
       while (isspace(argv[i]->str[spaces_start]))
         spaces_start++;
 
-      if (argv[i]->len == spaces_start)
-        continue;
+      if (result->len > initial_len)
+        g_string_append_c(result, ' ');
 
       g_string_append_len(result, &argv[i]->str[spaces_start], argv[i]->len - spaces_end - spaces_start);
-      if (i < argc - 1)
-        g_string_append_c(result, ' ');
     }
 }
 
@@ -212,14 +225,16 @@ typedef struct _TFSanitizeState
 } TFSanitizeState;
 
 static gboolean
-tf_sanitize_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent, gint argc, gchar *argv[], GError **error)
+tf_sanitize_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent, gint argc, gchar *argv[],
+                    GError **error)
 {
   TFSanitizeState *state = (TFSanitizeState *) s;
   gboolean ctrl_chars = TRUE;
   gchar *invalid_chars = NULL;
   gchar *replacement = NULL;
   GOptionContext *ctx;
-  GOptionEntry stize_options[] = {
+  GOptionEntry stize_options[] =
+  {
     { "ctrl-chars", 'c', 0, G_OPTION_ARG_NONE, &ctrl_chars, NULL, NULL },
     { "no-ctrl-chars", 'C', G_OPTION_FLAG_REVERSE, G_OPTION_ARG_NONE, &ctrl_chars, NULL, NULL },
     { "invalid-chars", 'i', 0, G_OPTION_ARG_STRING, &invalid_chars, NULL, NULL },
@@ -243,7 +258,6 @@ tf_sanitize_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent, 
 
   if (!tf_simple_func_prepare(self, state, parent, argc, argv, error))
     {
-      g_free(state);
       goto exit;
     }
   state->ctrl_chars = ctrl_chars;
@@ -251,7 +265,7 @@ tf_sanitize_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent, 
   state->replacement = replacement[0];
   result = TRUE;
 
- exit:
+exit:
   /* glib supplies us with duplicated strings that we are responsible for! */
   g_free(invalid_chars);
   g_free(replacement);
@@ -262,17 +276,15 @@ static void
 tf_sanitize_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *args, GString *result)
 {
   TFSanitizeState *state = (TFSanitizeState *) s;
-  GString **argv;
   gint argc;
   gint i, pos;
 
-  argv = (GString **) args->bufs->pdata;
-  argc = args->bufs->len;
+  argc = state->super.argc;
   for (i = 0; i < argc; i++)
     {
-      for (pos = 0; pos < argv[i]->len; pos++)
+      for (pos = 0; pos < args->argv[i]->len; pos++)
         {
-          guchar last_char = argv[i]->str[pos];
+          guchar last_char = args->argv[i]->str[pos];
 
           if ((state->ctrl_chars && last_char < 32) ||
               (strchr(state->invalid_chars, (gchar) last_char) != NULL))
@@ -294,21 +306,9 @@ tf_sanitize_free_state(gpointer s)
   tf_simple_func_free_state(&state->super);
 }
 
-TEMPLATE_FUNCTION(TFSanitizeState, tf_sanitize, tf_sanitize_prepare, tf_simple_func_eval, tf_sanitize_call, tf_sanitize_free_state, NULL);
+TEMPLATE_FUNCTION(TFSanitizeState, tf_sanitize, tf_sanitize_prepare, tf_simple_func_eval, tf_sanitize_call,
+                  tf_sanitize_free_state, NULL);
 
-
-static void
-append_args(gint argc, GString *argv[], GString *result)
-{
-  gint i;
-
-  for (i = 0; i < argc; i++)
-    {
-      g_string_append_len(result, argv[i]->str, argv[i]->len);
-      if (i < argc - 1)
-        g_string_append_c(result, ' ');
-    }
-}
 
 void
 tf_indent_multi_line(LogMessage *msg, gint argc, GString *argv[], GString *text)
@@ -316,7 +316,7 @@ tf_indent_multi_line(LogMessage *msg, gint argc, GString *argv[], GString *text)
   gchar *p, *new_line;
 
   /* append the message text(s) to the template string */
-  append_args(argc, argv, text);
+  _append_args_with_separator(argc, argv, text, ' ');
 
   /* look up the \n-s and insert a \t after them */
   p = text->str;
@@ -393,44 +393,239 @@ tf_replace_delimiter(LogMessage *msg, gint argc, GString *argv[], GString *resul
 
 TEMPLATE_FUNCTION_SIMPLE(tf_replace_delimiter);
 
-static void
-tf_string_padding(LogMessage *msg, gint argc, GString *argv[], GString *result)
+typedef struct _TFStringPaddingState
 {
-  GString *text = argv[0];
-  GString *padding;
-  gint64 width, i;
+  TFSimpleFuncState super;
+  GString *padding_pattern;
+  gint64  width;
+} TFStringPaddingState;
 
-  if (argc <= 1)
+static gboolean
+_padding_prepare_parse_state(TFStringPaddingState *state, gint argc, gchar **argv, GError **error)
+{
+  if (argc < 3)
     {
-      msg_debug("Not enough arguments for padding template function!");
-      return;
+      g_set_error(error, LOG_TEMPLATE_ERROR, LOG_TEMPLATE_ERROR_COMPILE,
+                  "$(padding) Not enough arguments, usage $(padding <input> <width> [padding string])");
+      return FALSE;
     }
 
-  if (!parse_number_with_suffix(argv[1]->str, &width))
+  if (!parse_dec_number(argv[2], &state->width))
     {
-      msg_debug("Padding template function requires a number as second argument!");
-      return;
-    }
 
-  if (argc <= 2)
-    padding = g_string_new(" ");
+      g_set_error(error, LOG_TEMPLATE_ERROR, LOG_TEMPLATE_ERROR_COMPILE,
+                  "Padding template function requires a number as second argument!");
+      return FALSE;
+    }
+  return TRUE;
+}
+
+static void
+_padding_prepare_fill_padding_pattern(TFStringPaddingState *state, gint argc, gchar **argv)
+{
+  state->padding_pattern = g_string_sized_new(state->width);
+  if (argc < 4)
+    {
+      g_string_printf(state->padding_pattern, "%*s", (int)(state->width), "");
+    }
   else
-    padding = argv[2];
-
-  if (text->len < width)
     {
-      for (i = 0; i < width - text->len; i++)
+      gint len = strlen(argv[3]);
+      if (len < 1)
         {
-          g_string_append_c(result, *(padding->str + (i % padding->len)));
+          g_string_printf(state->padding_pattern, "%*s", (int)(state->width), "");
         }
-    }
-
-  g_string_append_len(result, text->str, text->len);
-
-  if (argc <= 2)
-    {
-      g_string_free(padding, TRUE);
+      else
+        {
+          gint repeat = state->width / len; // integer division!
+          for (gint i = 0; i < repeat; i++)
+            {
+              g_string_append_len(state->padding_pattern, argv[3], len);
+            }
+          g_string_append_len(state->padding_pattern, argv[3], state->width - (repeat * len));
+        }
     }
 }
 
-TEMPLATE_FUNCTION_SIMPLE(tf_string_padding);
+static gboolean
+tf_string_padding_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent,
+                          gint argc, gchar *argv[], GError **error)
+{
+  TFStringPaddingState *state = (TFStringPaddingState *) s;
+
+  if (!_padding_prepare_parse_state(state, argc, argv, error))
+    return FALSE;
+
+  _padding_prepare_fill_padding_pattern(state, argc, argv);
+
+  if (!tf_simple_func_prepare(self, state, parent, 2, argv, error))
+    {
+      g_set_error(error, LOG_TEMPLATE_ERROR, LOG_TEMPLATE_ERROR_COMPILE,
+                  "padding: prepare failed");
+      return FALSE;
+    }
+
+  return TRUE;
+}
+
+static void
+tf_string_padding_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *args, GString *result)
+{
+  TFStringPaddingState *state = (TFStringPaddingState *) s;
+
+  if (args->argv[0]->len > state->width)
+    {
+      g_string_append_len(result, args->argv[0]->str, args->argv[0]->len);
+    }
+  else
+    {
+      g_string_append_len(result, state->padding_pattern->str, state->width - args->argv[0]->len);
+      g_string_append_len(result, args->argv[0]->str, args->argv[0]->len);
+    }
+}
+
+static void
+tf_string_padding_free_state(gpointer s)
+{
+  TFStringPaddingState *state = (TFStringPaddingState *) s;
+  if (state->padding_pattern)
+    g_string_free(state->padding_pattern, TRUE);
+  tf_simple_func_free_state(&state->super);
+}
+
+TEMPLATE_FUNCTION(TFStringPaddingState, tf_string_padding, tf_string_padding_prepare,
+                  tf_simple_func_eval, tf_string_padding_call, tf_string_padding_free_state, NULL);
+
+typedef struct _TFBinaryState
+{
+  TFSimpleFuncState super;
+  GString *octets;
+} TFBinaryState;
+
+static void
+tf_binary_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *args, GString *result)
+{
+  TFBinaryState *state = (TFBinaryState *) s;
+
+  g_string_append_len(result, state->octets->str, state->octets->len);
+}
+
+static gboolean
+tf_binary_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent, gint argc, gchar *argv[], GError **error)
+{
+  TFBinaryState *state = (TFBinaryState *) s;
+  GString *octets = g_string_new("");
+
+  if (argc < 2)
+    {
+      g_set_error(error, LOG_TEMPLATE_ERROR, LOG_TEMPLATE_ERROR_COMPILE,
+                  "$(binary) Incorrect parameters, usage $(binary <number> <number> ...)");
+      goto error;
+    }
+
+  for (gint i = 1; i < argc; i++)
+    {
+      gint64 number;
+
+      gchar *token = argv[i];
+      if (!parse_number(token, &number))
+        {
+          gchar *base = "dec";
+
+          if (token[0] == '0')
+            {
+              base = token[1] == 'x' ? "hex" : "oct";
+            }
+
+          g_set_error(error, LOG_TEMPLATE_ERROR, LOG_TEMPLATE_ERROR_COMPILE,
+                      "$(binary) template function requires list of dec/hex/oct numbers as arguments, unable to parse %s as a %s number",
+                      token, base);
+          goto error;
+        }
+      if (number > 0xFF)
+        {
+          g_set_error(error, LOG_TEMPLATE_ERROR, LOG_TEMPLATE_ERROR_COMPILE,
+                      "$(binary) template function only supports 8 bit values as characters, %" G_GUINT64_FORMAT " is above 255", number);
+          goto error;
+        }
+      g_string_append_c(octets, (gchar) number);
+    }
+
+  if (!tf_simple_func_prepare(self, state, parent, argc, argv, error))
+    {
+      goto error;
+    }
+
+  state->octets = octets;
+  return TRUE;
+error:
+  g_string_free(octets, TRUE);
+  return FALSE;
+}
+
+static void
+tf_binary_free_state(gpointer s)
+{
+  TFBinaryState *state = (TFBinaryState *) s;
+
+  if (state->octets)
+    g_string_free(state->octets, TRUE);
+  tf_simple_func_free_state(&state->super);
+}
+
+TEMPLATE_FUNCTION(TFBinaryState, tf_binary, tf_binary_prepare, tf_simple_func_eval, tf_binary_call,
+                  tf_binary_free_state, NULL);
+
+static inline gsize
+_get_base64_encoded_size(gsize len)
+{
+  return (len / 3 + 1) * 4 + 4;
+}
+
+static void
+tf_base64encode(LogMessage *msg, gint argc, GString *argv[], GString *result)
+{
+  gint i;
+  gint state = 0;
+  gint save = 0;
+  gsize out_len = 0;
+  gsize init_len = result->len;
+
+  for (i = 0; i < argc; i++)
+    {
+      /* expand the buffer and add space for the base64 encoded string */
+      g_string_set_size(result, init_len + out_len + _get_base64_encoded_size(argv[i]->len));
+      out_len +=
+        g_base64_encode_step((guchar *) argv[i]->str, argv[i]->len,
+                             FALSE /* break_lines */,
+                             result->str + init_len + out_len,
+                             &state, &save);
+    }
+  g_string_set_size(result, init_len + out_len + _get_base64_encoded_size(0));
+
+#if !GLIB_CHECK_VERSION(2, 54, 0)
+  /* NOTE: this is an ugly workaround for glib versions < 2.54 (which is
+   * pretty recent and not widely available yet) to fix an encoding issue.
+   *
+   * This is the bug:
+   *    https://bugzilla.gnome.org/show_bug.cgi?id=780066
+   *
+   * This is the fix:
+   *    https://gitlab.gnome.org/GNOME/glib/commits/35c0dd2755dbcea2539117cf33959a1a9e497f12
+   *
+   * We basically set the c2 byte used in a base64 encode to zero, if only 1
+   * remaining byte is there. Read the bugreport for reasons.
+   *
+   * Yes, I've actually stumbled into this in the unit test and could easily
+   * anyone.
+   */
+
+  if (((unsigned char *) &save)[0] == 1)
+    ((unsigned char *) &save)[2] = 0;
+#endif
+  out_len += g_base64_encode_close(FALSE, result->str + init_len + out_len, &state, &save);
+
+  g_string_set_size(result, init_len + out_len);
+};
+
+TEMPLATE_FUNCTION_SIMPLE(tf_base64encode);

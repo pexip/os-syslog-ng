@@ -21,8 +21,9 @@
  * COPYING for details.
  *
  */
-  
+
 #include "cfg.h"
+#include "cfg-grammar.h"
 #include "module-config.h"
 #include "cfg-tree.h"
 #include "messages.h"
@@ -39,6 +40,7 @@
 #include "hostname.h"
 #include "rcptid.h"
 #include "resolved-configurable-paths.h"
+#include "mainloop.h"
 
 #include <sys/types.h>
 #include <signal.h>
@@ -75,7 +77,8 @@ persist_config_new(void)
 {
   PersistConfig *self = g_new0(PersistConfig, 1);
 
-  self->keys = g_hash_table_new_full(g_str_hash, g_str_equal, (GDestroyNotify) g_free, (GDestroyNotify) persist_config_entry_free);
+  self->keys = g_hash_table_new_full(g_str_hash, g_str_equal, (GDestroyNotify) g_free,
+                                     (GDestroyNotify) persist_config_entry_free);
   return self;
 }
 
@@ -110,11 +113,11 @@ cfg_bad_hostname_set(GlobalConfig *self, gchar *bad_hostname_re)
 {
   if (self->bad_hostname_re)
     g_free(self->bad_hostname_re);
-  self->bad_hostname_re = g_strdup(bad_hostname_re);  
+  self->bad_hostname_re = g_strdup(bad_hostname_re);
 }
 
 gint
-cfg_lookup_mark_mode(gchar *mark_mode)
+cfg_lookup_mark_mode(const gchar *mark_mode)
 {
   if (!strcmp(mark_mode, "internal"))
     return MM_INTERNAL;
@@ -133,7 +136,7 @@ cfg_lookup_mark_mode(gchar *mark_mode)
 }
 
 void
-cfg_set_mark_mode(GlobalConfig *self, gchar *mark_mode)
+cfg_set_mark_mode(GlobalConfig *self, const gchar *mark_mode)
 {
   self->mark_mode = cfg_lookup_mark_mode(mark_mode);
 }
@@ -156,6 +159,114 @@ _invoke_module_deinit(gchar *key, ModuleConfig *mc, gpointer user_data)
   module_config_deinit(mc, cfg);
 }
 
+static void
+_sync_plugin_module_path_with_global_define(GlobalConfig *self)
+{
+  const gchar *module_path;
+
+  /* Sync the @define module-path with the actual module search path as implemented by plugin.
+   *
+   * if @define module-path is not defined, we use whatever there's in
+   * PluginContext by default */
+  if (self->lexer)
+    {
+      module_path = cfg_args_get(self->globals, "module-path");
+      if (module_path)
+        {
+          plugin_context_set_module_path(&self->plugin_context, module_path);
+        }
+    }
+}
+
+gboolean
+cfg_load_module(GlobalConfig *cfg, const gchar *module_name)
+{
+  _sync_plugin_module_path_with_global_define(cfg);
+  return plugin_load_module(&cfg->plugin_context, module_name, NULL);
+}
+
+void
+cfg_load_candidate_modules(GlobalConfig *self)
+{
+  gboolean autoload_enabled = atoi(cfg_args_get(self->globals, "autoload-compiled-modules") ? : "1");
+
+  if (self->use_plugin_discovery &&
+      autoload_enabled)
+    {
+      _sync_plugin_module_path_with_global_define(self);
+      plugin_load_candidate_modules(&self->plugin_context);
+    }
+}
+
+void
+cfg_load_forced_modules(GlobalConfig *self)
+{
+  static const gchar *module_list[] =
+  {
+#if (!SYSLOG_NG_ENABLE_FORCED_SERVER_MODE)
+    "license"
+#endif
+  };
+
+  if (!self->enable_forced_modules)
+    return;
+
+  int i;
+  for (i=0; i<sizeof(module_list)/sizeof(gchar *); ++i)
+    {
+      const gchar *name = module_list[i];
+
+      if (!cfg_load_module(self, name))
+        {
+          msg_error("Error loading module, forcing exit", evt_tag_str("module", name));
+          exit(1);
+        }
+    }
+}
+
+Plugin *
+cfg_find_plugin(GlobalConfig *cfg, gint plugin_type, const gchar *plugin_name)
+{
+  return plugin_find(&cfg->plugin_context, plugin_type, plugin_name);
+}
+
+/* construct a plugin instance by parsing its relevant portion from the
+ * configuration file */
+gpointer
+cfg_parse_plugin(GlobalConfig *cfg, Plugin *plugin, YYLTYPE *yylloc, gpointer arg)
+{
+  CfgTokenBlock *block;
+  YYSTYPE token;
+
+
+  /* we add two tokens to an inserted token-block:
+   *  1) the plugin type (in order to make it possible to support different
+   *  plugins from the same grammar)
+   *
+   *  2) the keyword equivalent of the plugin name
+   */
+  block = cfg_token_block_new();
+
+  /* add plugin->type as a token */
+  memset(&token, 0, sizeof(token));
+  token.type = LL_TOKEN;
+  token.token = plugin->type;
+  cfg_token_block_add_and_consume_token(block, &token);
+
+  /* start a new lexer context, so plugin specific keywords are recognized,
+   * we only do this to lookup the parser name. */
+  cfg_lexer_push_context(cfg->lexer, plugin->parser->context, plugin->parser->keywords, plugin->parser->name);
+  cfg_lexer_lookup_keyword(cfg->lexer, &token, yylloc, plugin->name);
+  cfg_lexer_pop_context(cfg->lexer);
+
+  /* add plugin name token */
+  cfg_token_block_add_and_consume_token(block, &token);
+
+  cfg_lexer_inject_token_block(cfg->lexer, block);
+
+  return plugin_construct_from_config(plugin, cfg->lexer, arg);
+}
+
 static gboolean
 cfg_init_modules(GlobalConfig *cfg)
 {
@@ -172,30 +283,43 @@ cfg_deinit_modules(GlobalConfig *cfg)
   g_hash_table_foreach(cfg->module_config, (GHFunc) _invoke_module_deinit, cfg);
 }
 
+/* Request that this configuration shuts down and terminates.  Right now, as
+ * there's only one configuration executed in a syslog-ng process, it will
+ * cause the mainloop to exit.  Should there be multiple configs running in
+ * the same process at a future point, this would only terminate one and
+ * continue with the rest.
+ */
+void
+cfg_shutdown(GlobalConfig *cfg)
+{
+  MainLoop *main_loop = main_loop_get_instance();
+  main_loop_exit(main_loop);
+}
+
 gboolean
 cfg_init(GlobalConfig *cfg)
 {
   gint regerr;
-  
+
   if (cfg->file_template_name && !(cfg->file_template = cfg_tree_lookup_template(&cfg->tree, cfg->file_template_name)))
     msg_error("Error resolving file template",
-               evt_tag_str("name", cfg->file_template_name));
+              evt_tag_str("name", cfg->file_template_name));
   if (cfg->proto_template_name && !(cfg->proto_template = cfg_tree_lookup_template(&cfg->tree, cfg->proto_template_name)))
     msg_error("Error resolving protocol template",
-               evt_tag_str("name", cfg->proto_template_name));
+              evt_tag_str("name", cfg->proto_template_name));
 
   if (cfg->bad_hostname_re)
     {
       if ((regerr = regcomp(&cfg->bad_hostname, cfg->bad_hostname_re, REG_NOSUB | REG_EXTENDED)) != 0)
         {
           gchar buf[256];
-          
+
           regerror(regerr, &cfg->bad_hostname, buf, sizeof(buf));
           msg_error("Error compiling bad_hostname regexp",
                     evt_tag_str("error", buf));
         }
       else
-        { 
+        {
           cfg->bad_hostname_compiled = TRUE;
         }
     }
@@ -204,11 +328,10 @@ cfg_init(GlobalConfig *cfg)
     return FALSE;
 
   stats_reinit(&cfg->stats_options);
-  log_tags_reinit_stats(cfg);
 
   dns_caching_update_options(&cfg->dns_cache_options);
   hostname_reinit(cfg->custom_domain);
-  host_resolve_options_init(&cfg->host_resolve_options, cfg);
+  host_resolve_options_init_globals(&cfg->host_resolve_options);
   log_template_options_init(&cfg->template_options, cfg);
   if (!cfg_init_modules(cfg))
     return FALSE;
@@ -223,15 +346,21 @@ cfg_deinit(GlobalConfig *cfg)
   return cfg_tree_stop(&cfg->tree);
 }
 
-void
+gboolean
 cfg_set_version(GlobalConfig *self, gint version)
 {
   self->user_version = version;
+  if (cfg_is_config_version_older(self, 0x0300))
+    {
+      msg_error("ERROR: compatibility with configurations below 3.0 was dropped in " VERSION_3_13
+                ", please update your configuration accordingly");
+      return FALSE;
+    }
+
   if (cfg_is_config_version_older(self, VERSION_VALUE))
     {
-      msg_warning("WARNING: Configuration file format is too old, syslog-ng is running in compatibility mode "
-                  "Please update it to use the " VERSION_CURRENT " format at your time of convenience, "
-                  "compatibility mode can operate less efficiently in some cases. "
+      msg_warning("WARNING: Configuration file format is too old, syslog-ng is running in compatibility mode. "
+                  "Please update it to use the " VERSION_CURRENT " format at your time of convenience. "
                   "To upgrade the configuration, please review the warnings about incompatible changes printed "
                   "by syslog-ng, and once completed change the @version header at the top of the configuration "
                   "file.");
@@ -244,16 +373,12 @@ cfg_set_version(GlobalConfig *self, gint version)
       self->user_version = VERSION_VALUE;
     }
 
-  if (cfg_is_config_version_older(self, 0x0300))
-    {
-      msg_warning("WARNING: global: the default value of chain_hostnames is changing to 'no' in " VERSION_3_0 ", please update your configuration accordingly");
-      self->chain_hostnames = TRUE;
-    }
   if (cfg_is_config_version_older(self, 0x0303))
     {
-      msg_warning("WARNING: global: the default value of log_fifo_size() has changed to 10000 in " VERSION_3_3 " to reflect log_iw_size() changes for tcp()/udp() window size changes");
+      msg_warning("WARNING: global: the default value of log_fifo_size() has changed to 10000 in " VERSION_3_3
+                  " to reflect log_iw_size() changes for tcp()/udp() window size changes");
     }
-
+  return TRUE;
 }
 
 gboolean
@@ -264,7 +389,7 @@ cfg_allow_config_dups(GlobalConfig *self)
   if (cfg_is_config_version_older(self, 0x0303))
     return TRUE;
 
-  s = cfg_args_get(self->lexer->globals, "allow-config-dups");
+  s = cfg_args_get(self->globals, "allow-config-dups");
   if (s && atoi(s))
     {
       return TRUE;
@@ -280,7 +405,7 @@ cfg_allow_config_dups(GlobalConfig *self)
 static void
 cfg_register_builtin_plugins(GlobalConfig *self)
 {
-  log_proto_register_builtin_plugins(self);
+  log_proto_register_builtin_plugins(&self->plugin_context);
 }
 
 GlobalConfig *
@@ -289,45 +414,57 @@ cfg_new(gint version)
   GlobalConfig *self = g_new0(GlobalConfig, 1);
 
   self->module_config = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify) module_config_free);
+  self->globals = cfg_args_new();
   self->user_version = version;
 
   self->flush_lines = 100;
-  self->flush_timeout = 10000;  /* 10 seconds */
-  self->mark_freq = 1200;	/* 20 minutes */
+  self->mark_freq = 1200; /* 20 minutes */
   self->mark_mode = MM_HOST_IDLE;
   self->chain_hostnames = 0;
   self->time_reopen = 60;
   self->time_reap = 60;
 
   self->log_fifo_size = 10000;
-  self->log_msg_size = 8192;
+  self->log_msg_size = 65536;
 
   file_perm_options_global_defaults(&self->file_perm_options);
 
   dns_cache_options_defaults(&self->dns_cache_options);
   self->threaded = TRUE;
   self->pass_unix_credentials = TRUE;
-  
+
   log_template_options_defaults(&self->template_options);
   self->template_options.ts_format = TS_FMT_BSD;
   self->template_options.frac_digits = 0;
   self->template_options.on_error = ON_ERROR_DROP_MESSAGE;
 
-  host_resolve_options_defaults(&self->host_resolve_options);
-  self->host_resolve_options.use_fqdn = FALSE;
-  self->host_resolve_options.use_dns = TRUE;
-  self->host_resolve_options.use_dns_cache = TRUE;
-  self->host_resolve_options.normalize_hostnames = FALSE;
+  host_resolve_options_global_defaults(&self->host_resolve_options);
 
   self->recv_time_zone = NULL;
   self->keep_timestamp = TRUE;
 
   self->use_uniqid = FALSE;
-  
+
   stats_options_defaults(&self->stats_options);
 
+  self->min_iw_size_per_reader = 100;
+
   cfg_tree_init_instance(&self->tree, self);
+  plugin_context_init_instance(&self->plugin_context);
+  self->use_plugin_discovery = TRUE;
+  self->enable_forced_modules = TRUE;
+
   cfg_register_builtin_plugins(self);
+  return self;
+}
+
+GlobalConfig *
+cfg_new_snippet(void)
+{
+  GlobalConfig *self = cfg_new(VERSION_VALUE);
+
+  self->use_plugin_discovery = FALSE;
+  self->enable_forced_modules = FALSE;
   return self;
 }
 
@@ -336,17 +473,17 @@ cfg_set_global_paths(GlobalConfig *self)
 {
   gchar *include_path;
 
-  cfg_args_set(self->lexer->globals, "syslog-ng-root", get_installation_path_for(SYSLOG_NG_PATH_PREFIX));
-  cfg_args_set(self->lexer->globals, "syslog-ng-data", get_installation_path_for(SYSLOG_NG_PATH_DATADIR));
-  cfg_args_set(self->lexer->globals, "syslog-ng-include", get_installation_path_for(SYSLOG_NG_PATH_CONFIG_INCLUDEDIR));
-  cfg_args_set(self->lexer->globals, "scl-root", get_installation_path_for(SYSLOG_NG_PATH_SCLDIR));
-  cfg_args_set(self->lexer->globals, "module-path", resolvedConfigurablePaths.initial_module_path);
-  cfg_args_set(self->lexer->globals, "autoload-compiled-modules", "1");
+  cfg_args_set(self->globals, "syslog-ng-root", get_installation_path_for(SYSLOG_NG_PATH_PREFIX));
+  cfg_args_set(self->globals, "syslog-ng-data", get_installation_path_for(SYSLOG_NG_PATH_DATADIR));
+  cfg_args_set(self->globals, "syslog-ng-include", get_installation_path_for(SYSLOG_NG_PATH_CONFIG_INCLUDEDIR));
+  cfg_args_set(self->globals, "scl-root", get_installation_path_for(SYSLOG_NG_PATH_SCLDIR));
+  cfg_args_set(self->globals, "module-path", resolvedConfigurablePaths.initial_module_path);
+  cfg_args_set(self->globals, "module-install-dir", resolvedConfigurablePaths.initial_module_path);
 
   include_path = g_strdup_printf("%s:%s",
                                  get_installation_path_for(SYSLOG_NG_PATH_SYSCONFDIR),
                                  get_installation_path_for(SYSLOG_NG_PATH_CONFIG_INCLUDEDIR));
-  cfg_args_set(self->lexer->globals, "include-path", include_path);
+  cfg_args_set(self->globals, "include-path", include_path);
   g_free(include_path);
 }
 
@@ -373,19 +510,6 @@ cfg_run_parser(GlobalConfig *self, CfgLexer *lexer, CfgParser *parser, gpointer 
   return res;
 }
 
-void
-cfg_load_candidate_modules(GlobalConfig *self)
-{
-  /* we enable autoload for pre-3.1 configs or when the user requested
-   * auto-load (the default) */
-
-  if ((cfg_is_config_version_older(self, 0x0302) ||
-      atoi(cfg_args_get(self->lexer->globals, "autoload-compiled-modules"))) && !self->candidate_plugins)
-    {
-      plugin_load_candidate_modules(self);
-    }
-}
-
 static void
 cfg_dump_processed_config(GString *preprocess_output, gchar *output_filename)
 {
@@ -399,27 +523,19 @@ cfg_dump_processed_config(GString *preprocess_output, gchar *output_filename)
     }
 }
 
-gboolean
-cfg_load_config(GlobalConfig *self, gchar *config_string, gboolean syntax_only, gchar *preprocess_into)
+static GString *
+_load_file_into_string(const gchar *fname)
 {
-  gint res;
-  CfgLexer *lexer;
-  GString *preprocess_output = g_string_sized_new(8192);
+  gchar *buff;
+  GString *content = g_string_new("");
 
-  lexer = cfg_lexer_new_buffer(config_string, strlen(config_string));
-  lexer->preprocess_output = preprocess_output;
+  if (g_file_get_contents(fname, &buff, NULL, NULL))
+    {
+      g_string_append(content, buff);
+      g_free(buff);
+    }
 
-  res = cfg_run_parser(self, lexer, &main_parser, (gpointer *) &self, NULL);
-  if (preprocess_into)
-    {
-      cfg_dump_processed_config(preprocess_output, preprocess_into);
-    }
-  g_string_free(preprocess_output, TRUE);
-  if (res)
-    {
-      return TRUE;
-    }
-  return FALSE;
+  return content;
 }
 
 gboolean
@@ -433,16 +549,17 @@ cfg_read_config(GlobalConfig *self, const gchar *fname, gboolean syntax_only, gc
   if ((cfg_file = fopen(fname, "r")) != NULL)
     {
       CfgLexer *lexer;
-      GString *preprocess_output = g_string_sized_new(8192);
+      self->preprocess_config = g_string_sized_new(8192);
+      self->original_config = _load_file_into_string(fname);
 
-      lexer = cfg_lexer_new(cfg_file, fname, preprocess_output);
+      lexer = cfg_lexer_new(self, cfg_file, fname, self->preprocess_config);
       res = cfg_run_parser(self, lexer, &main_parser, (gpointer *) &self, NULL);
       fclose(cfg_file);
       if (preprocess_into)
         {
-          cfg_dump_processed_config(preprocess_output, preprocess_into);
+          cfg_dump_processed_config(self->preprocess_config, preprocess_into);
         }
-      g_string_free(preprocess_output, TRUE);
+
       if (res)
         {
           /* successfully parsed */
@@ -453,9 +570,9 @@ cfg_read_config(GlobalConfig *self, const gchar *fname, gboolean syntax_only, gc
     {
       msg_error("Error opening configuration file",
                 evt_tag_str(EVT_TAG_FILENAME, fname),
-                evt_tag_errno(EVT_TAG_OSERROR, errno));
+                evt_tag_error(EVT_TAG_OSERROR));
     }
-  
+
   return FALSE;
 }
 
@@ -463,11 +580,9 @@ void
 cfg_free(GlobalConfig *self)
 {
   g_assert(self->persist == NULL);
-  if (self->state)
-    persist_state_free(self->state);
 
   g_free(self->file_template_name);
-  g_free(self->proto_template_name);  
+  g_free(self->proto_template_name);
   log_template_unref(self->file_template);
   log_template_unref(self->proto_template);
   log_template_options_destroy(&self->template_options);
@@ -475,13 +590,24 @@ cfg_free(GlobalConfig *self)
 
   if (self->bad_hostname_compiled)
     regfree(&self->bad_hostname);
+  if (self->source_mangle_callback_list)
+    g_list_free(self->source_mangle_callback_list);
   g_free(self->bad_hostname_re);
   dns_cache_options_destroy(&self->dns_cache_options);
   g_free(self->custom_domain);
-  plugin_free_plugins(self);
-  plugin_free_candidate_modules(self);
+  plugin_context_deinit_instance(&self->plugin_context);
   cfg_tree_free_instance(&self->tree);
   g_hash_table_unref(self->module_config);
+  cfg_args_unref(self->globals);
+
+  if (self->state)
+    persist_state_free(self->state);
+
+  if (self->preprocess_config)
+    g_string_free(self->preprocess_config, TRUE);
+  if (self->original_config)
+    g_string_free(self->original_config, TRUE);
+
   g_free(self);
 }
 
@@ -501,23 +627,23 @@ cfg_persist_config_add(GlobalConfig *cfg, const gchar *name, gpointer value, GDe
                        gboolean force)
 {
   PersistConfigEntry *p;
-  
+
   if (cfg->persist && value)
     {
       if (g_hash_table_lookup(cfg->persist->keys, name))
         {
           if (!force)
             {
-              msg_error("Internal error, duplicate configuration elements refer to the same persistent config", 
+              msg_error("Internal error, duplicate configuration elements refer to the same persistent config",
                         evt_tag_str("name", name));
               if (destroy)
                 destroy(value);
               return;
             }
         }
-  
+
       p = g_new0(PersistConfigEntry, 1);
-  
+
       p->value = value;
       p->destroy = destroy;
       g_hash_table_insert(cfg->persist->keys, g_strdup(name), p);
@@ -564,7 +690,17 @@ cfg_get_parsed_version(const GlobalConfig *cfg)
   return cfg->parsed_version;
 }
 
-const gchar*
+void register_source_mangle_callback(GlobalConfig *src,mangle_callback cb)
+{
+  src->source_mangle_callback_list = g_list_append(src->source_mangle_callback_list,cb);
+}
+
+void uregister_source_mangle_callback(GlobalConfig *src,mangle_callback cb)
+{
+  src->source_mangle_callback_list = g_list_remove(src->source_mangle_callback_list,cb);
+}
+
+const gchar *
 cfg_get_filename(const GlobalConfig *cfg)
 {
   return cfg->filename;

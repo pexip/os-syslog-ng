@@ -20,7 +20,7 @@
  * COPYING for details.
  *
  */
-  
+
 #ifndef RADIX_H_INCLUDED
 #define RADIX_H_INCLUDED
 
@@ -73,12 +73,12 @@ typedef struct _RParserNode
   /* internal state of the parser node */
   gpointer state;
 
-  guint8 first;
-  guint8 last;
+  gchar first;
+  gchar last;
   guint8 type;
   NVHandle handle;
 
-  gboolean (*parse)(guint8 *str, gint *len, const gchar *param, gpointer state, RParserMatch *match);
+  gboolean (*parse)(gchar *str, gint *len, const gchar *param, gpointer state, RParserMatch *match);
   void (*free_state)(gpointer state);
 } RParserNode;
 
@@ -88,7 +88,7 @@ typedef struct _RNode RNode;
 
 struct _RNode
 {
-  guint8 *key;
+  gchar *key;
   gint keylen;
   RParserNode *parser;
   gpointer value;
@@ -108,50 +108,50 @@ typedef struct _RDebugInfo
   gint match_len;
 } RDebugInfo;
 
-static inline gchar *
+static inline const gchar *
 r_parser_type_name(guint8 type)
 {
   switch (type)
     {
-      case RPT_STRING:
-        return "STRING";
-      case RPT_QSTRING:
-        return "QSTRING";
-      case RPT_ESTRING:
-        return "ESTRING";
-      case RPT_IPV4:
-        return "IPv4";
-      case RPT_NUMBER:
-        return "NUMBER";
-      case RPT_ANYSTRING:
-        return "ANYSTRING";
-      case RPT_IPV6:
-        return "IPv6";
-      case RPT_IP:
-        return "IP";
-      case RPT_FLOAT:
-        return "FLOAT";
-      case RPT_SET:
-        return "SET";
-      case RPT_MACADDR:
-        return "MACADDR";
-      case RPT_EMAIL:
-        return "EMAIL";
-      case RPT_HOSTNAME:
-        return "HOSTNAME";
-      case RPT_LLADDR:
-        return "LLADDR";
-      default:
-        return "UNKNOWN";
+    case RPT_STRING:
+      return "STRING";
+    case RPT_QSTRING:
+      return "QSTRING";
+    case RPT_ESTRING:
+      return "ESTRING";
+    case RPT_IPV4:
+      return "IPv4";
+    case RPT_NUMBER:
+      return "NUMBER";
+    case RPT_ANYSTRING:
+      return "ANYSTRING";
+    case RPT_IPV6:
+      return "IPv6";
+    case RPT_IP:
+      return "IP";
+    case RPT_FLOAT:
+      return "FLOAT";
+    case RPT_SET:
+      return "SET";
+    case RPT_MACADDR:
+      return "MACADDR";
+    case RPT_EMAIL:
+      return "EMAIL";
+    case RPT_HOSTNAME:
+      return "HOSTNAME";
+    case RPT_LLADDR:
+      return "LLADDR";
+    default:
+      return "UNKNOWN";
     }
 }
 
-RNode *r_new_node(guint8 *key, gpointer value);
+RNode *r_new_node(const gchar *key, gpointer value);
 void r_free_node(RNode *node, void (*free_fn)(gpointer data));
-void r_insert_node(RNode *root, guint8 *key, gpointer value, RNodeGetValueFunc value_func);
-RNode *r_find_node(RNode *root, guint8 *key, gint keylen, GArray *matches);
-RNode *r_find_node_dbg(RNode *root, guint8 *key, gint keylen, GArray *matches, GArray *dbg_list);
-gchar **r_find_all_applicable_nodes(RNode *root, guint8 *key, gint keylen, RNodeGetValueFunc value_func);
+void r_insert_node(RNode *root, gchar *key, gpointer value, RNodeGetValueFunc value_func);
+RNode *r_find_node(RNode *root, gchar *key, gint keylen, GArray *matches);
+RNode *r_find_node_dbg(RNode *root, gchar *key, gint keylen, GArray *matches, GArray *dbg_list);
+gchar **r_find_all_applicable_nodes(RNode *root, gchar *key, gint keylen, RNodeGetValueFunc value_func);
 
 #endif
 

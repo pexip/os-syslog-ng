@@ -27,6 +27,7 @@
 #include "syslog-ng.h"
 #include "diskq-options.h"
 
+#define LOG_PATH_OPTIONS_FOR_BACKLOG GINT_TO_POINTER(0x80000000)
 #define QDISK_RESERVED_SPACE 4096
 #define LOG_PATH_OPTIONS_TO_POINTER(lpo) GUINT_TO_POINTER(0x80000000 | (lpo)->ack_needed)
 
@@ -36,15 +37,24 @@
  */
 #define POINTER_TO_LOG_PATH_OPTIONS(ptr, lpo) (lpo)->ack_needed = (GPOINTER_TO_INT(ptr) & ~0x80000000)
 
+typedef struct
+{
+  gint64 ofs;
+  gint32 len;
+  gint32 count;
+}
+QDiskQueuePosition;
+
 typedef struct _QDisk QDisk;
 
-QDisk *qdisk_new();
+QDisk *qdisk_new(void);
 
 gboolean qdisk_is_space_avail(QDisk *self, gint at_least);
+gint64 qdisk_get_empty_space(QDisk *self);
 gboolean qdisk_push_tail(QDisk *self, GString *record);
 gboolean qdisk_pop_head(QDisk *self, GString *record);
 gboolean qdisk_start(QDisk *self, const gchar *filename, GQueue *qout, GQueue *qbacklog, GQueue *qoverflow);
-void qdisk_init(QDisk *self, DiskQueueOptions *options);
+void qdisk_init(QDisk *self, DiskQueueOptions *options, const gchar *file_id);
 void qdisk_deinit(QDisk *self);
 void qdisk_reset_file_if_possible(QDisk *self);
 gboolean qdisk_initialized(QDisk *self);
@@ -52,6 +62,7 @@ void qdisk_free(QDisk *self);
 
 gboolean qdisk_save_state(QDisk *self, GQueue *qout, GQueue *qbacklog, GQueue *qoverflow);
 
+DiskQueueOptions *qdisk_get_options(QDisk *self);
 gint64 qdisk_get_length(QDisk *self);
 void qdisk_set_length(QDisk *self, gint64 new_value);
 gint64 qdisk_get_size(QDisk *self);

@@ -66,7 +66,7 @@ log_transport_dgram_socket_write_method(LogTransport *s, const gpointer buf, gsi
 
   /* NOTE: FreeBSD returns ENOBUFS on send() failure instead of indicating
    * this conditions via poll().  The return of ENOBUFS actually is a send
-   * error and is calulated in IP statistics, so the best is to handle it as
+   * error and is calculated in IP statistics, so the best is to handle it as
    * a success.  The only alternative would be to return EAGAIN, which could
    * cause syslog-ng to spin as long as buffer space is unavailable.  Since
    * I'm not sure how much time that would take and I think spinning the CPU
@@ -90,7 +90,7 @@ LogTransport *
 log_transport_dgram_socket_new(gint fd)
 {
   LogTransportSocket *self = g_new0(LogTransportSocket, 1);
-  
+
   log_transport_dgram_socket_init_instance(self, fd);
   return &self->super;
 }
@@ -126,7 +126,8 @@ log_transport_stream_socket_write_method(LogTransport *s, const gpointer buf, gs
 static void
 log_transport_stream_socket_free_method(LogTransport *s)
 {
-  shutdown(s->fd, SHUT_RDWR);
+  if (s->fd != -1)
+    shutdown(s->fd, SHUT_RDWR);
   log_transport_free_method(s);
 }
 

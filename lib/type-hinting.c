@@ -32,7 +32,7 @@
 #include <stdlib.h>
 
 GQuark
-type_hinting_error_quark()
+type_hinting_error_quark(void)
 {
   return g_quark_from_static_string("type-hinting-error-quark");
 }
@@ -145,9 +145,9 @@ type_cast_to_double(const gchar *value, gdouble *out, GError **error)
 
   errno = 0;
   *out = strtod(value, &endptr);
-  if (errno == ERANGE && (*out == HUGE_VAL || *out == -HUGE_VAL))
+  if (errno == ERANGE && (*out >= HUGE_VAL || *out <= -HUGE_VAL))
     success = FALSE;
-  if (*out == 0 && endptr == value)
+  if (endptr == value)
     success = FALSE;
   if (endptr[0] != '\0')
     success = FALSE;

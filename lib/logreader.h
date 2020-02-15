@@ -21,7 +21,7 @@
  * COPYING for details.
  *
  */
-  
+
 #ifndef LOGREADER_H_INCLUDED
 #define LOGREADER_H_INCLUDED
 
@@ -33,9 +33,6 @@
 /* flags */
 #define LR_KERNEL          0x0002
 #define LR_EMPTY_LINES     0x0004
-#define LR_IGNORE_TIMEOUT  0x0008
-#define LR_SYSLOG_PROTOCOL 0x0010
-#define LR_PREEMPT         0x0020
 #define LR_THREADED        0x0040
 
 /* options */
@@ -54,18 +51,19 @@ typedef struct _LogReaderOptions
 
 typedef struct _LogReader LogReader;
 
-void log_reader_set_options(LogReader *s, LogPipe *control, LogReaderOptions *options, gint stats_level, gint stats_source, const gchar *stats_id, const gchar *stats_instance);
+void log_reader_set_options(LogReader *s, LogPipe *control, LogReaderOptions *options, const gchar *stats_id,
+                            const gchar *stats_instance);
 void log_reader_set_follow_filename(LogReader *self, const gchar *follow_filename);
 void log_reader_set_peer_addr(LogReader *s, GSockAddr *peer_addr);
 void log_reader_set_immediate_check(LogReader *s);
 void log_reader_reopen(LogReader *s, LogProtoServer *proto, PollEvents *poll_events);
+void log_reader_close_proto(LogReader *s);
 LogReader *log_reader_new(GlobalConfig *cfg);
 
 void log_reader_options_defaults(LogReaderOptions *options);
 void log_reader_options_init(LogReaderOptions *options, GlobalConfig *cfg, const gchar *group_name);
 void log_reader_options_destroy(LogReaderOptions *options);
-gint log_reader_options_lookup_flag(const gchar *flag);
 void log_reader_options_set_tags(LogReaderOptions *options, GList *tags);
-gboolean log_reader_options_process_flag(LogReaderOptions *options, gchar *flag);
+gboolean log_reader_options_process_flag(LogReaderOptions *options, const gchar *flag);
 
 #endif

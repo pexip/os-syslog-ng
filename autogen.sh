@@ -25,8 +25,23 @@
 # This script is needed to setup build environment from checked out
 # source tree.
 #
-SUBMODULES="lib/ivykis modules/afmongodb/mongo-c-driver/src/libbson modules/afmongodb/mongo-c-driver modules/afamqp/rabbitmq-c lib/jsonc"
+SUBMODULES="lib/ivykis lib/jsonc"
 GIT=`which git`
+
+include_automake_from_dir_if_exists()
+{
+  local dir=$1
+  if [ -f "$1/Makefile.am" ];
+  then
+    grep "include $dir/Makefile.am" Makefile.am
+    if [ "$?" -eq "1" ];
+    then
+      last_include=$(grep ^include Makefile.am|grep Makefile.am|tail -n 1)
+      sed -i s@"$last_include"@"$last_include\ninclude $dir/Makefile.am"@g Makefile.am
+    fi
+  fi
+}
+
 
 autogen_submodules()
 {
@@ -41,11 +56,6 @@ autogen_submodules()
 
 	if [ -n "$GIT" ] && [ -f .gitmodules ] && [ -d .git ] && [ $submod_initialized = 0 ]; then
 		# only clone submodules if none of them present
-		git submodule update --init
-		sed -e "s#git://#https://#" \
-			< modules/afamqp/rabbitmq-c/.gitmodules \
-			> modules/afamqp/rabbitmq-c/.gitmodules.new && \
-			mv modules/afamqp/rabbitmq-c/.gitmodules.new modules/afamqp/rabbitmq-c/.gitmodules
 		git submodule update --init --recursive
 	fi
 
@@ -53,10 +63,7 @@ autogen_submodules()
 		echo "Running autogen in '$submod'..."
 		cd "$submod"
 		if [ -x autogen.sh ]; then
-			# NOCONFIGURE needed by mongo-c-driver
-			export NOCONFIGURE=1
 			./autogen.sh
-			unset NOCONFIGURE
 		elif [ -f configure.in ] || [ -f configure.ac ]; then
 			autoreconf -i
 		else
@@ -65,15 +72,13 @@ autogen_submodules()
 		fi
 
 		CONFIGURE_OPTS="--disable-shared --enable-static --with-pic"
-		# kludge needed by make distcheck in mongo-c-driver
-		CONFIGURE_OPTS="$CONFIGURE_OPTS --enable-man-pages"
 
 		sed -e "s/@__CONFIGURE_OPTS__@/${CONFIGURE_OPTS}/g" ${origdir}/sub-configure.sh >configure.gnu
 		cd "$origdir"
 	done
 }
 
-if [ -z "$skip_submodules" ] || [ "$skip_modules" = 0 ]; then
+if [ -z "$skip_submodules" ]; then
 	autogen_submodules
 fi
 
@@ -86,6 +91,9 @@ esac
 $LIBTOOLIZE --force --copy
 aclocal -I m4 --install
 sed -i -e 's/PKG_PROG_PKG_CONFIG(\[0\.16\])/PKG_PROG_PKG_CONFIG([0.14])/g' aclocal.m4
+
+include_automake_from_dir_if_exists debian
+include_automake_from_dir_if_exists tgz2build
 
 autoheader
 automake --foreign --add-missing --copy

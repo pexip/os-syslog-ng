@@ -31,44 +31,138 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.log4j.Level;
+import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.log4j.Logger;
 
 import java.io.IOException;
 import java.net.URI;
-import java.net.URISyntaxException;
 import java.nio.charset.Charset;
-import java.util.Locale;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.Map.Entry;
 import java.util.UUID;
 
-public class HdfsDestination extends TextLogDestination {
+import java.util.Timer;
+import java.util.TimerTask;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
+import static java.lang.Math.abs;
+
+public class HdfsDestination extends StructuredLogDestination {
     private static final String LOG_TAG = "HDFS:";
+    private static final String HADOOP_SECURITY_AUTH_KEY = "hadoop.security.authentication";
+    private static final String DFS_SUPPORT_APPEND_KEY = "dfs.support.append";
 
-    HdfsOptions options;
-    Logger logger;
-
+    private HdfsOptions options;
+    private Logger logger;
     private FileSystem hdfs;
-    private FSDataOutputStream fsDataOutputStream;
-
-    private Path currentFilePath;
-
     private boolean isOpened;
     private int maxFileNameLength = 255;
+    private boolean appendEnabled;
+    private String archiveDir;
+    private HashMap<String, HdfsFile> openedFiles;
+    private Timer timeReap;
+    private Lock lock;
+
+    class TimeReapTask extends TimerTask {
+        private boolean closeFile(HdfsFile hdfsfile) {
+           logger.info("Closing file " + hdfsfile.getPath() + "; reason=reaping");
+
+           try {
+               hdfsfile.flush();
+               hdfsfile.close();
+           } catch (IOException e) {
+               printStackTrace(e);
+               return false;
+           }
+
+           if (archiveDir != null) {
+               archiveFile(hdfsfile);
+           }
+
+           return true;
+        }
+
+        private void closeExpiredFiles() {
+           for (Iterator<Map.Entry<String, HdfsFile>> it = openedFiles.entrySet().iterator(); it.hasNext();) {
+               HdfsFile file = it.next().getValue();
+               long current = file.timeSinceLastWrite();
+
+               if (current >= options.getTimeReap()) {
+                  closeFile(file);
+                  it.remove();
+               }
+           }
+        }
+
+        private long calculateNextWakeUp() {
+           if (openedFiles.isEmpty())
+              return 0;
+
+           long nextTimerExpires = -1;
+           for (Map.Entry<String, HdfsFile> entry : openedFiles.entrySet()) {
+               logger.debug("key: " + entry.getKey());
+               long current = entry.getValue().timeSinceLastWrite();
+
+               if (current > nextTimerExpires) {
+                  nextTimerExpires = current;
+               }
+           }
+
+           if (nextTimerExpires <= 0)
+              return 0;
+
+           nextTimerExpires = Math.abs(options.getTimeReap() - nextTimerExpires);
+           logger.trace("Next schedule in " + nextTimerExpires);
+
+           return nextTimerExpires;
+        }
+
+        @Override
+        public void run() {
+           logger.debug("time-reap run");
+           lock.lock();
+           try {
+               closeExpiredFiles();
+
+               long nextTimerExpires = calculateNextWakeUp();
+
+               if (nextTimerExpires <= 0) {
+                  timeReap.cancel();
+                  timeReap = null;
+                  return;
+               }
+
+               timeReap.schedule(new TimeReapTask(), nextTimerExpires);
+           } finally {
+             lock.unlock();
+           }
+        }
+    }
 
     public HdfsDestination(long handle) {
         super(handle);
         logger = Logger.getRootLogger();
         SyslogNgInternalLogger.register(logger);
         options = new HdfsOptions(this);
+        lock = new ReentrantLock();
     }
 
     @Override
     public boolean init() {
         try {
-          options.init();
-        } catch(InvalidOptionException e) {
-          logger.error(e.getMessage());
-          return false;
+            options.init();
+        } catch (InvalidOptionException e) {
+            logger.error(e.getMessage());
+            return false;
+        }
+        appendEnabled = options.getAppendEnabled();
+        archiveDir = options.getArchiveDir();
+        if(appendEnabled && archiveDir != null) {
+            logger.warn("Archiving is not allowed when append-enabled() is configured. "
+                        + "Archiving disabled.");
+            archiveDir = null;
         }
         return true;
     }
@@ -81,10 +175,18 @@ public class HdfsDestination extends TextLogDestination {
     @Override
     public boolean open() {
         logger.debug("Opening hdfs");
+        lock.lock();
+        openedFiles = new HashMap<String, HdfsFile>();
         isOpened = false;
         try {
             Configuration configuration = new Configuration();
             loadConfigResources(configuration);
+            if (isKerberosAuthEnabled()) {
+                setKerberosAuth(configuration);
+            }
+            if (appendEnabled) {
+                enableDfsSupportAppend(configuration);
+            }
 
             hdfs = FileSystem.get(new URI(options.getUri()), configuration);
             hdfs.getStatus(); // Just to be sure we are really connected to hdfs
@@ -92,6 +194,8 @@ public class HdfsDestination extends TextLogDestination {
         } catch (Exception e) {
             printStackTrace(e);
             closeAll(false);
+        } finally {
+          lock.unlock();
         }
         return isOpened;
     }
@@ -99,7 +203,7 @@ public class HdfsDestination extends TextLogDestination {
     private void loadConfigResources(Configuration configuration) {
         String[] resources = options.getResouces();
         if (resources == null) {
-          return;
+            return;
         }
         for (int i = 0; i < resources.length; i++) {
             String resource = resources[i];
@@ -108,25 +212,99 @@ public class HdfsDestination extends TextLogDestination {
         }
     }
 
-    @Override
-    public boolean send(String message) {
-        isOpened = false;
+    private boolean isKerberosAuthEnabled() {
+        return options.getKerberosPrincipal() != null && options.getKerberosKeytabFile() != null;
+    }
 
-        if (!ensureDataOutputStream()) {
+    private void setKerberosAuth(Configuration configuration) throws IOException {
+        configuration.set(HADOOP_SECURITY_AUTH_KEY, "kerberos");
+        UserGroupInformation.setConfiguration(configuration);
+        UserGroupInformation.loginUserFromKeytab(options.getKerberosPrincipal(), options.getKerberosKeytabFile());
+    }
+
+
+    protected void updateFilesTimer(HdfsFile hdfsfile) {
+        if (options.getTimeReap() == 0)
+           return;
+
+        if (timeReap != null)
+           return;
+
+        timeReap = new Timer();
+        timeReap.schedule( new TimeReapTask(), options.getTimeReap());
+    }
+
+    @Override
+    public boolean send(LogMessage logMessage) {
+        isOpened = false;
+        String resolvedFileName = options.getFileNameTemplate().getResolvedString(logMessage);
+        lock.lock();
+        HdfsFile hdfsfile = getHdfsFile(resolvedFileName);
+        if (hdfsfile == null) {
+            // Unable to open file
+            closeAll(true);
             return false;
         }
 
         try {
-            logger.debug("Outgoing message: " + message);
-            fsDataOutputStream.write(message.getBytes(Charset.forName("UTF-8")));
+            String formattedMessage = options.getTemplate().getResolvedString(logMessage);
+
+            logger.debug("Outgoing message: " + formattedMessage);
+
+            byte[] rawMessage = formattedMessage.getBytes(Charset.forName("UTF-8"));
+
+            hdfsfile.write(rawMessage);
+
+            updateFilesTimer(hdfsfile);
         } catch (IOException e) {
             printStackTrace(e);
             closeAll(false);
             return false;
+        } finally {
+          lock.unlock();
         }
+
 
         isOpened = true;
         return true;
+    }
+
+    private HdfsFile getHdfsFile(String resolvedFileName) {
+        HdfsFile hdfsFile = openedFiles.get(resolvedFileName);
+        if (hdfsFile == null || !hdfsFile.isOpen()) {
+            hdfsFile = createHdfsFile(resolvedFileName);
+            if (hdfsFile != null)
+                openedFiles.put(resolvedFileName, hdfsFile);
+        }
+        return hdfsFile;
+    }
+
+    private HdfsFile createHdfsFile(String resolvedFileName) {
+        HdfsFile hdfsFile = null;
+
+        Path filePath = getFilePath(resolvedFileName);
+        FSDataOutputStream fsDataOutputStream = createFsDataOutputStream(hdfs, filePath);
+
+        if (fsDataOutputStream != null)
+            hdfsFile = new HdfsFile(filePath, fsDataOutputStream);
+
+        return hdfsFile;
+    }
+
+    private Path getFilePath(String resolvedFileName) {
+        if (!appendEnabled) {
+            // when append is not enabled, we create a unique filename for every file
+            resolvedFileName = String.format("%s.%s", resolvedFileName, UUID.randomUUID());
+        }
+        Path filePath = new Path(String.format("%s/%s", options.getUri(), resolvedFileName));
+
+        if (filePath.getName().length() > options.getMaxFilenameLength()) {
+            String fileName = truncateFileName(filePath.getName(), options.getMaxFilenameLength());
+            logger.debug(String.format("Maximum file name length (%s) exceeded, truncated to %s", maxFileNameLength,
+                    fileName));
+            filePath = new Path(filePath.getParent(), fileName);
+        }
+        return filePath;
     }
 
     private String truncateFileName(String fileName, int maxLength) {
@@ -136,119 +314,125 @@ public class HdfsDestination extends TextLogDestination {
         return fileName;
     }
 
-    private boolean ensureDataOutputStream() {
-        if (fsDataOutputStream == null) {
-            // file not yet opened
-            String currentFile = String.format("%s.%s", options.getFile(), UUID.randomUUID());
-            currentFilePath = new Path(String.format("%s/%s", options.getUri(), currentFile));
-
-            if (currentFilePath.getName().length() > options.getMaxFilenameLength()) {
-                String fileName = truncateFileName(currentFilePath.getName(), options.getMaxFilenameLength());
-                logger.debug(String.format("Maximum file name length (%s) exceeded, truncated to %s", maxFileNameLength, fileName));
-
-                currentFilePath = new Path(currentFilePath.getParent(), fileName);
-            }
-
-            fsDataOutputStream = getFsDataOutputStream(hdfs, currentFilePath);
-            if (fsDataOutputStream == null) {
-                closeAll(false);
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private FSDataOutputStream getFsDataOutputStream(FileSystem hdfs, Path file) {
+    private FSDataOutputStream createFsDataOutputStream(FileSystem hdfs, Path file) {
         FSDataOutputStream fsDataOutputStream = null;
         try {
-            fsDataOutputStream = createFile(file);
+            hdfs.mkdirs(file.getParent());
+            if (appendEnabled && hdfs.exists(file)) {
+                logger.debug(String.format("Appending file %s", file.toString()));
+                fsDataOutputStream = hdfs.append(file);
+            } else {
+                logger.debug(String.format("Creating file %s", file.toString()));
+                fsDataOutputStream = hdfs.create(file);
+            }
         } catch (IOException e) {
             printStackTrace(e);
         }
         return fsDataOutputStream;
     }
 
-    private FSDataOutputStream createFile(Path file) throws IOException {
-        logger.debug(String.format("Creating file %s", file.toString()));
-        hdfs.mkdirs(file.getParent());
-        FSDataOutputStream fsDataOutputStream = hdfs.create(file);
-        return fsDataOutputStream;
-    }
-
-    @SuppressWarnings("unused")
-    private boolean isDfsSupportAppendEnabled(FileSystem hdfs) {
-        // This is for future usage when we enable append
-        return Boolean.valueOf(hdfs.getConf().get("dfs.support.append"));
+    private void enableDfsSupportAppend(Configuration configuration) {
+        configuration.setBoolean(DFS_SUPPORT_APPEND_KEY, true);
     }
 
     @Override
     public void onMessageQueueEmpty() {
-        if (fsDataOutputStream != null) {
+        /*
+         * Trying to flush however the effect is questionable... (It is not guaranteed
+         * that data has been flushed to persistent store on the datanode)
+         */
+
+        logger.debug("Flushing hdfs");
+        lock.lock();
+        try {
+        for (Map.Entry<String, HdfsFile> entry : openedFiles.entrySet()) {
+            HdfsFile hdfsfile = entry.getValue();
             try {
-                // Trying to flush however the effect is
-                // questionable... (It is not guaranteed that data has been
-                // flushed to persistent store on the datanode)
-                logger.debug("Flushing hdfs");
-                fsDataOutputStream.hflush();
-                fsDataOutputStream.hsync();
+                hdfsfile.flush();
             } catch (IOException e) {
-                logger.debug(String.format("Flush failed, reason: %s", e.getMessage()));
+                logger.debug(String.format("Flush failed on file %s, reason: %s", entry.getKey(), e.getMessage()));
             }
+        }
+        } finally {
+          lock.unlock();
         }
     }
 
     @Override
     public void close() {
         logger.debug("Closing hdfs");
-        closeAll(options.getArchiveDir() != null);
+
+        lock.lock();
+        try {
+        closeAll(true);
+        } finally {
+          lock.unlock();
+        }
         isOpened = false;
     }
 
     private void closeAll(boolean isArchiving) {
-        closeDataOutputStream();
+        if (timeReap != null) {
+            timeReap.cancel();
+            timeReap = null;
+        }
+
+        closeAllHdfsFiles();
 
         if (isArchiving) {
-            archiveFile();
+            archiveFiles();
         }
 
         closeHdfs();
         isOpened = false;
     }
 
-    private void closeDataOutputStream() {
-        if (fsDataOutputStream != null) {
+    private void closeAllHdfsFiles() {
+        for (Map.Entry<String, HdfsFile> entry : openedFiles.entrySet()) {
+            HdfsFile hdfsfile = entry.getValue();
             try {
-                fsDataOutputStream.close();
+                logger.debug(String.format("Closing file: %s", entry.getKey()));
+                hdfsfile.flush();
+                hdfsfile.close();
             } catch (IOException e) {
-                fsDataOutputStream = null;
                 printStackTrace(e);
             }
         }
     }
 
     private void closeHdfs() {
-        if (hdfs != null) {
-            try {
-                hdfs.close();
-            } catch (IOException e) {
-                hdfs = null;
-                printStackTrace(e);
-            }
+        if (hdfs == null)
+           return;
+
+        try {
+            hdfs.close();
+        } catch (IOException e) {
+            printStackTrace(e);
+        } finally {
+            hdfs = null;
         }
     }
 
-    private void archiveFile() {
-        if (options.getArchiveDir() != null && currentFilePath != null) {
-            logger.debug(String.format("Trying to archive %s to %s", currentFilePath.getName(), options.getArchiveDir()));
-            Path archiveDirPath = new Path(String.format("%s/%s", options.getUri(), options.getArchiveDir()));
-            try {
-                hdfs.mkdirs(archiveDirPath);
-                hdfs.rename(currentFilePath, archiveDirPath);
-            } catch (IOException e) {
-                logger.debug(String.format("Unable to archive, reason: %s", e.getMessage()));
-            }
-        }
+    private void archiveFile(HdfsFile hdfsfile) {
+        Path filePath = hdfsfile.getPath();
+        logger.debug(String.format("Trying to archive %s to %s", filePath.getName(), archiveDir));
+        Path archiveDirPath = new Path(String.format("%s/%s", options.getUri(), archiveDir));
 
+        try {
+           hdfs.mkdirs(archiveDirPath);
+           hdfs.rename(filePath, archiveDirPath);
+        } catch (IOException e) {
+            logger.debug(String.format("Unable to archive, reason: %s", e.getMessage()));
+        }
+    }
+
+    private void archiveFiles() {
+        if (archiveDir == null)
+           return;
+
+        for (Map.Entry<String, HdfsFile> entry : openedFiles.entrySet()) {
+            archiveFile( entry.getValue() );
+        }
     }
 
     private void printStackTrace(Throwable e) {
@@ -258,7 +442,7 @@ public class HdfsDestination extends TextLogDestination {
 
     @Override
     public String getNameByUniqOptions() {
-        return String.format("hdfs,%s,%s", options.getUri(), options.getFile());
+        return String.format("hdfs,%s,%s", options.getUri(), options.getFileNameTemplate().getValue());
     }
 
     @Override
@@ -266,4 +450,5 @@ public class HdfsDestination extends TextLogDestination {
         logger.debug("Deinitialize hdfs destination");
         options.deinit();
     }
+
 }

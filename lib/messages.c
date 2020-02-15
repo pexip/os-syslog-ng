@@ -21,7 +21,7 @@
  * COPYING for details.
  *
  */
-  
+
 #include "messages.h"
 #include "logmsg/logmsg.h"
 
@@ -40,7 +40,7 @@ enum
   RECURSE_STATE_OK = 0,
   /* processing an internal message currently, followup internal messages will be suppressed */
   RECURSE_STATE_WATCH = 1,
-  /* supress all internal messages */
+  /* suppress all internal messages */
   RECURSE_STATE_SUPPRESS = 2
 };
 
@@ -80,7 +80,7 @@ void
 msg_set_context(LogMessage *msg)
 {
   MsgContext *context = msg_get_context();
-  
+
   if (msg && (msg->flags & LF_INTERNAL))
     {
       if (msg->recursed)
@@ -98,18 +98,19 @@ static gboolean
 msg_limit_internal_message(const gchar *msg)
 {
   MsgContext *context;
-  
+
   if (!evt_context)
     return FALSE;
 
   context = msg_get_context();
-  
+
   if (context->recurse_state >= RECURSE_STATE_SUPPRESS)
     {
       if (!context->recurse_warning)
         {
           msg_event_send(
-            msg_event_create(EVT_PRI_WARNING, "internal() messages are looping back, preventing loop by suppressing all internal messages until the current message is processed",
+            msg_event_create(EVT_PRI_WARNING,
+                             "internal() messages are looping back, preventing loop by suppressing all internal messages until the current message is processed",
                              evt_tag_str("trigger-msg", context->recurse_trigger),
                              evt_tag_str("first-suppressed-msg", msg),
                              NULL));
@@ -158,7 +159,7 @@ msg_send_formatted_message(int prio, const char *msg)
   else if (msg_post_func)
     {
       LogMessage *m;
-      
+
       MsgContext *context = msg_get_context();
 
       if (context->recurse_state == RECURSE_STATE_OK)
@@ -196,12 +197,24 @@ msg_event_suppress_recursions_and_send(EVTREC *e)
   msg_event_send_with_suppression(e, msg_limit_internal_message);
 }
 
+void
+msg_event_print_event_to_stderr(EVTREC *e)
+{
+  gchar *msg;
+
+  msg = evt_format(e);
+  msg_send_formatted_message_to_stderr(msg);
+  free(msg);
+  msg_event_free(e);
+
+}
+
 EVTREC *
 msg_event_create(gint prio, const gchar *desc, EVTTAG *tag1, ...)
 {
   EVTREC *e;
   va_list va;
-  
+
   g_static_mutex_lock(&evtlog_lock);
   e = evt_rec_init(evt_context, prio, desc);
   if (tag1)
@@ -215,7 +228,7 @@ msg_event_create(gint prio, const gchar *desc, EVTTAG *tag1, ...)
   return e;
 }
 
-EVTREC*
+EVTREC *
 msg_event_create_from_desc(gint prio, const char *desc)
 {
   return msg_event_create(prio, desc, NULL);
@@ -233,14 +246,14 @@ void
 msg_log_func(const gchar *log_domain, GLogLevelFlags log_flags, const gchar *msg, gpointer user_data)
 {
   int pri = EVT_PRI_INFO;
-  
+
   if (log_flags & G_LOG_LEVEL_DEBUG)
     pri = EVT_PRI_DEBUG;
   else if (log_flags & G_LOG_LEVEL_WARNING)
     pri = EVT_PRI_WARNING;
   else if (log_flags & G_LOG_LEVEL_ERROR)
     pri = EVT_PRI_ERR;
-    
+
   pri |= EVT_FAC_SYSLOG;
   msg_send_formatted_message(pri, msg);
 }
@@ -260,6 +273,9 @@ msg_post_message(LogMessage *msg)
     log_msg_unref(msg);
 }
 
+static guint g_log_handler_id;
+static guint glib_handler_id;
+
 void
 msg_init(gboolean interactive)
 {
@@ -268,8 +284,8 @@ msg_init(gboolean interactive)
 
   if (!interactive)
     {
-      g_log_set_handler(G_LOG_DOMAIN, 0xff, msg_log_func, NULL);
-      g_log_set_handler("GLib", 0xff, msg_log_func, NULL);
+      g_log_handler_id = g_log_set_handler(G_LOG_DOMAIN, 0xff, msg_log_func, NULL);
+      glib_handler_id = g_log_set_handler("GLib", 0xff, msg_log_func, NULL);
     }
   else
     {
@@ -284,7 +300,19 @@ void
 msg_deinit(void)
 {
   evt_ctx_free(evt_context);
+  evt_context = NULL;
   log_stderr = TRUE;
+
+  if (g_log_handler_id)
+    {
+      g_log_remove_handler(G_LOG_DOMAIN, g_log_handler_id);
+      g_log_handler_id = 0;
+    }
+  if (glib_handler_id)
+    {
+      g_log_remove_handler("GLib", glib_handler_id);
+      glib_handler_id = 0;
+    }
 }
 
 static GOptionEntry msg_option_entries[] =
@@ -306,4 +334,3 @@ msg_add_option_group(GOptionContext *ctx)
   g_option_group_add_entries(group, msg_option_entries);
   g_option_context_add_group(ctx, group);
 }
-

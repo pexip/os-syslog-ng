@@ -19,6 +19,7 @@ include modules/cryptofuncs/Makefile.am
 include modules/dbparser/Makefile.am
 include modules/json/Makefile.am
 include modules/geoip/Makefile.am
+include modules/geoip2/Makefile.am
 include modules/afstomp/Makefile.am
 include modules/redis/Makefile.am
 include modules/pseudofile/Makefile.am
@@ -34,6 +35,16 @@ include modules/native/Makefile.am
 include modules/cef/Makefile.am
 include modules/diskq/Makefile.am
 include modules/add-contextual-data/Makefile.am
+include modules/getent/Makefile.am
+include modules/map-value-pairs/Makefile.am
+include modules/stardate/Makefile.am
+include modules/snmptrapd-parser/Makefile.am
+include modules/tagsparser/Makefile.am
+include modules/xml/Makefile.am
+include modules/appmodel/Makefile.am
+include modules/openbsd/Makefile.am
+include modules/hook-commands/Makefile.am
+include modules/examples/Makefile.am
 
 SYSLOG_NG_CORE_JAR=$(top_builddir)/modules/java/syslog-ng-core/libs/syslog-ng-core.jar
 
@@ -45,8 +56,9 @@ SYSLOG_NG_MODULES	=	\
 	mod-basicfuncs mod-cryptofuncs mod-geoip mod-afstomp \
 	mod-redis mod-pseudofile mod-graphite mod-riemann \
 	mod-python mod-java mod-java-modules mod-kvformat mod-date \
-	mod-native mod-cef mod-add-contextual-data mod-diskq
-
+	mod-native mod-cef mod-add-contextual-data mod-diskq mod-getent \
+	mod-map-value-pairs mod-snmptrapd-parser mod-tags-parser mod-xml \
+	mod-appmodel mod-openbsd
 
 modules modules/: ${SYSLOG_NG_MODULES}
 
@@ -60,6 +72,9 @@ modules_test_subdirs	=	\
 	modules_cryptofuncs modules_geoip modules_afstomp \
 	modules_graphite modules_riemann modules_python \
 	modules_systemd_journal modules_kvformat modules_date \
-	modules_cef modules_diskq modules-add-contextual-data
+	modules_cef modules_diskq modules-add-contextual-data modules_getent \
+	modules_map-value-pairs modules_tagsparser modules_xml modules_appmodel
+
+EXTRA_DIST += modules/CMakeLists.txt
 
 .PHONY: modules modules/

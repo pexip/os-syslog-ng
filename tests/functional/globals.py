@@ -33,6 +33,8 @@ def format_module_path_for_intree_modules():
     module_path = ''
     for (root, dirs, files) in os.walk(os.path.abspath(os.path.join(os.environ['top_builddir'], 'modules'))):
         module_path += ':'.join(map(lambda x: root + '/' + x + '/.libs', dirs))
+        module_path += ':'
+        module_path += ':'.join(map(lambda x: root + '/' + x, dirs))
         break
     return module_path
 
@@ -65,7 +67,7 @@ if is_premium_edition:
     wildcard_file_source_supported = True
 else:
     logstore_store_supported = False
-    wildcard_file_source_supported = False
+    wildcard_file_source_supported = True
 
 port_number = os.getpid() % 30000 + 33000
 ssl_port_number = port_number + 1
@@ -77,4 +79,3 @@ try:
     src_dir = os.environ["srcdir"]
 except KeyError:
     src_dir = current_dir
-

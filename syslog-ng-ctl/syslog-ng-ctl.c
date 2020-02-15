@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2013 Balabit
+ * Copyright (c) 2002-2017 Balabit
  * Copyright (c) 1998-2013 Balázs Scheidler
  *
  * This library is free software; you can redistribute it and/or
@@ -27,17 +27,35 @@
 #include "control-client.h"
 #include "cfg.h"
 #include "reloc.h"
+#include "secret-storage/secret-storage.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <locale.h>
+#include <termios.h>
+#include <unistd.h>
+#include <errno.h>
 
 #if SYSLOG_NG_HAVE_GETOPT_H
 #include <getopt.h>
 #endif
 
+typedef struct _CommandDescriptor
+{
+  const gchar *mode;
+  const GOptionEntry *options;
+  const gchar *description;
+  gint (*main)(gint argc, gchar *argv[], const gchar *mode, GOptionContext *ctx);
+  struct _CommandDescriptor *subcommands;
+} CommandDescriptor;
+
 static const gchar *control_name;
 static ControlClient *control_client;
+static gchar *credentials_key;
+static gchar *credentials_secret;
+static gchar **credentials_remaining;
+static void print_usage(const gchar *bin_name, CommandDescriptor *descriptors);
 
 static gboolean
 slng_send_cmd(const gchar *cmd)
@@ -64,20 +82,65 @@ slng_run_command(const gchar *command)
   return control_client_read_reply(control_client);
 }
 
-static gchar *verbose_set = NULL;
+static gboolean
+_is_response_empty(GString *response)
+{
+  return (response == NULL || g_str_equal(response->str, ""));
+}
+
+static void
+clear_and_free(GString *str)
+{
+  if (str)
+    {
+      memset(str->str, 0, str->len);
+      g_string_free(str, TRUE);
+    }
+}
 
 static gint
-slng_verbose(int argc, char *argv[], const gchar *mode)
+_dispatch_command(const gchar *cmd)
+{
+  gint retval = 0;
+  gchar *dispatchable_command = g_strdup_printf("%s\n", cmd);
+  GString *rsp = slng_run_command(dispatchable_command);
+
+  if (_is_response_empty(rsp))
+    retval = 1;
+  else
+    printf("%s\n", rsp->str);
+
+  clear_and_free(rsp);
+
+  secret_storage_wipe(dispatchable_command, strlen(dispatchable_command));
+  g_free(dispatchable_command);
+
+  return retval;
+}
+
+static gchar *verbose_set = NULL;
+
+static GOptionEntry verbose_options[] =
+{
+  {
+    "set", 's', 0, G_OPTION_ARG_STRING, &verbose_set,
+    "enable/disable messages", "<on|off|0|1>"
+  },
+  { NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL }
+};
+
+static gint
+slng_verbose(int argc, char *argv[], const gchar *mode, GOptionContext *ctx)
 {
   gint ret = 0;
   GString *rsp = NULL;
   gchar buff[256];
 
   if (!verbose_set)
-    snprintf(buff, 255, "LOG %s\n", mode);
+    g_snprintf(buff, 255, "LOG %s\n", mode);
   else
-    snprintf(buff, 255, "LOG %s %s\n", mode,
-        strncasecmp(verbose_set, "on", 2) == 0 || verbose_set[0] == '1' ? "ON" : "OFF");
+    g_snprintf(buff, 255, "LOG %s %s\n", mode,
+               strncasecmp(verbose_set, "on", 2) == 0 || verbose_set[0] == '1' ? "ON" : "OFF");
 
   g_strup(buff);
 
@@ -103,26 +166,117 @@ static GOptionEntry stats_options[] =
   { NULL,    0,   0, G_OPTION_ARG_NONE, NULL,                        NULL,             NULL }
 };
 
-static GOptionEntry verbose_options[] =
+static const gchar *
+_stats_command_builder(void)
 {
-  { "set", 's', 0, G_OPTION_ARG_STRING, &verbose_set,
-    "enable/disable messages", "<on|off|0|1>" },
-  { NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL }
+  return stats_options_reset_is_set ? "RESET_STATS" : "STATS";
+}
+
+static gint
+slng_stats(int argc, char *argv[], const gchar *mode, GOptionContext *ctx)
+{
+  return _dispatch_command(_stats_command_builder());
+}
+
+static gint
+slng_stop(int argc, char *argv[], const gchar *mode, GOptionContext *ctx)
+{
+  return _dispatch_command("STOP");
+}
+
+static gint
+slng_reload(int argc, char *argv[], const gchar *mode, GOptionContext *ctx)
+{
+  return _dispatch_command("RELOAD");
+}
+
+static gboolean config_options_preprocessed = FALSE;
+static gboolean config_options_verify = FALSE;
+
+static GOptionEntry config_options[] =
+{
+  { "preprocessed", 'p', 0, G_OPTION_ARG_NONE, &config_options_preprocessed, "preprocessed", NULL },
+  { "verify", 'v', 0, G_OPTION_ARG_NONE, &config_options_verify, "verify", NULL },
+  { NULL,           0,   0, G_OPTION_ARG_NONE, NULL,                         NULL,           NULL }
 };
 
 
-static const gchar *
-_stats_command_builder()
+static gint
+slng_config(int argc, char *argv[], const gchar *mode, GOptionContext *ctx)
 {
-  return stats_options_reset_is_set ? "RESET_STATS\n" : "STATS\n";
+  GString *cmd = g_string_new("CONFIG ");
+
+  if (config_options_verify)
+    g_string_append(cmd, "VERIFY ");
+  else
+    {
+      g_string_append(cmd, "GET ");
+
+      if(config_options_preprocessed)
+        g_string_append(cmd, "PREPROCESSED");
+      else
+        g_string_append(cmd, "ORIGINAL");
+    }
+
+  gint res = _dispatch_command(cmd->str);
+  g_string_free(cmd, TRUE);
+
+  return res;
 }
 
-static gint
-slng_stats(int argc, char *argv[], const gchar *mode)
-{
-  GString *rsp = slng_run_command(_stats_command_builder());
 
-  if (rsp == NULL)
+static gint
+slng_reopen(int argc, char *argv[], const gchar *mode, GOptionContext *ctx)
+{
+  return _dispatch_command("REOPEN");
+}
+
+static const gint QUERY_COMMAND = 0;
+static gboolean query_is_get_sum = FALSE;
+static gboolean query_reset = FALSE;
+static gchar **raw_query_params = NULL;
+
+static GOptionEntry query_options[] =
+{
+  { "sum", 0, 0, G_OPTION_ARG_NONE, &query_is_get_sum, "aggregate sum", NULL },
+  { "reset", 0, 0, G_OPTION_ARG_NONE, &query_reset, "reset counters after query", NULL },
+  { G_OPTION_REMAINING, 0, 0, G_OPTION_ARG_STRING_ARRAY, &raw_query_params, NULL, NULL },
+  { NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL, NULL }
+};
+
+enum
+{
+  QUERY_CMD_LIST,
+  QUERY_CMD_LIST_RESET,
+  QUERY_CMD_GET,
+  QUERY_CMD_GET_RESET,
+  QUERY_CMD_GET_SUM,
+  QUERY_CMD_GET_SUM_RESET
+};
+
+static const gchar *QUERY_COMMANDS[] = {"LIST", "LIST_RESET", "GET", "GET_RESET", "GET_SUM", "GET_SUM_RESET"};
+
+
+static gboolean license_json = FALSE;
+
+static GOptionEntry license_options[] =
+{
+  { "json", 'J', 0, G_OPTION_ARG_NONE, &license_json, "enable json output", NULL },
+  { NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL }
+};
+
+static gint
+slng_license(int argc, char *argv[], const gchar *mode, GOptionContext *ctx)
+{
+  GString *rsp = NULL;
+  gchar buff[256];
+
+  if (license_json)
+    g_snprintf(buff, 255, "LICENSE JSON\n");
+  else
+    g_snprintf(buff, 255, "LICENSE\n");
+
+  if (!(slng_send_cmd(buff) && ((rsp = control_client_read_reply(control_client)) != NULL)))
     return 1;
 
   printf("%s\n", rsp->str);
@@ -133,39 +287,253 @@ slng_stats(int argc, char *argv[], const gchar *mode)
 }
 
 static gint
-slng_stop(int argc, char *argv[], const gchar *mode)
+_get_query_list_cmd(void)
 {
-  GString *rsp = slng_run_command("STOP\n");
+  if (query_is_get_sum)
+    return -1;
 
-  if (rsp == NULL)
-    return 1;
+  if (query_reset)
+    return QUERY_CMD_LIST_RESET;
 
-  printf("%s\n", rsp->str);
-
-  g_string_free(rsp, TRUE);
-
-  return 0;
+  return QUERY_CMD_LIST;
 }
 
 static gint
-slng_reload(int argc, char *argv[], const gchar *mode)
+_get_query_get_cmd(void)
 {
-  GString *rsp = slng_run_command("RELOAD\n");
+  if (query_is_get_sum)
+    {
+      if (query_reset)
+        return QUERY_CMD_GET_SUM_RESET;
 
-  if (rsp == NULL)
+      return QUERY_CMD_GET_SUM;
+    }
+
+  if (query_reset)
+    return QUERY_CMD_GET_RESET;
+
+  return QUERY_CMD_GET;
+
+}
+
+static gint
+_get_query_cmd(gchar *cmd)
+{
+  if (g_str_equal(cmd, "list"))
+    return _get_query_list_cmd();
+
+  if (g_str_equal(cmd, "get"))
+    return _get_query_get_cmd();
+
+  return -1;
+}
+
+static gboolean
+_is_query_params_empty(void)
+{
+  return raw_query_params == NULL;
+}
+
+static void
+_shift_query_command_out_of_params(void)
+{
+  if (raw_query_params[QUERY_COMMAND] != NULL)
+    ++raw_query_params;
+}
+
+static gboolean
+_validate_get_params(gint query_cmd)
+{
+  if(query_cmd == QUERY_CMD_GET || query_cmd == QUERY_CMD_GET_SUM)
+    if (*raw_query_params == NULL)
+      {
+        fprintf(stderr, "error: need a path argument\n");
+        return TRUE;
+      }
+  return FALSE;
+}
+
+static gchar *
+_get_query_command_string(gint query_cmd)
+{
+  gchar *query_params_to_pass, *command_to_dispatch;
+  query_params_to_pass = g_strjoinv(" ", raw_query_params);
+  if (query_params_to_pass)
+    {
+      command_to_dispatch = g_strdup_printf("QUERY %s %s", QUERY_COMMANDS[query_cmd], query_params_to_pass);
+    }
+  else
+    {
+      command_to_dispatch = g_strdup_printf("QUERY %s", QUERY_COMMANDS[query_cmd]);
+    }
+  g_free(query_params_to_pass);
+
+  return command_to_dispatch;
+}
+
+static gchar *
+_get_dispatchable_query_command(void)
+{
+  gint query_cmd;
+
+  if (_is_query_params_empty())
+    return NULL;
+
+  query_cmd = _get_query_cmd(raw_query_params[QUERY_COMMAND]);
+  if (query_cmd < 0)
+    return NULL;
+
+  _shift_query_command_out_of_params();
+  if(_validate_get_params(query_cmd))
+    return NULL;
+
+  return _get_query_command_string(query_cmd);
+}
+
+static gint
+slng_query(int argc, char *argv[], const gchar *mode, GOptionContext *ctx)
+{
+  gint result;
+
+  gchar *cmd = _get_dispatchable_query_command();
+  if (cmd == NULL)
     return 1;
 
-  printf("%s\n", rsp->str);
+  result = _dispatch_command(cmd);
 
-  g_string_free(rsp, TRUE);
+  g_free(cmd);
 
-  return 0;
+  return result;
 }
 
 static GOptionEntry no_options[] =
 {
   { NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL }
 };
+
+static void
+set_console_echo(gboolean new_state)
+{
+  if (!isatty(STDIN_FILENO))
+    return;
+
+  struct termios t;
+
+  if (tcgetattr(STDIN_FILENO, &t))
+    {
+      fprintf(stderr, "syslog-ng-ctl: error while tcgetattr: %s\n", strerror(errno));
+      return;
+    }
+
+  if (new_state)
+    t.c_lflag |= ECHO;
+  else
+    t.c_lflag &= ~((tcflag_t) ECHO);
+
+  if (tcsetattr(STDIN_FILENO, TCSANOW, &t))
+    fprintf(stderr, "syslog-ng-ctl: error while tcsetattr: %s\n", strerror(errno));
+}
+
+static void
+read_password_from_stdin(gchar *buffer, gsize *length)
+{
+  printf("enter password:");
+  set_console_echo(FALSE);
+  if (-1 == getline(&buffer, length, stdin))
+    {
+      set_console_echo(TRUE);
+      fprintf(stderr, "error while reading password from terminal: %s", strerror(errno));
+      g_assert_not_reached();
+    }
+  set_console_echo(TRUE);
+  printf("\n");
+}
+
+static gboolean
+is_syslog_ng_running(void)
+{
+  return control_client_connect(control_client);
+}
+
+static gchar *
+consume_next_from_remaining(gchar **remaining, gint *available_index)
+{
+  if (!remaining)
+    return NULL;
+
+  return remaining[(*available_index)++];
+}
+
+static gint
+slng_passwd_add(int argc, char *argv[], const gchar *mode, GOptionContext *ctx)
+{
+  gchar *answer;
+  gint remaining_unused_index = 0;
+
+
+  if (!credentials_key)
+    credentials_key = consume_next_from_remaining(credentials_remaining, &remaining_unused_index);
+
+  if (!credentials_key)
+    {
+      gchar *usage = g_option_context_get_help(ctx, TRUE, NULL);
+      fprintf(stderr, "Error: missing arguments!\n%s\n", usage);
+      g_free(usage);
+      return 1;
+    }
+
+  if (!is_syslog_ng_running())
+    return 1;
+
+  if (!credentials_secret)
+    credentials_secret = consume_next_from_remaining(credentials_remaining, &remaining_unused_index);
+
+  gchar *secret_to_store;
+  if (credentials_secret)
+    {
+      secret_to_store = g_strdup(credentials_secret);
+      if (!secret_to_store)
+        g_assert_not_reached();
+    }
+  else
+    {
+      gsize buff_size = 256;
+      secret_to_store = g_malloc0(buff_size);
+      if (!secret_to_store)
+        g_assert_not_reached();
+
+      read_password_from_stdin(secret_to_store, &buff_size);
+    }
+
+  gint retval = asprintf(&answer, "PWD %s %s %s", "add", credentials_key, secret_to_store);
+  if (retval == -1)
+    g_assert_not_reached();
+
+  secret_storage_wipe(secret_to_store, strlen(secret_to_store));
+  g_free(secret_to_store);
+
+  if (credentials_secret)
+    secret_storage_wipe(credentials_secret, strlen(credentials_secret));
+
+  gint result = _dispatch_command(answer);
+
+  secret_storage_wipe(answer, strlen(answer));
+  g_free(answer);
+
+  return result;
+}
+
+static gint
+slng_passwd_status(int argc, char *argv[], const gchar *mode, GOptionContext *ctx)
+{
+  gchar *answer;
+
+  gint retval = asprintf(&answer, "PWD %s", "status");
+  if (retval == -1)
+    g_assert_not_reached();
+
+  return _dispatch_command(answer);
+}
 
 const gchar *
 get_mode(int *argc, char **argv[])
@@ -188,76 +556,129 @@ get_mode(int *argc, char **argv[])
 
 static GOptionEntry slng_options[] =
 {
-  { "control", 'c', 0, G_OPTION_ARG_STRING, &control_name,
-    "syslog-ng control socket", "<socket>" },
+  {
+    "control", 'c', 0, G_OPTION_ARG_STRING, &control_name,
+    "syslog-ng control socket", "<socket>"
+  },
   { NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL }
 };
 
-static struct
+static GOptionEntry credentials_options_add[] =
 {
-  const gchar *mode;
-  const GOptionEntry *options;
-  const gchar *description;
-  gint (*main)(gint argc, gchar *argv[], const gchar *mode);
-} modes[] =
+  { "id", 'i', 0, G_OPTION_ARG_STRING, &credentials_key, "ID of the credential", "<id>" },
+  { "secret", 's', 0, G_OPTION_ARG_STRING, &credentials_secret, "Secret part of the credential", "<secret>" },
+  { G_OPTION_REMAINING, 0, 0, G_OPTION_ARG_STRING_ARRAY, &credentials_remaining, NULL, NULL },
+  { NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL }
+};
+
+
+static CommandDescriptor credentials_commands[] =
 {
-  { "stats", stats_options, "Query/reset syslog-ng statistics", slng_stats },
-  { "verbose", verbose_options, "Enable/query verbose messages", slng_verbose },
-  { "debug", verbose_options, "Enable/query debug messages", slng_verbose },
-  { "trace", verbose_options, "Enable/query trace messages", slng_verbose },
-  { "stop", no_options, "Stop syslog-ng process", slng_stop },
-  { "reload", no_options, "Reload syslog-ng", slng_reload },
+  { "add", credentials_options_add, "Add credentials to credential store", slng_passwd_add },
+  { "status", no_options, "Query stored credential status", slng_passwd_status },
+  { NULL }
+};
+
+static CommandDescriptor modes[] =
+{
+  { "stats", stats_options, "Get syslog-ng statistics in CSV format", slng_stats, NULL },
+  { "verbose", verbose_options, "Enable/query verbose messages", slng_verbose, NULL },
+  { "debug", verbose_options, "Enable/query debug messages", slng_verbose, NULL },
+  { "trace", verbose_options, "Enable/query trace messages", slng_verbose, NULL },
+  { "stop", no_options, "Stop syslog-ng process", slng_stop, NULL },
+  { "reload", no_options, "Reload syslog-ng", slng_reload, NULL },
+  { "reopen", no_options, "Re-open of log destination files", slng_reopen, NULL },
+  { "query", query_options, "Query syslog-ng statistics. Possible commands: list, get, get --sum", slng_query, NULL },
+  { "show-license-info", license_options, "Show information about the license", slng_license, NULL },
+  { "credentials", no_options, "Credentials manager", NULL, credentials_commands },
+  { "config", config_options, "Print current config", slng_config, NULL },
   { NULL, NULL },
 };
 
-void
-usage(const gchar *bin_name)
+static void
+print_usage(const gchar *bin_name, CommandDescriptor *descriptors)
 {
   gint mode;
 
   fprintf(stderr, "Syntax: %s <command> [options]\nPossible commands are:\n", bin_name);
-  for (mode = 0; modes[mode].mode; mode++)
+  for (mode = 0; descriptors[mode].mode; mode++)
     {
-      fprintf(stderr, "    %-12s %s\n", modes[mode].mode, modes[mode].description);
+      fprintf(stderr, "    %-20s %s\n", descriptors[mode].mode, descriptors[mode].description);
     }
-  exit(1);
+}
+
+gboolean
+_is_help(gchar *cmd)
+{
+  return g_str_equal(cmd, "--help");
+}
+
+static CommandDescriptor *
+find_active_mode(CommandDescriptor descriptors[], gint *argc, char **argv, GString *cmdname_accumulator)
+{
+  const gchar *mode_string = get_mode(argc, &argv);
+  if (!mode_string)
+    {
+      print_usage(cmdname_accumulator->str, descriptors);
+      exit(1);
+    }
+
+  for (gint mode = 0; descriptors[mode].mode; mode++)
+    if (strcmp(descriptors[mode].mode, mode_string) == 0)
+      {
+        if (descriptors[mode].main)
+          return &descriptors[mode];
+
+        g_assert(descriptors[mode].subcommands);
+        g_string_append_printf(cmdname_accumulator, " %s", mode_string);
+        return find_active_mode(descriptors[mode].subcommands, argc, argv, cmdname_accumulator);
+      }
+
+  return NULL;
+}
+
+static GOptionContext *
+setup_help_context(const gchar *cmdname, CommandDescriptor *active_mode)
+{
+  if (!active_mode)
+    return NULL;
+
+  GOptionContext *ctx = g_option_context_new(cmdname);
+#if GLIB_CHECK_VERSION (2, 12, 0)
+  g_option_context_set_summary(ctx, active_mode->description);
+#endif
+  g_option_context_add_main_entries(ctx, active_mode->options, NULL);
+  g_option_context_add_main_entries(ctx, slng_options, NULL);
+
+  return ctx;
 }
 
 int
 main(int argc, char *argv[])
 {
-  const gchar *mode_string;
-  GOptionContext *ctx;
-  gint mode;
   GError *error = NULL;
   int result;
 
+  setlocale(LC_ALL, "");
+
   control_name = get_installation_path_for(PATH_CONTROL_SOCKET);
 
-  mode_string = get_mode(&argc, &argv);
-  if (!mode_string)
+  if (argc > 1 && _is_help(argv[1]))
     {
-      usage(argv[0]);
+      print_usage(argv[0], modes);
+      exit(0);
     }
 
-  ctx = NULL;
-  for (mode = 0; modes[mode].mode; mode++)
-    {
-      if (strcmp(modes[mode].mode, mode_string) == 0)
-        {
-          ctx = g_option_context_new(mode_string);
-          #if GLIB_CHECK_VERSION (2, 12, 0)
-          g_option_context_set_summary(ctx, modes[mode].description);
-          #endif
-          g_option_context_add_main_entries(ctx, modes[mode].options, NULL);
-          g_option_context_add_main_entries(ctx, slng_options, NULL);
-          break;
-        }
-    }
+  GString *cmdname_accumulator = g_string_new(argv[0]);
+  CommandDescriptor *active_mode = find_active_mode(modes, &argc, argv, cmdname_accumulator);
+  GOptionContext *ctx = setup_help_context(cmdname_accumulator->str, active_mode);
+  g_string_free(cmdname_accumulator, TRUE);
+
   if (!ctx)
     {
       fprintf(stderr, "Unknown command\n");
-      usage(argv[0]);
+      print_usage(argv[0], modes);
+      exit(1);
     }
 
   if (!g_option_context_parse(ctx, &argc, &argv, &error))
@@ -267,11 +688,10 @@ main(int argc, char *argv[])
       g_option_context_free(ctx);
       return 1;
     }
-  g_option_context_free(ctx);
 
   control_client = control_client_new(control_name);
-
-  result = modes[mode].main(argc, argv, modes[mode].mode);
+  result = active_mode->main(argc, argv, active_mode->mode, ctx);
+  g_option_context_free(ctx);
   control_client_free(control_client);
   return result;
 }

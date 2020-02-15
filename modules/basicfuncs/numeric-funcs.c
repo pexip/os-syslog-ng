@@ -25,28 +25,28 @@ typedef gboolean (*AggregateFunc)(gpointer, gint64);
 
 static gboolean
 tf_num_parse(gint argc, GString *argv[],
-	     const gchar *func_name, gint64 *n, gint64 *m)
+             const gchar *func_name, gint64 *n, gint64 *m)
 {
   if (argc != 2)
     {
       msg_debug("Template function requires two arguments.",
-		evt_tag_str("function", func_name));
+                evt_tag_str("function", func_name));
       return FALSE;
     }
 
-  if (!parse_number_with_suffix(argv[0]->str, n))
+  if (!parse_dec_number(argv[0]->str, n))
     {
       msg_debug("Parsing failed, template function's first argument is not a number",
-		evt_tag_str("function", func_name),
-		evt_tag_str("arg1", argv[0]->str));
+                evt_tag_str("function", func_name),
+                evt_tag_str("arg1", argv[0]->str));
       return FALSE;
     }
 
-  if (!parse_number_with_suffix(argv[1]->str, m))
+  if (!parse_dec_number(argv[1]->str, m))
     {
       msg_debug("Parsing failed, template function's second argument is not a number",
-		evt_tag_str("function", func_name),
-		evt_tag_str("arg2", argv[1]->str));
+                evt_tag_str("function", func_name),
+                evt_tag_str("arg2", argv[1]->str));
       return FALSE;
     }
 
@@ -133,30 +133,19 @@ tf_num_mod(LogMessage *msg, gint argc, GString *argv[], GString *result)
 
 TEMPLATE_FUNCTION_SIMPLE(tf_num_mod);
 
-
-static GString *
-_get_gstring_scratch_buffer(const LogTemplateInvokeArgs *args,
-                            gsize initial_capacity)
-{
-  if (args->bufs->len == 0)
-    g_ptr_array_add(args->bufs, g_string_sized_new(initial_capacity));
-
-  return (GString *) g_ptr_array_index(args->bufs, 0);
-}
-
 static gboolean
 _tf_num_parse_arg_with_message(const TFSimpleFuncState *state,
                                LogMessage *message,
                                const LogTemplateInvokeArgs *args,
                                gint64 *number)
 {
-  GString *formatted_template = _get_gstring_scratch_buffer(args, 64);
+  GString *formatted_template = scratch_buffers_alloc();
   gint on_error = args->opts->on_error;
 
-  log_template_format(state->argv[0], message, args->opts, args->tz,
-    args->seq_num, args->context_id, formatted_template);
+  log_template_format(state->argv_templates[0], message, args->opts, args->tz,
+                      args->seq_num, args->context_id, formatted_template);
 
-  if (!parse_number_with_suffix(formatted_template->str, number))
+  if (!parse_dec_number(formatted_template->str, number))
     {
       if (!(on_error & ON_ERROR_SILENT))
         msg_error("Parsing failed, template function's argument is not a number",
@@ -176,7 +165,7 @@ tf_num_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent,
   if (argc != 2)
     {
       g_set_error(error, LOG_TEMPLATE_ERROR, LOG_TEMPLATE_ERROR_COMPILE,
-        "$(%s) requires only one argument", argv[0]);
+                  "$(%s) requires only one argument", argv[0]);
       return FALSE;
     }
 
@@ -185,17 +174,17 @@ tf_num_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent,
 
 static gint
 _tf_num_filter_iterate(const TFSimpleFuncState *state,
-        const LogTemplateInvokeArgs *args,
-        gint message_index,
-        AggregateFunc aggregate,
-        gpointer accumulator)
+                       const LogTemplateInvokeArgs *args,
+                       gint message_index,
+                       AggregateFunc aggregate,
+                       gpointer accumulator)
 {
   for (; message_index < args->num_messages; message_index++)
     {
       LogMessage *message = args->messages[message_index];
       gint64 number;
       if ((_tf_num_parse_arg_with_message(state, message, args, &number) &&
-          (!aggregate(accumulator, number))))
+           (!aggregate(accumulator, number))))
         return message_index;
     }
 
@@ -204,10 +193,10 @@ _tf_num_filter_iterate(const TFSimpleFuncState *state,
 
 static gboolean
 _tf_num_filter(const TFSimpleFuncState *state,
-        const LogTemplateInvokeArgs *args,
-        AggregateFunc start,
-        AggregateFunc aggregate,
-        gpointer accumulator)
+               const LogTemplateInvokeArgs *args,
+               AggregateFunc start,
+               AggregateFunc aggregate,
+               gpointer accumulator)
 {
   gint first = _tf_num_filter_iterate(state, args, 0, start, accumulator);
   if (first < 0)
@@ -323,7 +312,7 @@ _tf_num_average(gpointer accumulator, gint64 element)
 
 static void
 tf_num_average_call(LogTemplateFunction *self, gpointer s,
-                const LogTemplateInvokeArgs *args, GString *result)
+                    const LogTemplateInvokeArgs *args, GString *result)
 {
   TFSimpleFuncState *state = (TFSimpleFuncState *)s;
   AverageState accumulator = {0, 0};

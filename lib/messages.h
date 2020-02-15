@@ -21,11 +21,12 @@
  * COPYING for details.
  *
  */
-  
+
 #ifndef MESSAGES_H_INCLUDED
 #define MESSAGES_H_INCLUDED
 
 #include "syslog-ng.h"
+#include <errno.h>
 #include <evtlog.h>
 
 extern int startup_debug_flag;
@@ -42,6 +43,7 @@ EVTREC *msg_event_create_from_desc(gint prio, const char *desc);
 void msg_event_free(EVTREC *e);
 void msg_event_send(EVTREC *e);
 void msg_event_suppress_recursions_and_send(EVTREC *e);
+void msg_event_print_event_to_stderr(EVTREC *e);
 
 
 void msg_set_post_func(MsgPostFunc func);
@@ -50,65 +52,80 @@ void msg_deinit(void);
 
 void msg_add_option_group(GOptionContext *ctx);
 
+#define evt_tag_error(tag) evt_tag_errno(tag, __local_copy_of_errno)
+
+#define CAPTURE_ERRNO(lambda) do {\
+  int __local_copy_of_errno G_GNUC_UNUSED = errno; \
+  lambda; \
+} while(0)
+
 /* fatal->warning goes out to the console during startup, notice and below
  * comes goes to the log even during startup */
-#define msg_fatal(desc, tags...)    msg_event_suppress_recursions_and_send(msg_event_create(EVT_PRI_CRIT, desc, ##tags, NULL ))
-#define msg_error(desc, tags...)    msg_event_suppress_recursions_and_send(msg_event_create(EVT_PRI_ERR, desc, ##tags, NULL ))
-#define msg_warning(desc, tags...)  msg_event_suppress_recursions_and_send(msg_event_create(EVT_PRI_WARNING, desc, ##tags, NULL ))
-#define msg_notice(desc, tags...)   msg_event_suppress_recursions_and_send(msg_event_create(EVT_PRI_NOTICE, desc, ##tags, NULL ))
-#define msg_info(desc, tags...)     msg_event_suppress_recursions_and_send(msg_event_create(EVT_PRI_INFO, desc, ##tags, NULL ))
+#define msg_fatal(desc, tags...)    CAPTURE_ERRNO(\
+    msg_event_suppress_recursions_and_send(msg_event_create(EVT_PRI_CRIT, desc, ##tags, NULL )))
+#define msg_error(desc, tags...)    CAPTURE_ERRNO(\
+    msg_event_suppress_recursions_and_send(msg_event_create(EVT_PRI_ERR, desc, ##tags, NULL )))
+#define msg_warning(desc, tags...)  CAPTURE_ERRNO(\
+    msg_event_suppress_recursions_and_send(msg_event_create(EVT_PRI_WARNING, desc, ##tags, NULL )))
+#define msg_notice(desc, tags...)   CAPTURE_ERRNO(\
+    msg_event_suppress_recursions_and_send(msg_event_create(EVT_PRI_NOTICE, desc, ##tags, NULL )))
+#define msg_info(desc, tags...)     CAPTURE_ERRNO(\
+    msg_event_suppress_recursions_and_send(msg_event_create(EVT_PRI_INFO, desc, ##tags, NULL )))
 
 /* just like msg_info, but prepends the message with a timestamp -- useful in interactive
  * tools with long running time to provide some feedback */
-#define msg_progress(desc, tags...) 					  \
-        do { 									  \
-          time_t t;								  \
-          char *timestamp, *newdesc; 						  \
+#define msg_progress(desc, tags...)             \
+        do {                    \
+          time_t t;                 \
+          char *timestamp, *newdesc;              \
                                                                                   \
-          t = time(0); 							          \
-          timestamp = ctime(&t); 						  \
-          timestamp[strlen(timestamp) - 1] = 0; 				  \
-          newdesc = g_strdup_printf("[%s] %s", timestamp, desc); 		  \
+          t = time(0);                        \
+          timestamp = ctime(&t);              \
+          timestamp[strlen(timestamp) - 1] = 0;           \
+          newdesc = g_strdup_printf("[%s] %s", timestamp, desc);      \
           msg_event_send(msg_event_create(EVT_PRI_INFO, newdesc, ##tags, NULL )); \
-          g_free(newdesc); 							  \
+          g_free(newdesc);                \
         } while (0)
 
 #define msg_verbose(desc, tags...)                                          \
-	do {                                                                      \
-	  if (G_UNLIKELY(verbose_flag))                                           \
-	    msg_info(desc, ##tags );                                        \
-	} while (0)
+  do {                                                                      \
+    if (G_UNLIKELY(verbose_flag))                                           \
+      msg_info(desc, ##tags );                                        \
+  } while (0)
 
-#define msg_debug(desc, tags...) 						  \
-	do { 									  \
-	  if (G_UNLIKELY(debug_flag))                                             \
-	    msg_event_suppress_recursions_and_send(                               \
-	          msg_event_create(EVT_PRI_DEBUG, desc, ##tags, NULL ));          \
-	} while (0)
+#define msg_debug(desc, tags...)              \
+  do {                    \
+    if (G_UNLIKELY(debug_flag))                                             \
+      msg_event_suppress_recursions_and_send(                               \
+            msg_event_create(EVT_PRI_DEBUG, desc, ##tags, NULL ));          \
+  } while (0)
 
-#if SYSLOG_NG_ENABLE_DEBUG
-#define msg_trace(desc, tags...) 						  \
-	do { 									  \
-	  if (G_UNLIKELY(trace_flag))            				  \
-            msg_event_suppress_recursions_and_send(                               \
-                  msg_event_create(EVT_PRI_DEBUG, desc, ##tags, NULL ));          \
-	} while (0)
-#else
-#define msg_trace(desc, tags...)
-#endif
+#define msg_trace(desc, tags...)              \
+  do {                    \
+    if (G_UNLIKELY(trace_flag))                     \
+      msg_event_suppress_recursions_and_send(                               \
+            msg_event_create(EVT_PRI_DEBUG, desc, ##tags, NULL ));          \
+  } while (0)
 
-#define __once()					\
-        ({						\
-          static gboolean __guard = TRUE;		\
-          gboolean __current_guard = __guard;		\
-          __guard = FALSE;				\
-          __current_guard;				\
+#define msg_diagnostics(desc, tags...)              \
+  do {                    \
+    if (G_UNLIKELY(trace_flag))                     \
+      msg_event_print_event_to_stderr(              \
+            msg_event_create(EVT_PRI_DEBUG, desc, ##tags, NULL ));          \
+  } while (0)
+
+#define __once()          \
+        ({            \
+          static gboolean __guard = TRUE;   \
+          gboolean __current_guard = __guard;   \
+          __guard = FALSE;        \
+          __current_guard;        \
         })
 
-#define msg_warning_once(desc, tags...)	\
-        do {				\
-          if (__once())			\
-            msg_warning(desc, ##tags );	\
+#define msg_warning_once(desc, tags...) \
+        do {        \
+          if (__once())     \
+            msg_warning(desc, ##tags ); \
         } while (0)
 
 void msg_post_message(LogMessage *msg);

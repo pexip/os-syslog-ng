@@ -21,7 +21,7 @@
  * COPYING for details.
  *
  */
-  
+
 #include "logpipe.h"
 #include "cfg-tree.h"
 
@@ -34,12 +34,27 @@ log_pipe_location_tag(LogPipe *pipe)
 }
 
 void
+log_pipe_attach_expr_node(LogPipe *self, LogExprNode *expr_node)
+{
+  self->expr_node = log_expr_node_ref(expr_node);
+}
+
+void log_pipe_detach_expr_node(LogPipe *self)
+{
+  if (!self->expr_node)
+    return;
+  log_expr_node_unref(self->expr_node);
+  self->expr_node = NULL;
+}
+
+void
 log_pipe_init_instance(LogPipe *self, GlobalConfig *cfg)
 {
   g_atomic_counter_set(&self->ref_cnt, 1);
   self->cfg = cfg;
   self->pipe_next = NULL;
   self->persist_name = NULL;
+  self->plugin_name = NULL;
 
   /* NOTE: queue == NULL means that this pipe simply forwards the
    * message along the pipeline, e.g. like it has called
@@ -69,7 +84,7 @@ LogPipe *
 log_pipe_ref(LogPipe *self)
 {
   g_assert(!self || g_atomic_counter_get(&self->ref_cnt) > 0);
-  
+
   if (self)
     {
       g_atomic_counter_inc(&self->ref_cnt);
@@ -77,16 +92,24 @@ log_pipe_ref(LogPipe *self)
   return self;
 }
 
-void 
+static void
+_free(LogPipe *self)
+{
+  if (self->free_fn)
+    self->free_fn(self);
+  g_free((gpointer)self->persist_name);
+  g_free(self->plugin_name);
+  g_free(self);
+}
+
+void
 log_pipe_unref(LogPipe *self)
 {
   g_assert(!self || g_atomic_counter_get(&self->ref_cnt));
-    
+
   if (self && (g_atomic_counter_dec_and_test(&self->ref_cnt)))
     {
-      if (self->free_fn)
-        self->free_fn(self);
-      g_free(self);
+      _free(self);
     }
 }
 
@@ -100,14 +123,14 @@ void
 log_pipe_set_persist_name(LogPipe *self, const gchar *persist_name)
 {
   g_free((gpointer)self->persist_name);
-  self->persist_name = persist_name;
+  self->persist_name = g_strdup(persist_name);
 }
 
 const gchar *
 log_pipe_get_persist_name(const LogPipe *self)
 {
   return (self->generate_persist_name != NULL) ? self->generate_persist_name(self)
-                                               : self->persist_name;
+         : self->persist_name;
 }
 
 #ifdef __linux__

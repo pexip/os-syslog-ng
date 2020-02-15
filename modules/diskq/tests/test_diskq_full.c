@@ -54,30 +54,34 @@ test_diskq_become_full(gboolean reliable)
   fed_messages = 0;
   DiskQueueOptions options = {0};
 
+  const gchar *persist_name = "test_diskq";
+
   options.reliable = reliable;
   if (reliable)
     {
       _construct_options(&options, 1000, 1000, reliable);
-      q = log_queue_disk_reliable_new(&options);
+      q = log_queue_disk_reliable_new(&options, persist_name);
     }
   else
     {
       _construct_options(&options, 1000, 0, reliable);
-      q = log_queue_disk_non_reliable_new(&options);
+      q = log_queue_disk_non_reliable_new(&options, persist_name);
     }
 
   log_queue_set_use_backlog(q, TRUE);
 
-  q->persist_name = "test_diskq";
   stats_lock();
-  stats_register_counter(0, SCS_DESTINATION, q->persist_name, NULL, SC_TYPE_DROPPED, &q->dropped_messages);
+  StatsClusterKey sc_key;
+  stats_cluster_logpipe_key_set(&sc_key, SCS_DESTINATION, q->persist_name, NULL );
+  stats_register_counter(0, &sc_key, SC_TYPE_DROPPED, &q->dropped_messages);
   stats_counter_set(q->dropped_messages, 0);
   stats_unlock();
   unlink(DISKQ_FILENAME);
   log_queue_disk_load_queue(q, DISKQ_FILENAME);
   feed_some_messages(q, 1000, &parse_options);
 
-  assert_gint(q->dropped_messages->value, 1000, "Bad dropped message number (reliable: %s)", reliable ? "TRUE" : "FALSE");
+  assert_gint(atomic_gssize_racy_get(&q->dropped_messages->value), 1000, "Bad dropped message number (reliable: %s)",
+              reliable ? "TRUE" : "FALSE");
 
   log_queue_unref(q);
   disk_queue_options_destroy(&options);
@@ -85,16 +89,16 @@ test_diskq_become_full(gboolean reliable)
 }
 
 int
-main()
+main(void)
 {
   app_startup();
-  putenv("TZ=MET-1METDST");
+  setenv("TZ", "MET-1METDST", TRUE);
   tzset();
 
-  configuration = cfg_new(0x0308);
-  plugin_load_module("syslogformat", configuration, NULL );
-  plugin_load_module("disk-buffer", configuration, NULL );
-  plugin_load_module("builtin-serializer", configuration, NULL );
+  configuration = cfg_new_snippet();
+  cfg_load_module(configuration, "syslogformat");
+  cfg_load_module(configuration, "disk-buffer");
+  cfg_load_module(configuration, "builtin-serializer");
   msg_set_post_func(msg_post_function);
   msg_format_options_defaults(&parse_options);
   msg_format_options_init(&parse_options, configuration);

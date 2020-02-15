@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2013 Balabit
+ * Copyright (c) 2011-2018 Balabit
  * Copyright (c) 2011-2013 Gergely Nagy <algernon@balabit.hu>
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -20,32 +20,53 @@
  * COPYING for details.
  *
  */
-#include "template_lib.h"
+
+#include <criterion/criterion.h>
+
+#include "libtest/cr_template.h"
 #include "apphook.h"
 #include "plugin.h"
 #include "cfg.h"
 
 void
-test_format_welf(void)
-{
-  assert_template_format("$(format-welf MSG=$MSG)", "MSG=árvíztűrőtükörfúrógép");
-  assert_template_format("$(format-welf MSG=$escaping)", "MSG=\"binary stuff follows \\\"\\xad árvíztűrőtükörfúrógép\"");
-  assert_template_format("$(format-welf MSG=$escaping2)", "MSG=\\xc3");
-  assert_template_format("$(format-welf MSG=$null)", "MSG=binary\\x00stuff");
-  assert_template_format_with_context("$(format-welf MSG=$MSG)", "MSG=árvíztűrőtükörfúrógép MSG=árvíztűrőtükörfúrógép");
-}
-
-int
-main(int argc G_GNUC_UNUSED, char *argv[] G_GNUC_UNUSED)
+setup(void)
 {
   app_startup();
-  putenv("TZ=UTC");
+  setenv("TZ", "UTC", TRUE);
   tzset();
   init_template_tests();
-  plugin_load_module("kvformat", configuration, NULL);
+  cfg_load_module(configuration, "kvformat");
+}
 
-  test_format_welf();
-
+void
+teardown(void)
+{
   deinit_template_tests();
   app_shutdown();
+}
+
+TestSuite(format_welf, .init = setup, .fini = teardown);
+
+Test(format_welf, test_format_welf)
+{
+  assert_template_format("$(format-welf MSG=$MSG)", "MSG=árvíztűrőtükörfúrógép");
+  assert_template_format("xxx$(format-welf MSG=$MSG)yyy", "xxxMSG=árvíztűrőtükörfúrógépyyy");
+  assert_template_format("$(format-welf MSG=$escaping)",
+                         "MSG=\"binary stuff follows \\\"\\xad árvíztűrőtükörfúrógép\"");
+  assert_template_format("$(format-welf MSG=$escaping2)", "MSG=\\xc3");
+  assert_template_format("$(format-welf MSG=$null)", "MSG=binary\\x00stuff");
+  assert_template_format_with_context("$(format-welf MSG=$MSG)",
+                                      "MSG=árvíztűrőtükörfúrógép MSG=árvíztűrőtükörfúrógép");
+}
+
+Test(format_welf, test_format_welf_performance)
+{
+  perftest_template("$(format-welf APP.*)\n");
+  perftest_template("<$PRI>1 $ISODATE $LOGHOST @syslog-ng - - ${SDATA:--} $(format-welf --scope all-nv-pairs "
+                    "--exclude 0* --exclude 1* --exclude 2* --exclude 3* --exclude 4* --exclude 5* "
+                    "--exclude 6* --exclude 7* --exclude 8* --exclude 9* "
+                    "--exclude SOURCE "
+                    "--exclude .SDATA.* "
+                    "..RSTAMP='${R_UNIXTIME}${R_TZ}' "
+                    "..TAGS=${TAGS})\n");
 }

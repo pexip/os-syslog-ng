@@ -25,7 +25,8 @@
 #include "testutils.h"
 #include "stats/stats.h"
 
-struct _TestSource {
+struct _TestSource
+{
   LogPipe super;
   JournalReaderOptions options;
   JournalReader *reader;
@@ -50,7 +51,7 @@ __init(LogPipe *s)
       self->current_test_case->init(self->current_test_case, self, self->journald_mock, self->reader, &self->options);
     }
   journal_reader_options_init(&self->options, configuration, "test");
-  journal_reader_set_options((LogPipe *)self->reader, &self->super, &self->options, 3, SCS_JOURNALD, "test", "1");
+  journal_reader_set_options((LogPipe *)self->reader, &self->super, &self->options, "test", "1");
   log_pipe_append((LogPipe *)self->reader, &self->super);
   assert_true(log_pipe_init((LogPipe *)self->reader), ASSERTION_ERROR("Can't initialize reader"));
   return TRUE;
@@ -75,7 +76,7 @@ __free(LogPipe *s)
 }
 
 static void
-__queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options, gpointer user_data)
+__queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options)
 {
   TestSource *self = (TestSource *)s;
   if (self->current_test_case && self->current_test_case->checker)

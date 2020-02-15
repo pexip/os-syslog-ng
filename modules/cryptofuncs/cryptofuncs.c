@@ -27,6 +27,7 @@
 #include "uuid.h"
 #include "str-format.h"
 #include "plugin-types.h"
+#include "compat/openssl_support.h"
 #include <openssl/evp.h>
 
 static void
@@ -64,7 +65,8 @@ tf_hash_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent, gint
   GOptionContext *ctx;
   gint length = 0;
   const EVP_MD *md;
-  GOptionEntry hash_options[] = {
+  GOptionEntry hash_options[] =
+  {
     { "length", 'l', 0, G_OPTION_ARG_INT, &length, NULL, NULL },
     { NULL }
   };
@@ -81,13 +83,13 @@ tf_hash_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent, gint
 
   if (argc < 2)
     {
-      g_set_error(error, LOG_TEMPLATE_ERROR, LOG_TEMPLATE_ERROR_COMPILE, "$(hash) parsing failed, invalid number of arguments");
+      g_set_error(error, LOG_TEMPLATE_ERROR, LOG_TEMPLATE_ERROR_COMPILE,
+                  "$(hash) parsing failed, invalid number of arguments");
       return FALSE;
     }
 
   if (!tf_simple_func_prepare(self, state, parent, argc, argv, error))
     {
-      g_free(state);
       return FALSE;
     }
   state->length = length;
@@ -98,36 +100,44 @@ tf_hash_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent, gint
       return FALSE;
     }
   state->md = md;
-  if ((state->length == 0) || (state->length > md->md_size * 2))
-    state->length = md->md_size * 2;
+  gint md_size = EVP_MD_size(md);
+  if ((state->length == 0) || (state->length > md_size * 2))
+    state->length = md_size * 2;
   return TRUE;
+}
+
+static guint
+_hash(const EVP_MD *md, GString *const *argv, gint argc, guchar *hash, guint hash_size)
+{
+  gint i;
+  guint md_len;
+  DECLARE_EVP_MD_CTX(mdctx);
+  EVP_MD_CTX_init(mdctx);
+  EVP_DigestInit_ex(mdctx, md, NULL);
+
+  for (i = 0; i < argc; i++)
+    {
+      EVP_DigestUpdate(mdctx, argv[i]->str, argv[i]->len);
+    }
+
+  EVP_DigestFinal_ex(mdctx, hash, &md_len);
+  EVP_MD_CTX_cleanup(mdctx);
+  EVP_MD_CTX_destroy(mdctx);
+
+  return md_len;
 }
 
 static void
 tf_hash_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *args, GString *result)
 {
   TFHashState *state = (TFHashState *) s;
-  GString **argv;
   gint argc;
-  gint i;
-  EVP_MD_CTX mdctx;
   guchar hash[EVP_MAX_MD_SIZE];
   gchar hash_str[EVP_MAX_MD_SIZE * 2 + 1];
   guint md_len;
 
-  argv = (GString **) args->bufs->pdata;
-  argc = args->bufs->len;
-
-  EVP_MD_CTX_init(&mdctx);
-  EVP_DigestInit_ex(&mdctx, state->md, NULL);
-
-  for (i = 0; i < argc; i++)
-    {
-      EVP_DigestUpdate(&mdctx, argv[i]->str, argv[i]->len);
-    }
-  EVP_DigestFinal_ex(&mdctx, hash, &md_len);
-  EVP_MD_CTX_cleanup(&mdctx);
-
+  argc = state->super.argc;
+  md_len = _hash(state->md, args->argv, argc, hash, sizeof(hash));
   // we fetch the entire hash in a hex format otherwise we cannot truncate at
   // odd character numbers
   format_hex_string(hash, md_len, hash_str, sizeof(hash_str));
@@ -141,7 +151,8 @@ tf_hash_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs 
     }
 }
 
-TEMPLATE_FUNCTION(TFHashState, tf_hash, tf_hash_prepare, tf_simple_func_eval, tf_hash_call, tf_simple_func_free_state, NULL);
+TEMPLATE_FUNCTION(TFHashState, tf_hash, tf_hash_prepare, tf_simple_func_eval, tf_hash_call, tf_simple_func_free_state,
+                  NULL);
 
 
 static Plugin cryptofuncs_plugins[] =
@@ -156,9 +167,9 @@ static Plugin cryptofuncs_plugins[] =
 };
 
 gboolean
-cryptofuncs_module_init(GlobalConfig *cfg, CfgArgs *args)
+cryptofuncs_module_init(PluginContext *context, CfgArgs *args)
 {
-  plugin_register(cfg, cryptofuncs_plugins, G_N_ELEMENTS(cryptofuncs_plugins));
+  plugin_register(context, cryptofuncs_plugins, G_N_ELEMENTS(cryptofuncs_plugins));
   return TRUE;
 }
 

@@ -40,7 +40,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-const QueueType log_queue_disk_type = "DISK";
+QueueType log_queue_disk_type = "DISK";
 
 static gint64
 _get_length(LogQueue *s)
@@ -66,7 +66,7 @@ _push_tail(LogQueue *s, LogMessage *msg, const LogPathOptions *path_options)
       if (self->push_tail(self, msg, &local_options, path_options))
         {
           log_queue_push_notify (&self->super);
-          stats_counter_inc(self->super.stored_messages);
+          log_queue_queued_messages_inc(&self->super);
           log_msg_ack(msg, &local_options, AT_PROCESSED);
           log_msg_unref(msg);
           g_static_mutex_unlock(&self->super.lock);
@@ -110,7 +110,7 @@ _pop_head(LogQueue *s, LogPathOptions *path_options)
     }
   if (msg != NULL)
     {
-      stats_counter_dec(self->super.stored_messages);
+      log_queue_queued_messages_dec(&self->super);
     }
   g_static_mutex_unlock(&self->super.lock);
   return msg;
@@ -135,7 +135,6 @@ static void
 _rewind_backlog(LogQueue *s, guint rewind_count)
 {
   LogQueueDisk *self = (LogQueueDisk *) s;
-
   g_static_mutex_lock(&self->super.lock);
 
   if (self->rewind_backlog)
@@ -216,7 +215,8 @@ _free(LogQueue *s)
 
   qdisk_deinit(self->qdisk);
   qdisk_free(self->qdisk);
-  g_free(self);
+
+  log_queue_free_method(s);
 }
 
 static gboolean
@@ -241,14 +241,15 @@ _pop_disk(LogQueueDisk *self, LogMessage **msg)
   *msg = log_msg_new_empty();
 
   if (!log_msg_deserialize(*msg, sa))
-  {
+    {
       g_string_free(serialized, TRUE);
       serialize_archive_free(sa);
       log_msg_unref(*msg);
       *msg = NULL;
-      msg_error("Can't read correct message from disk-queue file",evt_tag_str("filename",qdisk_get_filename(self->qdisk)));
+      msg_error("Can't read correct message from disk-queue file",
+                evt_tag_str("filename", qdisk_get_filename(self->qdisk)));
       return TRUE;
-  }
+    }
 
   serialize_archive_free(sa);
 
@@ -269,8 +270,8 @@ _read_message(LogQueueDisk *self, LogPathOptions *path_options)
       if (!_pop_disk (self, &msg))
         {
           msg_error("Error reading from disk-queue file, dropping disk queue",
-                    evt_tag_str ("filename", qdisk_get_filename (self->qdisk)));
-          self->restart_corrupted(self);
+                    evt_tag_str("filename", qdisk_get_filename(self->qdisk)));
+          log_queue_disk_restart_corrupted(self);
           if (msg)
             log_msg_unref (msg);
           msg = NULL;
@@ -300,17 +301,21 @@ _write_message(LogQueueDisk *self, LogMessage *msg)
 }
 
 static void
-_restart_diskq(LogQueueDisk *self, gboolean corrupted)
+_restart_diskq(LogQueueDisk *self)
 {
   gchar *filename = g_strdup(qdisk_get_filename(self->qdisk));
   gchar *new_file = NULL;
+  DiskQueueOptions *options = qdisk_get_options(self->qdisk);
+
   qdisk_deinit(self->qdisk);
-  if (corrupted)
-    {
-      new_file = g_strdup_printf("%s.corrupted",filename);
-      rename(filename,new_file);
-      g_free(new_file);
-    }
+
+  new_file = g_strdup_printf("%s.corrupted", filename);
+  rename(filename, new_file);
+  g_free(new_file);
+
+  if (self->restart)
+    self->restart(self, options);
+
   if (self->start)
     {
       self->start(self, filename);
@@ -318,25 +323,20 @@ _restart_diskq(LogQueueDisk *self, gboolean corrupted)
   g_free(filename);
 }
 
-static void
-_restart(LogQueueDisk *self)
+void
+log_queue_disk_restart_corrupted(LogQueueDisk *self)
 {
-  _restart_diskq(self, FALSE);
-}
-
-static void
-_restart_corrupted(LogQueueDisk *self)
-{
-  _restart_diskq(self, TRUE);
+  _restart_diskq(self);
 }
 
 
 void
-log_queue_disk_init_instance(LogQueueDisk *self)
+log_queue_disk_init_instance(LogQueueDisk *self, const gchar *persist_name)
 {
-  log_queue_init_instance(&self->super,NULL);
+  log_queue_init_instance(&self->super, persist_name);
   self->qdisk = qdisk_new();
 
+  self->super.type = log_queue_disk_type;
   self->super.get_length = _get_length;
   self->super.push_tail = _push_tail;
   self->super.push_head = _push_head;
@@ -348,6 +348,4 @@ log_queue_disk_init_instance(LogQueueDisk *self)
 
   self->read_message = _read_message;
   self->write_message = _write_message;
-  self->restart = _restart;
-  self->restart_corrupted = _restart_corrupted;
 }

@@ -37,10 +37,11 @@ tf_cond_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent, gint
 
   g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
 
-  lexer = cfg_lexer_new_buffer(argv[1], strlen(argv[1]));
+  lexer = cfg_lexer_new_buffer(parent->cfg, argv[1], strlen(argv[1]));
   if (!cfg_run_parser(parent->cfg, lexer, &filter_expr_parser, (gpointer *) &state->filter, NULL))
     {
-      g_set_error(error, LOG_TEMPLATE_ERROR, LOG_TEMPLATE_ERROR_COMPILE, "Error parsing conditional filter expression");
+      g_set_error(error, LOG_TEMPLATE_ERROR, LOG_TEMPLATE_ERROR_COMPILE,
+                  "$(%s) Error parsing conditional filter expression", argv[0]);
       return FALSE;
     }
   memmove(&argv[1], &argv[2], sizeof(argv[0]) * (argc - 2));
@@ -67,14 +68,15 @@ tf_grep_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent, gint
   TFCondState *state = (TFCondState *) s;
   GOptionContext *ctx;
   gint max_count = 0;
-  GOptionEntry grep_options[] = {
+  GOptionEntry grep_options[] =
+  {
     { "max-count", 'm', 0, G_OPTION_ARG_INT, &max_count, NULL, NULL },
     { NULL }
   };
 
   g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
 
-  ctx = g_option_context_new("grep");
+  ctx = g_option_context_new(argv[0]);
   g_option_context_add_main_entries(ctx, grep_options, NULL);
 
   if (!g_option_context_parse(ctx, &argc, &argv, error))
@@ -87,7 +89,7 @@ tf_grep_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent, gint
 
   if (argc < 3)
     {
-      g_set_error(error, LOG_TEMPLATE_ERROR, LOG_TEMPLATE_ERROR_COMPILE, "$(grep) requires at least two arguments");
+      g_set_error(error, LOG_TEMPLATE_ERROR, LOG_TEMPLATE_ERROR_COMPILE, "$(%s) requires at least two arguments", argv[0]);
       return FALSE;
     }
   state->grep_max_count = max_count;
@@ -121,7 +123,9 @@ tf_grep_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs 
                 g_string_append_c(result, ',');
 
               /* NOTE: not recursive, as the message context is just one message */
-              log_template_append_format(state->super.argv[i], msg, args->opts, args->tz, args->seq_num, args->context_id, result);
+              log_template_append_format(state->super.argv_templates[i], msg,
+                                         args->opts, args->tz, args->seq_num, args->context_id,
+                                         result);
               first = FALSE;
             }
           if (state->grep_max_count && count >= state->grep_max_count)
@@ -152,11 +156,17 @@ tf_if_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *a
 
   if (filter_expr_eval_with_context(state->filter, args->messages, args->num_messages))
     {
-      log_template_append_format_with_context(state->super.argv[0], args->messages, args->num_messages, args->opts, args->tz, args->seq_num, args->context_id, result);
+      log_template_append_format_with_context(state->super.argv_templates[0],
+                                              args->messages, args->num_messages, args->opts, args->tz,
+                                              args->seq_num, args->context_id,
+                                              result);
     }
   else
     {
-      log_template_append_format_with_context(state->super.argv[1], args->messages, args->num_messages, args->opts, args->tz, args->seq_num, args->context_id, result);
+      log_template_append_format_with_context(state->super.argv_templates[1],
+                                              args->messages, args->num_messages, args->opts, args->tz,
+                                              args->seq_num, args->context_id,
+                                              result);
     }
 }
 

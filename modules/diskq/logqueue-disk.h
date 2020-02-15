@@ -31,14 +31,13 @@
 
 typedef struct _LogQueueDisk LogQueueDisk;
 
-#define LOG_PATH_OPTIONS_FOR_BACKLOG GINT_TO_POINTER(0x80000000)
-
 struct _LogQueueDisk
 {
   LogQueue super;
   QDisk *qdisk;         /* disk based queue */
   gint64 (*get_length)(LogQueueDisk *s);
-  gboolean (*push_tail)(LogQueueDisk *s, LogMessage *msg, LogPathOptions *local_options, const LogPathOptions *path_options);
+  gboolean (*push_tail)(LogQueueDisk *s, LogMessage *msg, LogPathOptions *local_options,
+                        const LogPathOptions *path_options);
   void (*push_head)(LogQueueDisk *s, LogMessage *msg, const LogPathOptions *path_options);
   LogMessage *(*pop_head)(LogQueueDisk *s, LogPathOptions *path_options);
   void (*ack_backlog)(LogQueueDisk *s, guint num_msg_to_ack);
@@ -48,18 +47,18 @@ struct _LogQueueDisk
   gboolean (*start)(LogQueueDisk *s, const gchar *filename);
   void (*free_fn)(LogQueueDisk *s);
   gboolean (*is_reliable)(LogQueueDisk *s);
-  LogMessage * (*read_message)(LogQueueDisk *self, LogPathOptions *path_options);
+  LogMessage *(*read_message)(LogQueueDisk *self, LogPathOptions *path_options);
   gboolean (*write_message)(LogQueueDisk *self, LogMessage *msg);
-  void (*restart)(LogQueueDisk *self);
-  void (*restart_corrupted)(LogQueueDisk *self);
+  void (*restart)(LogQueueDisk *self, DiskQueueOptions *options);
 };
 
-extern const QueueType log_queue_disk_type;
+extern QueueType log_queue_disk_type;
 
 gboolean log_queue_disk_is_reliable(LogQueue *s);
 const gchar *log_queue_disk_get_filename(LogQueue *self);
 gboolean log_queue_disk_save_queue(LogQueue *self, gboolean *persistent);
 gboolean log_queue_disk_load_queue(LogQueue *self, const gchar *filename);
-void log_queue_disk_init_instance(LogQueueDisk *self);
+void log_queue_disk_init_instance(LogQueueDisk *self, const gchar *persist_name);
+void log_queue_disk_restart_corrupted(LogQueueDisk *self);
 
 #endif

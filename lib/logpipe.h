@@ -21,7 +21,7 @@
  * COPYING for details.
  *
  */
-  
+
 #ifndef LOGPIPE_H_INCLUDED
 #define LOGPIPE_H_INCLUDED
 
@@ -37,8 +37,9 @@
 #define NC_WRITE_ERROR 3
 #define NC_FILE_MOVED  4
 #define NC_FILE_EOF    5
-#define NC_FILE_SKIP   6
-#define NC_REOPEN_REQUIRED 7
+#define NC_REOPEN_REQUIRED 6
+#define NC_FILE_DELETED 7
+#define NC_LAST_MSG_SENT 8
 
 /* indicates that the LogPipe was initialized */
 #define PIF_INITIALIZED       0x0001
@@ -50,8 +51,10 @@
 #define PIF_BRANCH_FALLBACK   0x0008
 #define PIF_BRANCH_PROPERTIES (PIF_BRANCH_FINAL + PIF_BRANCH_FALLBACK)
 
+#define PIF_DROP_UNMATCHED    0x0010
+
 /* branch starting with this pipe wants hard flow control */
-#define PIF_HARD_FLOW_CONTROL 0x0010
+#define PIF_HARD_FLOW_CONTROL 0x0020
 
 /* this pipe is a source for messages, it is not meant to be used to
  * forward messages, syslog-ng will only use these pipes for the
@@ -59,7 +62,7 @@
  * sending messages to these pipes and these are expected to generate
  * messages "automatically". */
 
-#define PIF_SOURCE            0x0020
+#define PIF_SOURCE            0x0040
 
 /* private flags range, to be used by other LogPipe instances for their own purposes */
 
@@ -167,23 +170,25 @@
  *   The way to override a method by an external object is as follows:
  *
  *     - it should save the current value of the method address (for
- *       example "queue" for the queue method), and the associated
- *       user_data pointer (queue_data in this case)
+ *       example "queue" for the queue method)
  *
  *     - it should change the pointer pointing to the relevant method to
  *       its own code (e.g. change "queue" in LogPipe)
+ *
+ *     - once the hook is invoked, it should take care about calling the
+ *       original function
  **/
 
 struct _LogPathOptions
 {
-   /* an acknowledgement is "passed" to this path, an ACK is still
-    * needed to close the window slot. This was called "flow-control"
-    * and meant both of these things: the user requested
-    * flags(flow-control), _AND_ an acknowledgement was needed. With
-    * the latest change, the one below specifies the user option,
-    * while the "ack is still needed" condition is stored in
-    * ack_needed.
-    */
+  /* an acknowledgement is "passed" to this path, an ACK is still
+   * needed to close the window slot. This was called "flow-control"
+   * and meant both of these things: the user requested
+   * flags(flow-control), _AND_ an acknowledgement was needed. With
+   * the latest change, the one below specifies the user option,
+   * while the "ack is still needed" condition is stored in
+   * ack_needed.
+   */
 
   gboolean ack_needed;
 
@@ -205,22 +210,26 @@ struct _LogPathOptions
 };
 
 #define LOG_PATH_OPTIONS_INIT { TRUE, FALSE, NULL }
+#define LOG_PATH_OPTIONS_INIT_NOACK { FALSE, FALSE, NULL }
 
 struct _LogPipe
 {
   GAtomicCounter ref_cnt;
   gint32 flags;
+
+  void (*queue)(LogPipe *self, LogMessage *msg, const LogPathOptions *path_options);
+
   GlobalConfig *cfg;
   LogExprNode *expr_node;
   LogPipe *pipe_next;
+  StatsCounterItem *discarded_messages;
   const gchar *persist_name;
+  gchar *plugin_name;
 
-  /* user_data pointer of the "queue" method in case it is overridden
-     by a plugin, see the explanation in the comment on the top. */
-  gpointer queue_data;
-  void (*queue)(LogPipe *self, LogMessage *msg, const LogPathOptions *path_options, gpointer user_data);
+  gboolean (*pre_init)(LogPipe *self);
   gboolean (*init)(LogPipe *self);
   gboolean (*deinit)(LogPipe *self);
+  void (*post_deinit)(LogPipe *self);
 
   const gchar *(*generate_persist_name)(const LogPipe *self);
 
@@ -234,6 +243,16 @@ struct _LogPipe
   void (*notify)(LogPipe *self, gint notify_code, gpointer user_data);
 };
 
+/*
+   cpu-cache optimization: queue method should be as close as possible to flags.
+
+   Rationale: the pointer pointing to this LogPipe instance is
+   resolved right before calling queue and the colocation of flags and
+   the queue pointer ensures that they are on the same cache line. The
+   queue method is probably the single most often called virtual method
+ */
+G_STATIC_ASSERT(G_STRUCT_OFFSET(LogPipe, queue) - G_STRUCT_OFFSET(LogPipe, flags) <= 4);
+
 extern gboolean (*pipe_single_step_hook)(LogPipe *pipe, LogMessage *msg, const LogPathOptions *path_options);
 
 LogPipe *log_pipe_ref(LogPipe *self);
@@ -242,6 +261,8 @@ LogPipe *log_pipe_new(GlobalConfig *cfg);
 void log_pipe_init_instance(LogPipe *self, GlobalConfig *cfg);
 void log_pipe_forward_notify(LogPipe *self, gint notify_code, gpointer user_data);
 EVTTAG *log_pipe_location_tag(LogPipe *pipe);
+void log_pipe_attach_expr_node(LogPipe *self, LogExprNode *expr_node);
+void log_pipe_detach_expr_node(LogPipe *self);
 
 static inline GlobalConfig *
 log_pipe_get_config(LogPipe *s)
@@ -266,6 +287,8 @@ log_pipe_init(LogPipe *s)
 {
   if (!(s->flags & PIF_INITIALIZED))
     {
+      if (s->pre_init && !s->pre_init(s))
+        return FALSE;
       if (!s->init || s->init(s))
         {
           s->flags |= PIF_INITIALIZED;
@@ -284,6 +307,9 @@ log_pipe_deinit(LogPipe *s)
       if (!s->deinit || s->deinit(s))
         {
           s->flags &= ~PIF_INITIALIZED;
+
+          if (s->post_deinit)
+            s->post_deinit(s);
           return TRUE;
         }
       return FALSE;
@@ -327,29 +353,30 @@ log_pipe_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options)
 
       local_path_options.flow_control_requested = 1;
       path_options = &local_path_options;
-      if (G_UNLIKELY(debug_flag))
-        {
-          msg_debug("Requesting flow control",
-                    log_pipe_location_tag(s));
-        }
+
+      msg_trace("Requesting flow control", log_pipe_location_tag(s));
     }
 
   if (s->queue)
     {
-      s->queue(s, msg, path_options, s->queue_data);
+      s->queue(s, msg, path_options);
     }
   else
     {
       log_pipe_forward_msg(s, msg, path_options);
+    }
+
+  if (path_options->matched && !(*path_options->matched) && (s->flags & PIF_DROP_UNMATCHED))
+    {
+      (*path_options->matched) = TRUE;
     }
 }
 
 static inline LogPipe *
 log_pipe_clone(LogPipe *self)
 {
-  if (self->clone)
-    return self->clone(self);
-  return NULL;
+  g_assert(NULL != self->clone);
+  return self->clone(self);
 }
 
 static inline void

@@ -61,8 +61,10 @@
 %token KW_DATABASE
 %token KW_TABLE
 %token KW_SESSION_STATEMENTS
+%token KW_CREATE_STATEMENT_APPEND
 %token KW_COLUMNS
 %token KW_NULL
+%token KW_IGNORE_TNS_CONFIG
 
 %type   <ptr> dest_afsql
 %type   <ptr> dest_afsql_params
@@ -112,16 +114,14 @@ dest_afsql_option
         | KW_COLUMNS '(' string_list ')'	{ afsql_dd_set_columns(last_driver, $3); }
         | KW_INDEXES '(' string_list ')'        { afsql_dd_set_indexes(last_driver, $3); }
         | KW_VALUES '(' dest_afsql_values ')'		{ afsql_dd_set_values(last_driver, $3); }
+        | KW_IGNORE_TNS_CONFIG '(' yesno ')'    { afsql_dd_set_ignore_tns_config(last_driver,$3); }
         | KW_NULL '(' string ')'                { afsql_dd_set_null_value(last_driver, $3); free($3); }
-        | KW_RETRIES '(' LL_NUMBER ')'          { afsql_dd_set_retries(last_driver, $3); }
-        | KW_FLUSH_LINES '(' LL_NUMBER ')'      { afsql_dd_set_flush_lines(last_driver, $3); }
-        | KW_FLUSH_TIMEOUT '(' LL_NUMBER ')'    { afsql_dd_set_flush_timeout(last_driver, $3); }
         | KW_SESSION_STATEMENTS '(' string_list ')' { afsql_dd_set_session_statements(last_driver, $3); }
         | KW_FLAGS '(' dest_afsql_flags ')'     { afsql_dd_set_flags(last_driver, $3); }
-
+	| KW_CREATE_STATEMENT_APPEND '(' string ')' { afsql_dd_set_create_statement_append(last_driver, $3); free($3); }
 
 	| { last_template_options = &((AFSqlDestDriver *) last_driver)->template_options; } template_option
-	| dest_driver_option
+	| threaded_dest_driver_option
         ;
 
 dest_afsql_values
@@ -135,7 +135,7 @@ dest_afsql_values_build
         ;
 
 dest_afsql_flags
-        : string dest_afsql_flags               { $$ = afsql_dd_lookup_flag($1) | $2; free($1); }
+        : normalized_flag dest_afsql_flags      { $$ = afsql_dd_lookup_flag($1) | $2; free($1); }
         |                                       { $$ = 0; }
         ;
 

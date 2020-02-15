@@ -112,6 +112,7 @@ void
 grouping_by_set_time(GroupingBy *self, const LogStamp *ls)
 {
   GTimeVal now;
+  gchar buf[256];
 
   /* clamp the current time between the timestamp of the current message
    * (low limit) and the current system time (high limit).  This ensures
@@ -125,8 +126,12 @@ grouping_by_set_time(GroupingBy *self, const LogStamp *ls)
     now.tv_sec = ls->tv_sec;
 
   timer_wheel_set_time(self->timer_wheel, now.tv_sec);
-  msg_debug("Advancing correllate() current time because of an incoming message",
-            evt_tag_long("utc", timer_wheel_get_time(self->timer_wheel)));
+  msg_debug("Advancing grouping-by() current time because of an incoming message",
+            evt_tag_long("utc", timer_wheel_get_time(self->timer_wheel)),
+            evt_tag_str("location",
+                        log_expr_node_format_location(self->super.super.super.expr_node,
+                                                      buf, sizeof(buf))));
+
 }
 
 /*
@@ -142,6 +147,7 @@ _grouping_by_timer_tick(GroupingBy *self)
 {
   GTimeVal now;
   glong diff;
+  gchar buf[256];
 
   g_static_mutex_lock(&self->lock);
   cached_g_current_time(&now);
@@ -149,15 +155,18 @@ _grouping_by_timer_tick(GroupingBy *self)
 
   if (diff > 1e6)
     {
-      glong diff_sec = diff / 1e6;
+      glong diff_sec = (glong)(diff / 1e6);
 
       timer_wheel_set_time(self->timer_wheel, timer_wheel_get_time(self->timer_wheel) + diff_sec);
-      msg_debug("Advancing correllate() current time because of timer tick",
-                evt_tag_long("utc", timer_wheel_get_time(self->timer_wheel)));
+      msg_debug("Advancing grouping-by() current time because of timer tick",
+                evt_tag_long("utc", timer_wheel_get_time(self->timer_wheel)),
+                evt_tag_str("location",
+                            log_expr_node_format_location(self->super.super.super.expr_node,
+                                                          buf, sizeof(buf))));
       /* update last_tick, take the fraction of the seconds not calculated into this update into account */
 
       self->last_tick = now;
-      g_time_val_add(&self->last_tick, -(diff - diff_sec * 1e6));
+      g_time_val_add(&self->last_tick, - (glong)(diff - diff_sec * 1e6));
     }
   else if (diff < 0)
     {
@@ -183,12 +192,29 @@ grouping_by_timer_tick(gpointer s)
 }
 
 static gboolean
+_evaluate_filter(FilterExprNode *expr, CorrellationContext *context)
+{
+  return filter_expr_eval_with_context(expr,
+                                       (LogMessage **) context->messages->pdata,
+                                       context->messages->len);
+}
+
+static gboolean
 _evaluate_having(GroupingBy *self, CorrellationContext *context)
 {
   if (!self->having_condition_expr)
     return TRUE;
 
-  return filter_expr_eval_with_context(self->having_condition_expr, (LogMessage **) context->messages->pdata, context->messages->len);
+  return _evaluate_filter(self->having_condition_expr, context);
+}
+
+static gboolean
+_evaluate_trigger(GroupingBy *self, CorrellationContext *context)
+{
+  if (!self->trigger_condition_expr)
+    return FALSE;
+
+  return _evaluate_filter(self->trigger_condition_expr, context);
 }
 
 static void
@@ -224,7 +250,7 @@ grouping_by_expire_entry(TimerWheel *wheel, guint64 now, gpointer user_data)
   GroupingBy *self = (GroupingBy *) timer_wheel_get_associated_data(wheel);
   gchar buf[256];
 
-  msg_debug("Expiring correllate() correllation context",
+  msg_debug("Expiring grouping-by() correllation context",
             evt_tag_long("utc", timer_wheel_get_time(wheel)),
             evt_tag_str("context-id", context->key.session_id),
             evt_tag_str("location",
@@ -244,7 +270,7 @@ grouping_by_format_persist_name(GroupingBy *self)
 {
   static gchar persist_name[512];
 
-  g_snprintf(persist_name, sizeof(persist_name), "correllation()");
+  g_snprintf(persist_name, sizeof(persist_name), "grouping-by()");
   return persist_name;
 }
 
@@ -293,16 +319,15 @@ _perform_groupby(GroupingBy *self, LogMessage *msg)
 
       g_ptr_array_add(context->messages, log_msg_ref(msg));
 
-      if (self->trigger_condition_expr &&
-          filter_expr_eval(self->trigger_condition_expr, msg))
+      if (_evaluate_trigger(self, context))
         {
-          msg_verbose("Correllation close-condition() met, closing state",
-                    evt_tag_str("key", context->key.session_id),
-                    evt_tag_int("timeout", self->timeout),
-                    evt_tag_int("num_messages", context->messages->len),
-                    evt_tag_str("location",
-                                log_expr_node_format_location(self->super.super.super.expr_node,
-                                                              buf, sizeof(buf))));
+          msg_verbose("Correllation trigger() met, closing state",
+                      evt_tag_str("key", context->key.session_id),
+                      evt_tag_int("timeout", self->timeout),
+                      evt_tag_int("num_messages", context->messages->len),
+                      evt_tag_str("location",
+                                  log_expr_node_format_location(self->super.super.super.expr_node,
+                                                                buf, sizeof(buf))));
           /* close down state */
           if (context->timer)
             timer_wheel_del_timer(self->timer_wheel, context->timer);
@@ -317,7 +342,8 @@ _perform_groupby(GroupingBy *self, LogMessage *msg)
             }
           else
             {
-              context->timer = timer_wheel_add_timer(self->timer_wheel, self->timeout, grouping_by_expire_entry, correllation_context_ref(context), (GDestroyNotify) correllation_context_unref);
+              context->timer = timer_wheel_add_timer(self->timer_wheel, self->timeout, grouping_by_expire_entry,
+                                                     correllation_context_ref(context), (GDestroyNotify) correllation_context_unref);
             }
         }
     }
@@ -345,7 +371,8 @@ _evaluate_where(GroupingBy *self, LogMessage **pmsg, const LogPathOptions *path_
 }
 
 static gboolean
-grouping_by_process(LogParser *s, LogMessage **pmsg, const LogPathOptions *path_options, const char *input, gsize input_len)
+grouping_by_process(LogParser *s, LogMessage **pmsg, const LogPathOptions *path_options, const char *input,
+                    gsize input_len)
 {
   GroupingBy *self = (GroupingBy *) s;
 
@@ -360,6 +387,25 @@ grouping_by_init(LogPipe *s)
   GroupingBy *self = (GroupingBy *) s;
   GlobalConfig *cfg = log_pipe_get_config(s);
 
+  if (!self->synthetic_message)
+    {
+      msg_error("The aggregate() option for grouping-by() is mandatory",
+                log_pipe_location_tag(s));
+      return FALSE;
+    }
+  if (self->timeout < 1)
+    {
+      msg_error("timeout() needs to be specified explicitly and must be greater than 0 in the grouping-by() parser",
+                log_pipe_location_tag(s));
+      return FALSE;
+    }
+  if (!self->key_template)
+    {
+      msg_error("The key() option is mandatory for the grouping-by() parser",
+                log_pipe_location_tag(s));
+      return FALSE;
+    }
+
   self->correllation = cfg_persist_config_fetch(cfg, grouping_by_format_persist_name(self));
   if (!self->correllation)
     {
@@ -373,7 +419,7 @@ grouping_by_init(LogPipe *s)
   self->tick.expires.tv_sec++;
   self->tick.expires.tv_nsec = 0;
   iv_timer_register(&self->tick);
-  return TRUE;
+  return stateful_parser_init_method(s);
 }
 
 static gboolean
@@ -387,9 +433,10 @@ grouping_by_deinit(LogPipe *s)
       iv_timer_unregister(&self->tick);
     }
 
-  cfg_persist_config_add(cfg, grouping_by_format_persist_name(self), self->correllation, (GDestroyNotify) correllation_state_free, FALSE);
+  cfg_persist_config_add(cfg, grouping_by_format_persist_name(self), self->correllation,
+                         (GDestroyNotify) correllation_state_free, FALSE);
   self->correllation = NULL;
-  return TRUE;
+  return stateful_parser_deinit_method(s);
 }
 
 static LogPipe *
@@ -434,6 +481,7 @@ grouping_by_new(GlobalConfig *cfg)
   self->timer_wheel = timer_wheel_new();
   timer_wheel_set_associated_data(self->timer_wheel, self, NULL);
   cached_g_current_time(&self->last_tick);
+  self->timeout = -1;
   return &self->super.super;
 }
 

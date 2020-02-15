@@ -38,6 +38,11 @@ extern CfgParser java_parser;
 static Plugin java_plugins[] =
 {
   {
+    .type = LL_CONTEXT_OPTIONS,
+    .name = "jvm_options",
+    .parser = &java_parser,
+  },
+  {
     .type = LL_CONTEXT_DESTINATION,
     .name = "java",
     .parser = &java_parser,
@@ -45,9 +50,9 @@ static Plugin java_plugins[] =
 };
 
 gboolean
-java_module_init(GlobalConfig *cfg, CfgArgs *args)
+java_module_init(PluginContext *context, CfgArgs *args)
 {
-  plugin_register(cfg, java_plugins, G_N_ELEMENTS(java_plugins));
+  plugin_register(context, java_plugins, G_N_ELEMENTS(java_plugins));
   return TRUE;
 }
 

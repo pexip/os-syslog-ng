@@ -26,13 +26,15 @@
 #include "compat.h"
 #include <string.h>
 
+#include <stddef.h>
+
 #if !SYSLOG_NG_HAVE_STRTOLL
 # if SYSLOG_NG_HAVE_STRTOIMAX || defined(strtoimax)
-   /* HP-UX has an strtoimax macro, not a function */
-   #define strtoll(nptr, endptr, base) strtoimax(nptr, endptr, base)
+/* HP-UX has an strtoimax macro, not a function */
+#define strtoll(nptr, endptr, base) strtoimax(nptr, endptr, base)
 # else
-   /* this requires Glib 2.12 */
-   #define strtoll(nptr, endptr, base) g_ascii_strtoll(nptr, endptr, base)
+/* this requires Glib 2.12 */
+#define strtoll(nptr, endptr, base) g_ascii_strtoll(nptr, endptr, base)
 # endif
 #endif
 
@@ -47,4 +49,8 @@ void *memrchr(const void *s, int c, size_t n);
 #ifndef SYSLOG_NG_HAVE_STRTOK_R
 char *strtok_r(char *string, const char *delim, char **saveptr);
 #endif
+#endif
+
+#if !SYSLOG_NG_HAVE_STRNLEN
+size_t strnlen(const char *s, size_t maxlen);
 #endif

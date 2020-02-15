@@ -93,17 +93,23 @@ afsocket_sc_init(LogPipe *s)
       if (!transport)
         return FALSE;
 
-      proto = log_proto_server_factory_construct(self->owner->proto_factory, transport, &self->owner->reader_options.proto_options.super);
+      proto = log_proto_server_factory_construct(self->owner->proto_factory, transport,
+                                                 &self->owner->reader_options.proto_options.super);
+      if (!proto)
+        {
+          log_transport_free(transport);
+          return FALSE;
+        }
+
       self->reader = log_reader_new(s->cfg);
       log_reader_reopen(self->reader, proto, poll_fd_events_new(self->sock));
       log_reader_set_peer_addr(self->reader, self->peer_addr);
     }
-  log_reader_set_options(self->reader, s,
+  log_reader_set_options(self->reader, &self->super,
                          &self->owner->reader_options,
-                         STATS_LEVEL1,
-                         self->owner->transport_mapper->stats_source,
                          self->owner->super.super.id,
                          afsocket_sc_stats_instance(self));
+
   log_pipe_append((LogPipe *) self->reader, s);
   if (log_pipe_init((LogPipe *) self->reader))
     {
@@ -138,11 +144,13 @@ afsocket_sc_notify(LogPipe *s, gint notify_code, gpointer user_data)
     {
     case NC_CLOSE:
     case NC_READ_ERROR:
-      {
-        if (self->owner->transport_mapper->sock_type == SOCK_STREAM)
-          afsocket_sd_close_connection(self->owner, self);
-        break;
-      }
+    {
+      if (self->owner->transport_mapper->sock_type == SOCK_STREAM)
+        afsocket_sd_close_connection(self->owner, self);
+      break;
+    }
+    default:
+      break;
     }
 }
 
@@ -241,7 +249,7 @@ afsocket_sd_set_keep_alive(LogDriver *s, gint enable)
 {
   AFSocketSourceDriver *self = (AFSocketSourceDriver *) s;
 
-  self->connections_kept_alive_accross_reloads = enable;
+  self->connections_kept_alive_across_reloads = enable;
 }
 
 void
@@ -250,6 +258,14 @@ afsocket_sd_set_max_connections(LogDriver *s, gint max_connections)
   AFSocketSourceDriver *self = (AFSocketSourceDriver *) s;
 
   self->max_connections = max_connections;
+}
+
+void
+afsocket_sd_set_listen_backlog(LogDriver *s, gint listen_backlog)
+{
+  AFSocketSourceDriver *self = (AFSocketSourceDriver *) s;
+
+  self->listen_backlog = listen_backlog;
 }
 
 static const gchar *
@@ -304,9 +320,9 @@ afsocket_sd_process_connection(AFSocketSourceDriver *self, GSockAddr *client_add
 #if SYSLOG_NG_ENABLE_TCP_WRAPPER
   if (client_addr && (client_addr->sa.sa_family == AF_INET
 #if SYSLOG_NG_ENABLE_IPV6
-                   || client_addr->sa.sa_family == AF_INET6
+                      || client_addr->sa.sa_family == AF_INET6
 #endif
-     ))
+                     ))
     {
       struct request_info req;
 
@@ -378,7 +394,7 @@ afsocket_sd_accept(gpointer s)
       else if (status != G_IO_STATUS_NORMAL)
         {
           msg_error("Error accepting new connection",
-                    evt_tag_errno(EVT_TAG_OSERROR, errno));
+                    evt_tag_error(EVT_TAG_OSERROR));
           return;
         }
 
@@ -391,9 +407,9 @@ afsocket_sd_accept(gpointer s)
         {
           if (peer_addr->sa.sa_family != AF_UNIX)
             msg_notice("Syslog connection accepted",
-                        evt_tag_int("fd", new_fd),
-                        evt_tag_str("client", g_sockaddr_format(peer_addr, buf1, sizeof(buf1), GSA_FULL)),
-                        evt_tag_str("local", g_sockaddr_format(self->bind_addr, buf2, sizeof(buf2), GSA_FULL)));
+                       evt_tag_int("fd", new_fd),
+                       evt_tag_str("client", g_sockaddr_format(peer_addr, buf1, sizeof(buf1), GSA_FULL)),
+                       evt_tag_str("local", g_sockaddr_format(self->bind_addr, buf2, sizeof(buf2), GSA_FULL)));
           else
             msg_verbose("Syslog connection accepted",
                         evt_tag_int("fd", new_fd),
@@ -423,9 +439,11 @@ afsocket_sd_close_connection(AFSocketSourceDriver *self, AFSocketSourceConnectio
                evt_tag_str("local", g_sockaddr_format(self->bind_addr, buf2, sizeof(buf2), GSA_FULL)));
   else
     msg_verbose("Syslog connection closed",
-               evt_tag_int("fd", sc->sock),
-               evt_tag_str("client", g_sockaddr_format(sc->peer_addr, buf1, sizeof(buf1), GSA_FULL)),
-               evt_tag_str("local", g_sockaddr_format(self->bind_addr, buf2, sizeof(buf2), GSA_FULL)));
+                evt_tag_int("fd", sc->sock),
+                evt_tag_str("client", g_sockaddr_format(sc->peer_addr, buf1, sizeof(buf1), GSA_FULL)),
+                evt_tag_str("local", g_sockaddr_format(self->bind_addr, buf2, sizeof(buf2), GSA_FULL)));
+
+  log_reader_close_proto(sc->reader);
   log_pipe_deinit(&sc->super);
   self->connections = g_list_remove(self->connections, sc);
   afsocket_sd_kill_connection(sc);
@@ -456,19 +474,21 @@ afsocket_sd_setup_reader_options(AFSocketSourceDriver *self)
 
   if (self->transport_mapper->sock_type == SOCK_STREAM && !self->window_size_initialized)
     {
-      /* distribute the window evenly between each of our possible
+      /* Distribute the window evenly between each of our possible
        * connections.  This is quite pessimistic and can result in very low
-       * window sizes. Increase that but warn the user at the same time
+       * window sizes. Increase that but warn the user at the same time.
        */
 
       self->reader_options.super.init_window_size /= self->max_connections;
-      if (self->reader_options.super.init_window_size < 100)
+      if (self->reader_options.super.init_window_size < cfg->min_iw_size_per_reader)
         {
-          msg_warning("WARNING: window sizing for tcp sources were changed in " VERSION_3_3 ", the configuration value was divided by the value of max-connections(). The result was too small, clamping to 100 entries. Ensure you have a proper log_fifo_size setting to avoid message loss.",
+          msg_warning("WARNING: window sizing for tcp sources were changed in " VERSION_3_3
+                      ", the configuration value was divided by the value of max-connections(). The result was too small, clamping to value of min_iw_size_per_reader. Ensure you have a proper log_fifo_size setting to avoid message loss.",
                       evt_tag_int("orig_log_iw_size", self->reader_options.super.init_window_size),
-                      evt_tag_int("new_log_iw_size", 100),
-                      evt_tag_int("min_log_fifo_size", 100 * self->max_connections));
-          self->reader_options.super.init_window_size = 100;
+                      evt_tag_int("new_log_iw_size", cfg->min_iw_size_per_reader),
+                      evt_tag_int("min_iw_size_per_reader", cfg->min_iw_size_per_reader),
+                      evt_tag_int("min_log_fifo_size", cfg->min_iw_size_per_reader * self->max_connections));
+          self->reader_options.super.init_window_size = cfg->min_iw_size_per_reader;
         }
       self->window_size_initialized = TRUE;
     }
@@ -484,13 +504,17 @@ afsocket_sd_setup_transport(AFSocketSourceDriver *self)
   if (!transport_mapper_apply_transport(self->transport_mapper, cfg))
     return FALSE;
 
-  self->proto_factory = log_proto_server_get_factory(cfg, self->transport_mapper->logproto);
+  if (!self->proto_factory)
+    self->proto_factory = log_proto_server_get_factory(&cfg->plugin_context, self->transport_mapper->logproto);
+
   if (!self->proto_factory)
     {
       msg_error("Unknown value specified in the transport() option, no such LogProto plugin found",
                 evt_tag_str("transport", self->transport_mapper->logproto));
       return FALSE;
     }
+
+  self->transport_mapper->create_multitransport = self->proto_factory->use_multitransport;
 
   afsocket_sd_setup_reader_options(self);
   return TRUE;
@@ -502,7 +526,7 @@ afsocket_sd_restore_kept_alive_connections(AFSocketSourceDriver *self)
   GlobalConfig *cfg = log_pipe_get_config(&self->super.super.super);
 
   /* fetch persistent connections first */
-  if (self->connections_kept_alive_accross_reloads)
+  if (self->connections_kept_alive_across_reloads)
     {
       GList *p = NULL;
       self->connections = cfg_persist_config_fetch(cfg, afsocket_sd_format_connections_name(self));
@@ -528,62 +552,85 @@ afsocket_sd_restore_kept_alive_connections(AFSocketSourceDriver *self)
 }
 
 static gboolean
-afsocket_sd_open_listener(AFSocketSourceDriver *self)
+_finalize_init(gpointer arg)
+{
+  AFSocketSourceDriver *self = (AFSocketSourceDriver *)arg;
+  /* set up listening source */
+  if (listen(self->fd, self->listen_backlog) < 0)
+    {
+      msg_error("Error during listen()",
+                evt_tag_error(EVT_TAG_OSERROR));
+      close(self->fd);
+      self->fd = -1;
+      return FALSE;
+    }
+
+  afsocket_sd_start_watches(self);
+  char buf[256];
+  msg_info("Accepting connections",
+           evt_tag_str("addr", g_sockaddr_format(self->bind_addr, buf, sizeof(buf), GSA_FULL)));
+  return TRUE;
+}
+
+static gboolean
+_sd_open_stream(AFSocketSourceDriver *self)
 {
   GlobalConfig *cfg = log_pipe_get_config(&self->super.super.super);
-  gint sock;
-  gboolean res = FALSE;
+  gint sock = -1;
+  if (self->connections_kept_alive_across_reloads)
+    {
+      /* NOTE: this assumes that fd 0 will never be used for listening fds,
+       * main.c opens fd 0 so this assumption can hold */
+      sock = GPOINTER_TO_UINT(
+               cfg_persist_config_fetch(cfg, afsocket_sd_format_listener_name(self))) -
+             1;
+    }
 
-  /* ok, we have connection list, check if we need to open a listener */
-  sock = -1;
+  if (sock == -1)
+    {
+      if (!afsocket_sd_acquire_socket(self, &sock))
+        return self->super.super.optional;
+      if (sock == -1
+          && !transport_mapper_open_socket(self->transport_mapper, self->socket_options, self->bind_addr, AFSOCKET_DIR_RECV,
+                                           &sock))
+        return self->super.super.optional;
+    }
+  self->fd = sock;
+  return transport_mapper_async_init(self->transport_mapper, _finalize_init, self);
+}
+
+static gboolean
+_sd_open_dgram(AFSocketSourceDriver *self)
+{
+  gint sock = -1;
+  if (!self->connections)
+    {
+      if (!afsocket_sd_acquire_socket(self, &sock))
+        return self->super.super.optional;
+      if (sock == -1
+          && !transport_mapper_open_socket(self->transport_mapper, self->socket_options, self->bind_addr, AFSOCKET_DIR_RECV,
+                                           &sock))
+        return self->super.super.optional;
+    }
+  self->fd = -1;
+
+  /* we either have self->connections != NULL, or sock contains a new fd */
+  if (self->connections || afsocket_sd_process_connection(self, NULL, self->bind_addr, sock))
+    return transport_mapper_init(self->transport_mapper);
+  return FALSE;
+}
+
+static gboolean
+afsocket_sd_open_listener(AFSocketSourceDriver *self)
+{
   if (self->transport_mapper->sock_type == SOCK_STREAM)
     {
-      if (self->connections_kept_alive_accross_reloads)
-        {
-          /* NOTE: this assumes that fd 0 will never be used for listening fds,
-           * main.c opens fd 0 so this assumption can hold */
-          sock = GPOINTER_TO_UINT(
-                     cfg_persist_config_fetch(cfg, afsocket_sd_format_listener_name(self))) -
-                 1;
-        }
-
-      if (sock == -1)
-        {
-          if (!afsocket_sd_acquire_socket(self, &sock))
-            return self->super.super.optional;
-          if (sock == -1 && !transport_mapper_open_socket(self->transport_mapper, self->socket_options, self->bind_addr, AFSOCKET_DIR_RECV, &sock))
-            return self->super.super.optional;
-        }
-
-      /* set up listening source */
-      if (listen(sock, self->listen_backlog) < 0)
-        {
-          msg_error("Error during listen()",
-                    evt_tag_errno(EVT_TAG_OSERROR, errno));
-          close(sock);
-          return FALSE;
-        }
-
-      self->fd = sock;
-      afsocket_sd_start_watches(self);
-      res = TRUE;
+      return _sd_open_stream(self);
     }
   else
     {
-      if (!self->connections)
-        {
-          if (!afsocket_sd_acquire_socket(self, &sock))
-            return self->super.super.optional;
-          if (sock == -1 && !transport_mapper_open_socket(self->transport_mapper, self->socket_options, self->bind_addr, AFSOCKET_DIR_RECV, &sock))
-            return self->super.super.optional;
-        }
-      self->fd = -1;
-
-      /* we either have self->connections != NULL, or sock contains a new fd */
-      if (self->connections || afsocket_sd_process_connection(self, NULL, self->bind_addr, sock))
-        res = TRUE;
+      return _sd_open_dgram(self);
     }
-  return res;
 }
 
 static void
@@ -598,7 +645,7 @@ afsocket_sd_save_connections(AFSocketSourceDriver *self)
 {
   GlobalConfig *cfg = log_pipe_get_config(&self->super.super.super);
 
-  if (!self->connections_kept_alive_accross_reloads || !cfg->persist)
+  if (!self->connections_kept_alive_across_reloads || !cfg->persist)
     {
       afsocket_sd_kill_connection_list(self->connections);
     }
@@ -627,7 +674,7 @@ afsocket_sd_save_listener(AFSocketSourceDriver *self)
   if (self->transport_mapper->sock_type == SOCK_STREAM)
     {
       afsocket_sd_stop_watches(self);
-      if (!self->connections_kept_alive_accross_reloads)
+      if (!self->connections_kept_alive_across_reloads)
         {
           msg_verbose("Closing listener fd",
                       evt_tag_int("fd", self->fd));
@@ -681,10 +728,12 @@ afsocket_sd_notify(LogPipe *s, gint notify_code, gpointer user_data)
     {
     case NC_CLOSE:
     case NC_READ_ERROR:
-      {
-        g_assert_not_reached();
-        break;
-      }
+    {
+      g_assert_not_reached();
+      break;
+    }
+    default:
+      break;
     }
 }
 
@@ -719,8 +768,10 @@ afsocket_sd_init_instance(AFSocketSourceDriver *self,
   self->transport_mapper = transport_mapper;
   self->max_connections = 10;
   self->listen_backlog = 255;
-  self->connections_kept_alive_accross_reloads = TRUE;
+  self->connections_kept_alive_across_reloads = TRUE;
   log_reader_options_defaults(&self->reader_options);
+  self->reader_options.super.stats_level = STATS_LEVEL1;
+  self->reader_options.super.stats_source = transport_mapper->stats_source;
 
   /* NOTE: this changes the initial window size from 100 to 1000. Reasons:
    * Starting with syslog-ng 3.3, window-size is distributed evenly between

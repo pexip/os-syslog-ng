@@ -32,6 +32,20 @@
 
 static struct iv_work_pool main_loop_io_workers;
 
+static void
+_release(MainLoopIOWorkerJob *self)
+{
+  if (self->release)
+    self->release(self->user_data);
+}
+
+static void
+_engage(MainLoopIOWorkerJob *self)
+{
+  if (self->engage)
+    self->engage(self->user_data);
+}
+
 /* NOTE: runs in the main thread */
 void
 main_loop_io_worker_job_submit(MainLoopIOWorkerJob *self)
@@ -39,6 +53,8 @@ main_loop_io_worker_job_submit(MainLoopIOWorkerJob *self)
   g_assert(self->working == FALSE);
   if (main_loop_workers_quit)
     return;
+
+  _engage(self);
   main_loop_worker_job_start();
   self->working = TRUE;
   iv_work_pool_submit_work(&main_loop_io_workers, &self->work_item);
@@ -51,6 +67,7 @@ _work(MainLoopIOWorkerJob *self)
 {
   self->work(self->user_data);
   main_loop_worker_invoke_batch_callbacks();
+  main_loop_worker_run_gc();
 }
 
 /* NOTE: runs in the main thread */
@@ -60,6 +77,7 @@ _complete(MainLoopIOWorkerJob *self)
   self->working = FALSE;
   self->completion(self->user_data);
   main_loop_worker_job_complete();
+  _release(self);
 }
 
 void
@@ -86,13 +104,14 @@ main_loop_io_worker_init(void)
 {
   if (main_loop_io_workers.max_threads == 0)
     {
-      main_loop_io_workers.max_threads = MIN(MAX(MAIN_LOOP_MIN_WORKER_THREADS, get_processor_count()), MAIN_LOOP_MAX_WORKER_THREADS);
+      main_loop_io_workers.max_threads = MIN(MAX(MAIN_LOOP_MIN_WORKER_THREADS, get_processor_count()),
+                                             MAIN_LOOP_MAX_WORKER_THREADS);
     }
 
   main_loop_io_workers.thread_start = (void (*)(void *)) main_loop_worker_thread_start;
   main_loop_io_workers.thread_stop = (void (*)(void *)) main_loop_worker_thread_stop;
   iv_work_pool_create(&main_loop_io_workers);
-  
+
   log_queue_set_max_threads(MIN(main_loop_io_workers.max_threads, MAIN_LOOP_MAX_WORKER_THREADS));
 }
 

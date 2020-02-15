@@ -33,7 +33,8 @@ typedef struct _UserTemplateFunction
 } UserTemplateFunction;
 
 static gboolean
-user_template_function_prepare(LogTemplateFunction *s, gpointer state, LogTemplate *parent, gint argc, gchar *argv[], GError **error)
+user_template_function_prepare(LogTemplateFunction *s, gpointer state, LogTemplate *parent, gint argc, gchar *argv[],
+                               GError **error)
 {
   UserTemplateFunction *self = (UserTemplateFunction *) s;
 
@@ -41,7 +42,8 @@ user_template_function_prepare(LogTemplateFunction *s, gpointer state, LogTempla
 
   if (argc != 1)
     {
-      g_set_error(error, LOG_TEMPLATE_ERROR, LOG_TEMPLATE_ERROR_COMPILE, "User defined template function $(%s) cannot have arguments", self->name);
+      g_set_error(error, LOG_TEMPLATE_ERROR, LOG_TEMPLATE_ERROR_COMPILE,
+                  "User defined template function $(%s) cannot have arguments", self->name);
       return FALSE;
     }
   return TRUE;
@@ -52,7 +54,8 @@ user_template_function_call(LogTemplateFunction *s, gpointer state, const LogTem
 {
   UserTemplateFunction *self = (UserTemplateFunction *) s;
 
-  log_template_append_format_with_context(self->template, args->messages, args->num_messages, args->opts, args->tz, args->seq_num, args->context_id, result);
+  log_template_append_format_with_context(self->template, args->messages, args->num_messages, args->opts, args->tz,
+                                          args->seq_num, args->context_id, result);
 }
 
 static void
@@ -87,7 +90,7 @@ typedef struct _UserTemplateFunctionPlugin
 } UserTemplateFunctionPlugin;
 
 static gpointer
-user_template_function_construct(Plugin *s, GlobalConfig *cfg, gint plugin_type, const gchar *plugin_name)
+user_template_function_construct(Plugin *s)
 {
   UserTemplateFunctionPlugin *self = (UserTemplateFunctionPlugin *) s;
 
@@ -113,9 +116,8 @@ user_template_function_register(GlobalConfig *cfg, const gchar *name, LogTemplat
   plugin->super.type = LL_CONTEXT_TEMPLATE_FUNC;
   plugin->super.name = g_strdup(name);
   plugin->super.parser = NULL;
-  plugin->super.setup_context = NULL;
   plugin->super.construct = user_template_function_construct;
   plugin->super.free_fn = user_template_function_plugin_free;
   plugin->template = log_template_ref(template);
-  plugin_register(cfg, &plugin->super, 1);
+  plugin_register(&cfg->plugin_context, &plugin->super, 1);
 }

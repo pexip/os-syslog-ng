@@ -26,7 +26,7 @@
 #include "userdb.h"
 #include "messages.h"
 #include "reloc.h"
- 
+
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
@@ -54,7 +54,7 @@
 
 /*
  * NOTES:
- * 
+ *
  * * pidfile is created and removed by the daemon (e.g. the child) itself,
  *   the parent does not touch that
  *
@@ -65,7 +65,7 @@
  *   - startup process which was started by the user (zorpctl)
  *   - supervisor process which automatically restarts the daemon when it exits abnormally
  *   - daemon processes which perform the actual task at hand
- *   
+ *
  *   The startup process delivers the result of the first startup to its
  *   caller, if we can deliver a failure in this case then restarts will not
  *   be performed (e.g. if the first startup fails, the daemon will not be
@@ -81,8 +81,8 @@
  *   init_result_pipe (as in "initialization") is used to deliver success
  *   reports from the daemon to the supervisor.
  */
- 
- 
+
+
 typedef enum
 {
   G_PK_STARTUP,
@@ -102,6 +102,10 @@ static GProcessKind process_kind = G_PK_STARTUP;
 static gboolean stderr_present = TRUE;
 #if SYSLOG_NG_ENABLE_LINUX_CAPS
 static int have_capsyslog = FALSE;
+static cap_value_t cap_syslog;
+#endif
+#ifdef SYSLOG_NG_HAVE_ENVIRON
+extern char **environ;
 #endif
 
 /* global variables */
@@ -118,6 +122,7 @@ static struct
   const gchar *pidfile_dir;
   const gchar *cwd;
   const gchar *caps;
+  gboolean enable_caps;
   gint  argc;
   gchar **argv;
   gchar *argv_start;
@@ -138,7 +143,9 @@ static struct
   .check_period = -1,
   .check_fn = NULL,
   .uid = -1,
-  .gid = -1
+  .gid = -1,
+  .enable_caps = TRUE,
+  .caps = NULL
 };
 
 #if SYSLOG_NG_ENABLE_SYSTEMD
@@ -149,7 +156,7 @@ static struct
  * @return same as sd_listen_fds
  *   r == 0: no socket activation or this process is not responsible
  *   r >  0: success, number of sockets
- *   r <  0: an error occured
+ *   r <  0: an error occurred
  */
 static int
 inherit_systemd_activation(void)
@@ -199,57 +206,101 @@ inherit_systemd_activation(void)
 
 #if SYSLOG_NG_ENABLE_LINUX_CAPS
 
+typedef enum _cap_result_type
+{
+  CAP_NOT_SUPPORTED_BY_KERNEL = -2,
+  CAP_NOT_SUPPORTED_BY_LIBCAP = -1,
+  CAP_SUPPORTED               =  1,
+} cap_result_type;
+
+static cap_result_type
+_check_and_get_cap_from_text(const gchar *cap_text, cap_value_t *cap)
+{
+  int ret;
+
+  ret = cap_from_name(cap_text, cap);
+  if (ret == -1)
+    {
+      return CAP_NOT_SUPPORTED_BY_LIBCAP;
+    }
+
+  ret = prctl(PR_CAPBSET_READ, *cap);
+  if (ret == -1)
+    {
+      return CAP_NOT_SUPPORTED_BY_KERNEL;
+    }
+
+  return CAP_SUPPORTED;
+}
+
+static EVTTAG *
+evt_tag_cap_t(const char *tag, cap_t cap)
+{
+  gchar *cap_text = cap_to_text(cap, NULL);
+  EVTTAG *evt_tag = evt_tag_str(tag, cap_text);
+
+  cap_free(cap_text);
+
+  return evt_tag;
+}
+
 /**
- * g_process_cap_modify:
- * @capability: capability to turn off or on
- * @onoff: specifies whether the capability should be enabled or disabled
+ * g_process_enable_cap:
+ * @capability: capability to turn on
  *
  * This function modifies the current permitted set of capabilities by
- * enabling or disabling the capability specified in @capability.
+ * enabling the capability specified in @capability.
  *
  * Returns: whether the operation was successful.
  **/
-gboolean 
-g_process_cap_modify(int capability, int onoff)
+gboolean
+g_process_enable_cap(const gchar *cap_name)
 {
-  cap_t caps;
-
-  if (!process_opts.caps)
+  if (!g_process_is_cap_enabled())
     return TRUE;
+
+  cap_value_t capability;
+
+  cap_result_type ret = _check_and_get_cap_from_text(cap_name, &capability);
+  if (CAP_SUPPORTED != ret)
+    return FALSE;
 
   /*
    * if libcap or kernel doesn't support cap_syslog, then resort to
    * cap_sys_admin
    */
-  if (capability == CAP_SYSLOG && (!have_capsyslog || CAP_SYSLOG == -1))
-    capability = CAP_SYS_ADMIN;
+  if (capability == cap_syslog && !have_capsyslog)
+    {
+      ret = _check_and_get_cap_from_text("cap_sys_admin", &capability);
+      if (ret != CAP_SUPPORTED)
+        return FALSE;
+    }
 
-  caps = cap_get_proc();
+  cap_t caps = cap_get_proc();
   if (!caps)
     return FALSE;
 
-  if (cap_set_flag(caps, CAP_EFFECTIVE, 1, &capability, onoff) == -1)
+  if (cap_set_flag(caps, CAP_EFFECTIVE, 1, &capability, CAP_SET) == -1)
     {
-      msg_error("Error managing capability set, cap_set_flag returned an error",
-                evt_tag_errno("error", errno));
-      cap_free(caps);
-      return FALSE;
+      goto error;
     }
 
   if (cap_set_proc(caps) == -1)
     {
-      gchar *cap_text;
-
-      cap_text = cap_to_text(caps, NULL);
-      msg_error("Error managing capability set, cap_set_proc returned an error",
-                evt_tag_str("caps", cap_text),
-                evt_tag_errno("error", errno));
-      cap_free(cap_text);
-      cap_free(caps);
-      return FALSE;
+      goto error;
     }
+
   cap_free(caps);
   return TRUE;
+
+error:
+
+  msg_error("Error managing capability set",
+            evt_tag_cap_t("caps", caps),
+            evt_tag_error("error"));
+
+  cap_free(caps);
+  return FALSE;
 }
 
 /**
@@ -260,10 +311,10 @@ g_process_cap_modify(int capability, int onoff)
  *
  * Returns: the current set of capabilities
  **/
-cap_t 
+cap_t
 g_process_cap_save(void)
 {
-  if (!process_opts.caps)
+  if (!g_process_is_cap_enabled())
     return NULL;
 
   return cap_get_proc();
@@ -282,24 +333,17 @@ g_process_cap_restore(cap_t r)
 {
   gboolean rc;
 
-  if (!process_opts.caps)
+  if (!g_process_is_cap_enabled())
     return;
 
   rc = cap_set_proc(r) != -1;
-  cap_free(r);
   if (!rc)
     {
-      gchar *cap_text;
-
-      cap_text = cap_to_text(r, NULL);
       msg_error("Error managing capability set, cap_set_proc returned an error",
-                evt_tag_str("caps", cap_text),
-                evt_tag_errno("error", errno));
-      cap_free(cap_text);
-      return;
+                evt_tag_cap_t("caps", r),
+                evt_tag_error("error"));
     }
-  
-  return;
+  cap_free(r);
 }
 
 #ifndef PR_CAPBSET_READ
@@ -313,28 +357,46 @@ g_process_cap_restore(cap_t r)
 gboolean
 g_process_check_cap_syslog(void)
 {
-  int ret;
 
   if (have_capsyslog)
     return TRUE;
 
-  if (CAP_SYSLOG == -1)
-    return FALSE;
-
-  ret = prctl(PR_CAPBSET_READ, CAP_SYSLOG);
-  if (ret == -1)
-    return FALSE;
-
-  ret = cap_from_name("cap_syslog", NULL);
-  if (ret == -1)
+  switch (_check_and_get_cap_from_text("cap_syslog", &cap_syslog))
     {
-      fprintf (stderr, "CAP_SYSLOG seems to be supported by the system, but "
-	       "libcap can't parse it. Falling back to CAP_SYS_ADMIN!\n");
+    case CAP_NOT_SUPPORTED_BY_LIBCAP:
+      if (debug_flag)
+        {
+          fprintf (stderr, "The CAP_SYSLOG is not supported by libcap;"
+                   "Falling back to CAP_SYS_ADMIN!\n");
+        }
       return FALSE;
-    }
+      break;
 
-  have_capsyslog = TRUE;
-  return TRUE;
+    case CAP_NOT_SUPPORTED_BY_KERNEL:
+      if (debug_flag)
+        {
+          fprintf (stderr, "CAP_SYSLOG seems to be supported by libcap, but "
+                   "the kernel does not appear to recognize it. Falling back "
+                   "to CAP_SYS_ADMIN!\n");
+        }
+      return FALSE;
+      break;
+
+    case CAP_SUPPORTED:
+      have_capsyslog = TRUE;
+      return TRUE;
+      break;
+
+    default:
+      return FALSE;
+      break;
+    }
+}
+
+gboolean
+g_process_is_cap_enabled(void)
+{
+  return process_opts.enable_caps;
 }
 
 #endif
@@ -346,7 +408,7 @@ g_process_check_cap_syslog(void)
  * This function should be called by the daemon to set the processing mode
  * as specified by @mode.
  **/
-void 
+void
 g_process_set_mode(GProcessMode mode)
 {
   process_opts.mode = mode;
@@ -358,7 +420,7 @@ g_process_set_mode(GProcessMode mode)
  * Return the processing mode applied to the daemon.
  **/
 GProcessMode
-g_process_get_mode()
+g_process_get_mode(void)
 {
   return process_opts.mode;
 }
@@ -371,7 +433,7 @@ g_process_get_mode()
  * which is present in various error message and might influence the PID
  * file if not overridden by g_process_set_pidfile().
  **/
-void 
+void
 g_process_set_name(const gchar *name)
 {
   process_opts.name = name;
@@ -383,7 +445,7 @@ g_process_set_name(const gchar *name)
  *
  * This function should be called by the daemon to set the user name.
  **/
-void 
+void
 g_process_set_user(const gchar *user)
 {
   if (!process_opts.user)
@@ -398,7 +460,7 @@ g_process_set_user(const gchar *user)
  *
  * This function should be called by the daemon to set the group name.
  **/
-void 
+void
 g_process_set_group(const gchar *group)
 {
   if (!process_opts.group)
@@ -412,7 +474,7 @@ g_process_set_group(const gchar *group)
  *
  * This function should be called by the daemon to set the chroot directory
  **/
-void 
+void
 g_process_set_chroot(const gchar *chroot_dir)
 {
   if (!process_opts.chroot_dir)
@@ -428,7 +490,7 @@ g_process_set_chroot(const gchar *chroot_dir)
  * directly, neither name nor pidfile_dir influences the pidfile location if
  * this is set.
  **/
-void 
+void
 g_process_set_pidfile(const gchar *pidfile)
 {
   if (!process_opts.pidfile)
@@ -442,7 +504,7 @@ g_process_set_pidfile(const gchar *pidfile)
  * This function should be called by the daemon to set the PID file
  * directory. This value is not used if set_pidfile() was called.
  **/
-void 
+void
 g_process_set_pidfile_dir(const gchar *pidfile_dir)
 {
   if (!process_opts.pidfile_dir)
@@ -457,7 +519,7 @@ g_process_set_pidfile_dir(const gchar *pidfile_dir)
  * directory. The process will change its current directory to this value or
  * to pidfile_dir if it is unset.
  **/
-void 
+void
 g_process_set_working_dir(const gchar *cwd)
 {
   if (!process_opts.cwd)
@@ -473,7 +535,7 @@ g_process_set_working_dir(const gchar *cwd)
  * capability set. The process will change its capabilities to this value
  * during startup, provided it has enough permissions to do so.
  **/
-void 
+void
 g_process_set_caps(const gchar *caps)
 {
   if (!process_opts.caps)
@@ -492,7 +554,6 @@ void
 g_process_set_argv_space(gint argc, gchar **argv)
 {
 #ifdef SYSLOG_NG_HAVE_ENVIRON
-  extern char **environ;
   gchar *lastargv = NULL;
   gchar **envp    = environ;
   gint i;
@@ -501,12 +562,11 @@ g_process_set_argv_space(gint argc, gchar **argv)
     return;
   process_opts.argv = argv;
   process_opts.argc = argc;
-    
+
   for (i = 0; envp[i] != NULL; i++)
     ;
-  
-  environ = g_new(char *, i + 1);
 
+  environ = g_new(char *, i + 1);
   /*
    * Find the last argv string or environment variable within
    * our process memory area.
@@ -559,7 +619,7 @@ g_process_set_check(gint check_period, gboolean (*check_fn)(void))
  * g_process_message:
  * @fmt: format string
  * @...: arguments to @fmt
- * 
+ *
  * This function sends a message to the client preferring to use the stderr
  * channel as long as it is available and switching to using syslog() if it
  * isn't. Generally the stderr channell will be available in the startup
@@ -572,7 +632,7 @@ g_process_message(const gchar *fmt, ...)
 {
   gchar buf[2048];
   va_list ap;
-  
+
   va_start(ap, fmt);
   g_vsnprintf(buf, sizeof(buf), fmt, ap);
   va_end(ap);
@@ -581,7 +641,7 @@ g_process_message(const gchar *fmt, ...)
   else
     {
       gchar name[32];
-      
+
       g_snprintf(name, sizeof(name), "%s/%s", process_kind == G_PK_SUPERVISOR ? "supervise" : "daemon", process_opts.name);
       openlog(name, LOG_PID, LOG_DAEMON);
       syslog(LOG_CRIT, "%s\n", buf);
@@ -628,9 +688,10 @@ g_process_change_limits(void)
     {
       limit.rlim_cur = limit.rlim_max = process_opts.fd_limit_min;
     }
-  
+
   if (setrlimit(RLIMIT_NOFILE, &limit) < 0)
-    g_process_message("Error setting file number limit; limit='%d'; error='%s'", process_opts.fd_limit_min, g_strerror(errno));
+    g_process_message("Error setting file number limit; limit='%d'; error='%s'", process_opts.fd_limit_min,
+                      g_strerror(errno));
 }
 
 /**
@@ -663,6 +724,22 @@ g_process_detach_stdio(void)
     }
 }
 
+static void
+g_process_set_dumpable(void)
+{
+#if SYSLOG_NG_ENABLE_LINUX_CAPS
+  if (!prctl(PR_GET_DUMPABLE, 0, 0, 0, 0))
+    {
+      gint rc;
+
+      rc = prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
+
+      if (rc < 0)
+        g_process_message("Cannot set process to be dumpable; error='%s'", g_strerror(errno));
+    }
+#endif
+}
+
 /**
  * g_process_enable_core:
  *
@@ -676,22 +753,12 @@ g_process_enable_core(void)
 
   if (process_opts.core)
     {
-#if SYSLOG_NG_ENABLE_LINUX_CAPS
-      if (!prctl(PR_GET_DUMPABLE, 0, 0, 0, 0))
-        {
-          gint rc;
-
-          rc = prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
-
-          if (rc < 0)
-            g_process_message("Cannot set process to be dumpable; error='%s'", g_strerror(errno));
-        }
-#endif
+      g_process_set_dumpable();
 
       limit.rlim_cur = limit.rlim_max = RLIM_INFINITY;
       if (setrlimit(RLIMIT_CORE, &limit) < 0)
         g_process_message("Error setting core limit to infinity; error='%s'", g_strerror(errno));
-      
+
     }
 }
 
@@ -710,15 +777,18 @@ g_process_format_pidfile_name(gchar *buf, gsize buflen)
 
   if (pidfile == NULL)
     {
-      g_snprintf(buf, buflen, "%s/%s.pid", process_opts.pidfile_dir ? process_opts.pidfile_dir : get_installation_path_for(SYSLOG_NG_PATH_PIDFILEDIR), process_opts.name);
+      g_snprintf(buf, buflen, "%s/%s.pid",
+                 process_opts.pidfile_dir ? process_opts.pidfile_dir : get_installation_path_for(SYSLOG_NG_PATH_PIDFILEDIR),
+                 process_opts.name);
       pidfile = buf;
     }
   else if (pidfile[0] != '/')
     {
       /* complete path to pidfile not specified, assume it is a relative path to pidfile_dir */
-      g_snprintf(buf, buflen, "%s/%s", process_opts.pidfile_dir ? process_opts.pidfile_dir : get_installation_path_for(SYSLOG_NG_PATH_PIDFILEDIR), pidfile);
+      g_snprintf(buf, buflen, "%s/%s", process_opts.pidfile_dir ? process_opts.pidfile_dir : get_installation_path_for(
+                   SYSLOG_NG_PATH_PIDFILEDIR), pidfile);
       pidfile = buf;
-      
+
     }
   return pidfile;
 }
@@ -735,7 +805,7 @@ g_process_write_pidfile(pid_t pid)
   gchar buf[256];
   const gchar *pidfile;
   FILE *fd;
-  
+
   pidfile = g_process_format_pidfile_name(buf, sizeof(buf));
   fd = fopen(pidfile, "w");
   if (fd != NULL)
@@ -747,7 +817,7 @@ g_process_write_pidfile(pid_t pid)
     {
       g_process_message("Error creating pid file; file='%s', error='%s'", pidfile, g_strerror(errno));
     }
-  
+
 }
 
 /**
@@ -762,7 +832,7 @@ g_process_remove_pidfile(void)
   const gchar *pidfile;
 
   pidfile = g_process_format_pidfile_name(buf, sizeof(buf));
-  
+
   if (unlink(pidfile) < 0)
     {
       g_process_message("Error removing pid file; file='%s', error='%s'", pidfile, g_strerror(errno));
@@ -790,11 +860,21 @@ g_process_change_root(void)
         }
       if (chdir("/") < 0)
         {
-          g_process_message("Error in chdir() after chroot; chroot='%s', error='%s'\n", process_opts.chroot_dir, g_strerror(errno));
+          g_process_message("Error in chdir() after chroot; chroot='%s', error='%s'\n", process_opts.chroot_dir,
+                            g_strerror(errno));
           return FALSE;
         }
     }
   return TRUE;
+}
+
+static void
+g_process_keep_caps(void)
+{
+#if SYSLOG_NG_ENABLE_LINUX_CAPS
+  if (g_process_is_cap_enabled())
+    prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0);
+#endif
 }
 
 /**
@@ -809,16 +889,14 @@ g_process_change_root(void)
 static gboolean
 g_process_change_user(void)
 {
-#if SYSLOG_NG_ENABLE_LINUX_CAPS
-  if (process_opts.caps)
-    prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0);
-#endif
+  g_process_keep_caps();
 
   if (process_opts.gid >= 0)
     {
       if (setgid((gid_t) process_opts.gid) < 0)
         {
-          g_process_message("Error in setgid(); group='%s', gid='%d', error='%s'", process_opts.group, process_opts.gid, g_strerror(errno));
+          g_process_message("Error in setgid(); group='%s', gid='%d', error='%s'", process_opts.group, process_opts.gid,
+                            g_strerror(errno));
           if (getuid() == 0)
             return FALSE;
         }
@@ -834,12 +912,13 @@ g_process_change_user(void)
     {
       if (setuid((uid_t) process_opts.uid) < 0)
         {
-          g_process_message("Error in setuid(); user='%s', uid='%d', error='%s'", process_opts.user, process_opts.uid, g_strerror(errno));
+          g_process_message("Error in setuid(); user='%s', uid='%d', error='%s'", process_opts.user, process_opts.uid,
+                            g_strerror(errno));
           if (getuid() == 0)
             return FALSE;
         }
     }
-  
+
   return TRUE;
 }
 
@@ -857,7 +936,7 @@ g_process_change_user(void)
 static gboolean
 g_process_change_caps(void)
 {
-  if (process_opts.caps)
+  if (g_process_is_cap_enabled())
     {
       cap_t cap = cap_from_text(process_opts.caps);
 
@@ -865,6 +944,7 @@ g_process_change_caps(void)
         {
           g_process_message("Error parsing capabilities: %s", process_opts.caps);
           process_opts.caps = NULL;
+          process_opts.enable_caps = FALSE;
           return FALSE;
         }
       else
@@ -873,6 +953,7 @@ g_process_change_caps(void)
             {
               g_process_message("Error setting capabilities, capability management disabled; error='%s'", g_strerror(errno));
               process_opts.caps = NULL;
+              process_opts.enable_caps = FALSE;
 
             }
           cap_free(cap);
@@ -917,7 +998,7 @@ static void
 g_process_change_dir(void)
 {
   const gchar *cwd = NULL;
-  
+
   if (process_opts.mode != G_PM_FOREGROUND)
     {
       if (process_opts.cwd)
@@ -926,22 +1007,23 @@ g_process_change_dir(void)
         cwd = process_opts.pidfile_dir;
       if (!cwd)
         cwd = get_installation_path_for(SYSLOG_NG_PATH_PIDFILEDIR);
-        
+
       if (cwd)
         if (chdir(cwd))
           g_process_message("Error changing to directory=%s, errcode=%d", cwd, errno);
     }
-    
+
   /* this check is here to avoid having to change directory early in the startup process */
   if ((process_opts.core) && access(".", W_OK) < 0)
     {
       gchar buf[256];
-      
+
       if (!getcwd(buf, sizeof(buf)))
         strncpy(buf, "unable-to-query", sizeof(buf));
-      g_process_message("Unable to write to current directory, core dumps will not be generated; dir='%s', error='%s'", buf, g_strerror(errno));
+      g_process_message("Unable to write to current directory, core dumps will not be generated; dir='%s', error='%s'", buf,
+                        g_strerror(errno));
     }
-  
+
 }
 
 /**
@@ -966,14 +1048,14 @@ g_process_send_result(guint ret_num)
   gchar buf[10];
   guint buf_len;
   gint *fd;
-  
+
   if (process_kind == G_PK_SUPERVISOR)
     fd = &startup_result_pipe[1];
   else if (process_kind == G_PK_DAEMON)
     fd = &init_result_pipe[1];
   else
     g_assert_not_reached();
-    
+
   if (*fd != -1)
     {
       buf_len = g_snprintf(buf, sizeof(buf), "%d\n", ret_num);
@@ -981,12 +1063,12 @@ g_process_send_result(guint ret_num)
         g_assert_not_reached();
       close(*fd);
       *fd = -1;
-    }  
+    }
 }
 
 /**
  * g_process_recv_result:
- * 
+ *
  * Retrieves an exit code value from one of the result pipes depending on
  * which process the function was called from. This function can be called
  * only once, further invocations will return non-zero result code.
@@ -997,7 +1079,7 @@ g_process_recv_result(void)
   gchar ret_buf[6];
   gint ret_num = 1;
   gint *fd;
-  
+
   /* FIXME: use a timer */
   if (process_kind == G_PK_SUPERVISOR)
     fd = &init_result_pipe[0];
@@ -1005,7 +1087,7 @@ g_process_recv_result(void)
     fd = &startup_result_pipe[0];
   else
     g_assert_not_reached();
-  
+
   if (*fd != -1)
     {
       memset(ret_buf, 0, sizeof(ret_buf));
@@ -1026,7 +1108,7 @@ g_process_recv_result(void)
 
 /**
  * g_process_perform_startup:
- * 
+ *
  * This function is the startup process, never returns, the startup process exits here.
  **/
 static void
@@ -1040,16 +1122,16 @@ g_process_perform_startup(void)
 #define SPT_PADCHAR   '\0'
 
 static void
-g_process_setproctitle(const gchar* proc_title)
+g_process_setproctitle(const gchar *proc_title)
 {
 #ifdef SYSLOG_NG_HAVE_ENVIRON
   size_t len;
 
   g_assert(process_opts.argv_start != NULL);
-  
+
   len = g_strlcpy(process_opts.argv_start, proc_title, process_opts.argv_env_len);
   for (; len < process_opts.argv_env_len; ++len)
-      process_opts.argv_start[len] = SPT_PADCHAR;
+    process_opts.argv_start[len] = SPT_PADCHAR;
 #endif
 }
 
@@ -1072,7 +1154,7 @@ g_process_perform_supervise(void)
 
   g_snprintf(proc_title, PROC_TITLE_SPACE, "supervising %s", process_opts.name);
   g_process_setproctitle(proc_title);
-  
+
   memset(&sa, 0, sizeof(sa));
   sa.sa_handler = SIG_IGN;
   sigaction(SIGHUP, &sa, NULL);
@@ -1084,7 +1166,7 @@ g_process_perform_supervise(void)
           g_process_message("Error daemonizing process, cannot open pipe; error='%s'", g_strerror(errno));
           g_process_startup_failed(1, TRUE);
         }
-        
+
       /* fork off a child process */
       if ((pid = fork()) < 0)
         {
@@ -1095,13 +1177,13 @@ g_process_perform_supervise(void)
         {
           gint rc;
           gboolean deadlock = FALSE;
-          
+
           /* this is the supervisor process */
 
           /* shut down init_result_pipe write side */
           close(init_result_pipe[1]);
           init_result_pipe[1] = -1;
-          
+
           rc = g_process_recv_result();
           if (first)
             {
@@ -1116,7 +1198,7 @@ g_process_perform_supervise(void)
             {
               gint i = 0;
               /* initialization failed in daemon, it will probably exit soon, wait and restart */
-              
+
               while (i < 6 && waitpid(pid, &rc, WNOHANG) == 0)
                 {
                   if (i > 3)
@@ -1125,10 +1207,11 @@ g_process_perform_supervise(void)
                   i++;
                 }
               if (i == 6)
-                g_process_message("Initialization failed but the daemon did not exit, even when forced to, trying to recover; pid='%d'", pid);
+                g_process_message("Initialization failed but the daemon did not exit, even when forced to, trying to recover; pid='%d'",
+                                  pid);
               continue;
             }
-          
+
           if (process_opts.check_fn && (process_opts.check_period >= 0))
             {
               gint i = 1;
@@ -1149,7 +1232,7 @@ g_process_perform_supervise(void)
                   gint j = 0;
                   g_process_message("Daemon deadlock detected, killing process;");
                   deadlock = TRUE;
-              
+
                   while (j < 6 && waitpid(pid, &rc, WNOHANG) == 0)
                     {
                       if (j > 3)
@@ -1170,7 +1253,7 @@ g_process_perform_supervise(void)
             {
               gchar argbuf[64];
 
-              if (!access(G_PROCESS_FAILURE_NOTIFICATION, R_OK | X_OK)) 
+              if (!access(G_PROCESS_FAILURE_NOTIFICATION, R_OK | X_OK))
                 {
                   const gchar *notify_reason;
                   pid_t npid = fork();
@@ -1180,7 +1263,7 @@ g_process_perform_supervise(void)
                     case -1:
                       g_process_message("Could not fork for external notification; reason='%s'", strerror(errno));
                       break;
-    
+
                     case 0:
                       switch(fork())
                         {
@@ -1188,38 +1271,38 @@ g_process_perform_supervise(void)
                           g_process_message("Could not fork for external notification; reason='%s'", strerror(errno));
                           exit(1);
                           break;
-                        case 0: 
-			  if (deadlock)
-			    {
-			      notify_reason = "deadlock detected";
-			      argbuf[0] = 0;
-			    }
-			  else 
-			    {
-			      snprintf(argbuf, sizeof(argbuf), "%d", WIFSIGNALED(rc) ? WTERMSIG(rc) : WEXITSTATUS(rc));
-			      if (WIFSIGNALED(rc))
-				notify_reason = "signalled";
-			      else
-				notify_reason = "non-zero exit code";
-			    }
-			  execlp(G_PROCESS_FAILURE_NOTIFICATION, G_PROCESS_FAILURE_NOTIFICATION, 
-				 SAFE_STRING(process_opts.name),
-				 SAFE_STRING(process_opts.chroot_dir),
-				 SAFE_STRING(process_opts.pidfile_dir),
-				 SAFE_STRING(process_opts.pidfile),
-				 SAFE_STRING(process_opts.cwd),
-				 SAFE_STRING(process_opts.caps),
-				 notify_reason,
-				 argbuf,
-				 (deadlock || !WIFSIGNALED(rc) || WTERMSIG(rc) != SIGKILL) ? "restarting" : "not-restarting",
-				 (gchar*) NULL);
-			  g_process_message("Could not execute external notification; reason='%s'", strerror(errno));
-			  break;
-			  
-			default:
-			  exit(0);
-			  break;
-			} /* child process */
+                        case 0:
+                          if (deadlock)
+                            {
+                              notify_reason = "deadlock detected";
+                              argbuf[0] = 0;
+                            }
+                          else
+                            {
+                              snprintf(argbuf, sizeof(argbuf), "%d", WIFSIGNALED(rc) ? WTERMSIG(rc) : WEXITSTATUS(rc));
+                              if (WIFSIGNALED(rc))
+                                notify_reason = "signalled";
+                              else
+                                notify_reason = "non-zero exit code";
+                            }
+                          execlp(G_PROCESS_FAILURE_NOTIFICATION, G_PROCESS_FAILURE_NOTIFICATION,
+                                 SAFE_STRING(process_opts.name),
+                                 SAFE_STRING(process_opts.chroot_dir),
+                                 SAFE_STRING(process_opts.pidfile_dir),
+                                 SAFE_STRING(process_opts.pidfile),
+                                 SAFE_STRING(process_opts.cwd),
+                                 SAFE_STRING(process_opts.caps),
+                                 notify_reason,
+                                 argbuf,
+                                 (deadlock || !WIFSIGNALED(rc) || WTERMSIG(rc) != SIGKILL) ? "restarting" : "not-restarting",
+                                 (gchar *) NULL);
+                          g_process_message("Could not execute external notification; reason='%s'", strerror(errno));
+                          break;
+
+                        default:
+                          exit(0);
+                          break;
+                        } /* child process */
                     default:
                       waitpid(npid, &nrc, 0);
                       break;
@@ -1270,11 +1353,11 @@ void
 g_process_start(void)
 {
   pid_t pid;
-  
+
   g_process_detach_tty();
   g_process_change_limits();
   g_process_resolve_names();
-  
+
   if (process_opts.mode == G_PM_BACKGROUND)
     {
       /* no supervisor, sends result to startup process directly */
@@ -1283,7 +1366,7 @@ g_process_start(void)
           g_process_message("Error daemonizing process, cannot open pipe; error='%s'", g_strerror(errno));
           exit(1);
         }
-      
+
       if ((pid = fork()) < 0)
         {
           g_process_message("Error forking child process; error='%s'", g_strerror(errno));
@@ -1292,19 +1375,19 @@ g_process_start(void)
       else if (pid != 0)
         {
           /* shut down init_result_pipe write side */
-          
+
           close(init_result_pipe[1]);
-          
+
           /* connect startup_result_pipe with init_result_pipe */
           startup_result_pipe[0] = init_result_pipe[0];
           init_result_pipe[0] = -1;
-          
+
           g_process_perform_startup();
           /* NOTE: never returns */
           g_assert_not_reached();
         }
       process_kind = G_PK_DAEMON;
-      
+
       /* shut down init_result_pipe read side */
       close(init_result_pipe[0]);
       init_result_pipe[0] = -1;
@@ -1329,21 +1412,21 @@ g_process_start(void)
       else if (pid != 0)
         {
           /* this is the startup process */
-          
+
           /* shut down startup_result_pipe write side */
           close(startup_result_pipe[1]);
           startup_result_pipe[1] = -1;
-          
+
           /* NOTE: never returns */
           g_process_perform_startup();
           g_assert_not_reached();
         }
       /* this is the supervisor process */
-      
+
       /* shut down startup_result_pipe read side */
       close(startup_result_pipe[0]);
       startup_result_pipe[0] = -1;
-      
+
       /* update systemd socket activation pid */
       inherit_systemd_activation();
 
@@ -1359,15 +1442,15 @@ g_process_start(void)
     {
       g_assert_not_reached();
     }
-    
+
   /* daemon process, we should return to the caller to perform work */
   /* Only call setsid() for backgrounded processes. */
   if (process_opts.mode != G_PM_FOREGROUND)
     {
-	  setsid();
+      setsid();
     }
-  
-  /* NOTE: we need to signal the parent in case of errors from this point. 
+
+  /* NOTE: we need to signal the parent in case of errors from this point.
    * This is accomplished by writing the appropriate exit code to
    * init_result_pipe, the easiest way doing so is calling g_process_startup_failed.
    * */
@@ -1396,7 +1479,7 @@ g_process_startup_failed(guint ret_num, gboolean may_exit)
 {
   if (process_kind != G_PK_STARTUP)
     g_process_send_result(ret_num);
-    
+
   if (may_exit)
     {
       exit(ret_num);
@@ -1417,7 +1500,7 @@ void
 g_process_startup_ok(void)
 {
   g_process_write_pidfile(getpid());
-  
+
   g_process_send_result(0);
   g_process_detach_stdio();
 }
@@ -1432,11 +1515,36 @@ g_process_startup_ok(void)
 void
 g_process_finish(void)
 {
+#ifdef SYSLOG_NG_HAVE_ENVIRON
+  /**
+   * There is a memory leak for **environ and elements that should be
+   * freed here theoretically.
+   *
+   * The reason why environ is copied during g_process_set_argv_space
+   * so to be able to overwrite process title in ps/top commands to
+   * supervisor. In bsd there is setproctitle call which solve this,
+   * but currently it is not available for linux.
+   *
+   * The problem is that modules can add their own env variables to the
+   * list, which must not be freed here, otherwise it would result
+   * double free (e.g some version of Oracle Java). One might also would
+   * try to track which environment variables are added by syslog-ng,
+   * and free only those. There is still a problem with this, **environ
+   * itself cannot be freed in some cases. For example libcurl registers
+   * an atexit function which needs an environment variable, that would
+   * be freed here before at_exit is called, resulting in invalid read.
+   *
+   * As this leak does not cause any real problem like accumulating over
+   * time, it is safe to leave it as it is.
+  */
+#endif
+
   g_process_remove_pidfile();
 }
 
 static gboolean
-g_process_process_mode_arg(const gchar *option_name G_GNUC_UNUSED, const gchar *value, gpointer data G_GNUC_UNUSED, GError **error)
+g_process_process_mode_arg(const gchar *option_name G_GNUC_UNUSED, const gchar *value, gpointer data G_GNUC_UNUSED,
+                           GError **error)
 {
   if (strcmp(value, "foreground") == 0)
     {
@@ -1463,6 +1571,7 @@ g_process_process_no_caps(const gchar *option_name G_GNUC_UNUSED, const gchar *v
                           gpointer data G_GNUC_UNUSED, GError *error)
 {
   process_opts.caps = NULL;
+  process_opts.enable_caps = FALSE;
   return TRUE;
 }
 
@@ -1487,9 +1596,8 @@ void
 g_process_add_option_group(GOptionContext *ctx)
 {
   GOptionGroup *group;
-  
+
   group = g_option_group_new("process", "Process options", "Process options", NULL, NULL);
   g_option_group_add_entries(group, g_process_option_entries);
   g_option_context_add_group(ctx, group);
 }
-

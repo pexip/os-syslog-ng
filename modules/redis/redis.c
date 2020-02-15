@@ -36,10 +36,11 @@
 
 typedef struct
 {
-  LogThrDestDriver super;
+  LogThreadedDestDriver super;
 
   gchar *host;
-  gint port;
+  gint   port;
+  gchar *auth;
 
   LogTemplateOptions template_options;
 
@@ -76,6 +77,15 @@ redis_dd_set_port(LogDriver *d, gint port)
 }
 
 void
+redis_dd_set_auth(LogDriver *d, const gchar *auth)
+{
+  RedisDriver *self = (RedisDriver *)d;
+
+  g_free(self->auth);
+  self->auth = g_strdup(auth);
+}
+
+void
 redis_dd_set_command(LogDriver *d, const gchar *command,
                      LogTemplate *key,
                      LogTemplate *param1, LogTemplate *param2)
@@ -106,8 +116,8 @@ redis_dd_get_template_options(LogDriver *d)
  * Utilities
  */
 
-static gchar *
-redis_dd_format_stats_instance(LogThrDestDriver *d)
+static const gchar *
+redis_dd_format_stats_instance(LogThreadedDestDriver *d)
 {
   RedisDriver *self = (RedisDriver *)d;
   static gchar persist_name[1024];
@@ -135,24 +145,43 @@ redis_dd_format_persist_name(const LogPipe *s)
 }
 
 static gboolean
-redis_dd_connect(RedisDriver *self, gboolean reconnect)
+send_redis_command(RedisDriver *self, const char *format, ...)
 {
-  redisReply *reply;
-  
-  if (reconnect && (self->c != NULL))
+  va_list ap;
+  va_start(ap, format);
+  redisReply *reply = redisvCommand(self->c, format, ap);
+  va_end(ap);
+
+  gboolean retval = reply && (reply->type != REDIS_REPLY_ERROR);
+  if (reply)
+    freeReplyObject(reply);
+  return retval;
+}
+
+static gboolean
+check_connection_to_redis(RedisDriver *self)
+{
+  return send_redis_command(self, "ping");
+}
+
+static gboolean
+authenticate_to_redis(RedisDriver *self, const gchar *password)
+{
+  return send_redis_command(self, "AUTH %s", self->auth);
+}
+
+static gboolean
+redis_dd_connect(RedisDriver *self)
+{
+  if (self->c && check_connection_to_redis(self))
     {
-      reply = redisCommand(self->c, "ping");
-
-      if (reply)
-        freeReplyObject(reply);
-
-      if (!self->c->err)
-        return TRUE;
-      else
-        self->c = redisConnect(self->host, self->port);
+      return TRUE;
     }
-  else
-    self->c = redisConnect(self->host, self->port);
+
+  if (self->c)
+    redisFree(self->c);
+
+  self->c = redisConnect(self->host, self->port);
 
   if (self->c->err)
     {
@@ -162,15 +191,28 @@ redis_dd_connect(RedisDriver *self, gboolean reconnect)
                 evt_tag_int("time_reopen", self->super.time_reopen));
       return FALSE;
     }
-  else
-    msg_debug("Connecting to REDIS succeeded",
-              evt_tag_str("driver", self->super.super.super.id));
+
+  if (self->auth)
+    if (!authenticate_to_redis(self, self->auth))
+      {
+        msg_error("REDIS: failed to authenticate");
+        return FALSE;
+      }
+
+  if (!check_connection_to_redis(self))
+    {
+      msg_error("REDIS: failed to connect");
+      return FALSE;
+    }
+
+  msg_debug("Connecting to REDIS succeeded",
+            evt_tag_str("driver", self->super.super.super.id));
 
   return TRUE;
 }
 
 static void
-redis_dd_disconnect(LogThrDestDriver *s)
+redis_dd_disconnect(LogThreadedDestDriver *s)
 {
   RedisDriver *self = (RedisDriver *)s;
 
@@ -184,7 +226,7 @@ redis_dd_disconnect(LogThrDestDriver *s)
  */
 
 static worker_insert_result_t
-redis_worker_insert(LogThrDestDriver *s, LogMessage *msg)
+redis_worker_insert(LogThreadedDestDriver *s, LogMessage *msg)
 {
   RedisDriver *self = (RedisDriver *)s;
   redisReply *reply;
@@ -192,21 +234,27 @@ redis_worker_insert(LogThrDestDriver *s, LogMessage *msg)
   size_t argvlen[5];
   int argc = 2;
 
-  if (!redis_dd_connect(self, TRUE))
+  if (!redis_dd_connect(self))
     return WORKER_INSERT_RESULT_NOT_CONNECTED;
 
   if (self->c->err)
     return WORKER_INSERT_RESULT_ERROR;
 
+  if (!check_connection_to_redis(self))
+    {
+      msg_error("REDIS: worker failed to connect");
+      return WORKER_INSERT_RESULT_NOT_CONNECTED;
+    }
+
   log_template_format(self->key, msg, &self->template_options, LTZ_SEND,
-                      self->super.seq_num, NULL, self->key_str);
+                      self->super.worker.instance.seq_num, NULL, self->key_str);
 
   if (self->param1)
     log_template_format(self->param1, msg, &self->template_options, LTZ_SEND,
-                        self->super.seq_num, NULL, self->param1_str);
+                        self->super.worker.instance.seq_num, NULL, self->param1_str);
   if (self->param2)
     log_template_format(self->param2, msg, &self->template_options, LTZ_SEND,
-                        self->super.seq_num, NULL, self->param2_str);
+                        self->super.worker.instance.seq_num, NULL, self->param2_str);
 
   argv[0] = self->command->str;
   argvlen[0] = self->command->len;
@@ -254,7 +302,7 @@ redis_worker_insert(LogThrDestDriver *s, LogMessage *msg)
 }
 
 static void
-redis_worker_thread_init(LogThrDestDriver *d)
+redis_worker_thread_init(LogThreadedDestDriver *d)
 {
   RedisDriver *self = (RedisDriver *)d;
 
@@ -265,17 +313,19 @@ redis_worker_thread_init(LogThrDestDriver *d)
   self->param1_str = g_string_sized_new(1024);
   self->param2_str = g_string_sized_new(1024);
 
-  redis_dd_connect(self, FALSE);
+  redis_dd_connect(self);
 }
 
 static void
-redis_worker_thread_deinit(LogThrDestDriver *d)
+redis_worker_thread_deinit(LogThreadedDestDriver *d)
 {
   RedisDriver *self = (RedisDriver *)d;
 
   g_string_free(self->key_str, TRUE);
   g_string_free(self->param1_str, TRUE);
   g_string_free(self->param2_str, TRUE);
+
+  redis_dd_disconnect(d);
 }
 
 /*
@@ -288,8 +338,15 @@ redis_dd_init(LogPipe *s)
   RedisDriver *self = (RedisDriver *)s;
   GlobalConfig *cfg = log_pipe_get_config(s);
 
-  if (!log_dest_driver_init_method(s))
+  if (!log_threaded_dest_driver_init_method(s))
     return FALSE;
+
+  if (!self->key && !self->param1)
+    {
+      msg_error("Error initializing Redis destination, command option MUST be set",
+                log_pipe_location_tag(s));
+      return FALSE;
+    }
 
   log_template_options_init(&self->template_options, cfg);
 
@@ -298,7 +355,7 @@ redis_dd_init(LogPipe *s)
               evt_tag_str("host", self->host),
               evt_tag_int("port", self->port));
 
-  return log_threaded_dest_driver_start(s);
+  return log_threaded_dest_driver_start_workers(&self->super);
 }
 
 static void
@@ -309,6 +366,7 @@ redis_dd_free(LogPipe *d)
   log_template_options_destroy(&self->template_options);
 
   g_free(self->host);
+  g_free(self->auth);
   g_string_free(self->command, TRUE);
   log_template_unref(self->key);
   log_template_unref(self->param1);
@@ -338,11 +396,12 @@ redis_dd_new(GlobalConfig *cfg)
   self->super.worker.disconnect = redis_dd_disconnect;
   self->super.worker.insert = redis_worker_insert;
 
-  self->super.format.stats_instance = redis_dd_format_stats_instance;
+  self->super.format_stats_instance = redis_dd_format_stats_instance;
   self->super.stats_source = SCS_REDIS;
 
   redis_dd_set_host((LogDriver *)self, "127.0.0.1");
   redis_dd_set_port((LogDriver *)self, 6379);
+  redis_dd_set_auth((LogDriver *)self, NULL);
 
   self->command = g_string_sized_new(32);
 
@@ -361,9 +420,9 @@ static Plugin redis_plugin =
 };
 
 gboolean
-redis_module_init(GlobalConfig *cfg, CfgArgs *args)
+redis_module_init(PluginContext *context, CfgArgs *args)
 {
-  plugin_register(cfg, &redis_plugin, 1);
+  plugin_register(context, &redis_plugin, 1);
 
   return TRUE;
 }

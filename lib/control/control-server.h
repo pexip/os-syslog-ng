@@ -29,13 +29,6 @@
 
 #define MAX_CONTROL_LINE_LENGTH 4096
 
-typedef struct _ControlCommand
-{
-  const gchar *command_name;
-  const gchar *description;
-  CommandFunction func;
-} ControlCommand;
-
 typedef struct _ControlServer ControlServer;
 typedef struct _ControlConnection ControlConnection;
 
@@ -50,6 +43,13 @@ struct _ControlConnection
   void (*handle_input)(gpointer s);
   void (*handle_output)(gpointer s);
   void (*free_fn)(ControlConnection *self);
+  struct
+  {
+    void (*start_watches)(ControlConnection *self);
+    void (*update_watches)(ControlConnection *self);
+    void (*stop_watches)(ControlConnection *self);
+  } events;
+
 };
 
 struct _ControlServer

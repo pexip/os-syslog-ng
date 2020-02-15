@@ -29,7 +29,8 @@
 extern int rewrite_expr_debug;
 int rewrite_expr_parse(CfgLexer *lexer, LogExprNode **node, gpointer arg);
 
-static CfgLexerKeyword rewrite_expr_keywords[] = {
+static CfgLexerKeyword rewrite_expr_keywords[] =
+{
   { "set",                KW_SET },
   { "unset",              KW_UNSET },
   { "subst",              KW_SUBST },
@@ -38,6 +39,7 @@ static CfgLexerKeyword rewrite_expr_keywords[] = {
 
   { "condition",          KW_CONDITION },
   { "groupset",           KW_GROUP_SET },
+  { "groupunset",         KW_GROUP_UNSET },
   { "value",              KW_VALUE },
   { "values",             KW_VALUES },
 

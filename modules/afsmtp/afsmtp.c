@@ -48,7 +48,7 @@ typedef struct
 
 typedef struct
 {
-  LogThrDestDriver super;
+  LogThreadedDestDriver super;
 
   /* Shared between main/writer; only read by the writer, never
      written */
@@ -79,9 +79,9 @@ afsmtp_wash_string (gchar *str)
   gint i;
 
   for (i = 0; i < strlen (str); i++)
-    if (str[i] == '\n' ||
-        str[i] == '\r')
-      str[i] = ' ';
+         if (str[i] == '\n' ||
+             str[i] == '\r')
+           str[i] = ' ';
 
   return str;
 }
@@ -198,8 +198,8 @@ ignore_sigpipe (void)
   sigaction(SIGPIPE, &sa, NULL);
 }
 
-static gchar *
-afsmtp_dd_format_stats_instance(LogThrDestDriver *d)
+static const gchar *
+afsmtp_dd_format_stats_instance(LogThreadedDestDriver *d)
 {
   AFSMTPDriver *self = (AFSMTPDriver *)d;
   static gchar persist_name[1024];
@@ -231,9 +231,9 @@ afsmtp_dd_format_persist_name(const LogPipe *s)
  */
 
 static void
-_smtp_message_add_recipient_header(smtp_message_t self, AFSMTPRecipient *rcpt, AFSMTPDriver *driver) 
+_smtp_message_add_recipient_header(smtp_message_t self, AFSMTPRecipient *rcpt, AFSMTPDriver *driver)
 {
-  gchar *hdr;
+  const gchar *hdr;
   switch (rcpt->type)
     {
     case AFSMTP_RCPT_TYPE_TO:
@@ -254,10 +254,11 @@ _smtp_message_add_recipient_header(smtp_message_t self, AFSMTPRecipient *rcpt, A
 }
 
 static void
-_smtp_message_add_recipient_from_template(smtp_message_t self, AFSMTPDriver *driver, LogTemplate *template, LogMessage *msg)
+_smtp_message_add_recipient_from_template(smtp_message_t self, AFSMTPDriver *driver, LogTemplate *template,
+                                          LogMessage *msg)
 {
   log_template_format(template, msg, &driver->template_options, LTZ_SEND,
-                      driver->super.seq_num, NULL, driver->str);
+                      driver->super.worker.instance.seq_num, NULL, driver->str);
   smtp_add_recipient(self, afsmtp_wash_string (driver->str->str));
 }
 
@@ -270,7 +271,7 @@ afsmtp_dd_msg_add_recipient(AFSMTPRecipient *rcpt, gpointer user_data)
 
   _smtp_message_add_recipient_from_template(message, self, rcpt->template, msg);
   _smtp_message_add_recipient_header(message, rcpt, self);
- }
+}
 
 static void
 afsmtp_dd_msg_add_header(AFSMTPHeader *hdr, gpointer user_data)
@@ -280,7 +281,7 @@ afsmtp_dd_msg_add_header(AFSMTPHeader *hdr, gpointer user_data)
   smtp_message_t message = ((gpointer *)user_data)[2];
 
   log_template_format(hdr->template, msg, &self->template_options, LTZ_LOCAL,
-                      self->super.seq_num, NULL, self->str);
+                      self->super.worker.instance.seq_num, NULL, self->str);
 
   smtp_set_header(message, hdr->name, afsmtp_wash_string (self->str->str), NULL);
   smtp_set_header_option(message, hdr->name, Hdr_OVERRIDE, 1);
@@ -298,18 +299,18 @@ afsmtp_dd_log_rcpt_status(smtp_recipient_t rcpt, const char *mailbox,
     {
       status_data->success = FALSE;
       msg_error("SMTP recipient result",
-            evt_tag_str("driver", status_data->driver->super.super.super.id),
-            evt_tag_str("recipient", mailbox),
-            evt_tag_int("code", status->code),
-            evt_tag_str("text", status->text));
+                evt_tag_str("driver", status_data->driver->super.super.super.id),
+                evt_tag_str("recipient", mailbox),
+                evt_tag_int("code", status->code),
+                evt_tag_str("text", status->text));
     }
   else
     {
       msg_debug("SMTP recipient result",
-            evt_tag_str("driver", status_data->driver->super.super.super.id),
-            evt_tag_str("recipient", mailbox),
-            evt_tag_int("code", status->code),
-            evt_tag_str("text", status->text));
+                evt_tag_str("driver", status_data->driver->super.super.super.id),
+                evt_tag_str("recipient", mailbox),
+                evt_tag_int("code", status->code),
+                evt_tag_str("text", status->text));
     }
 }
 
@@ -397,7 +398,7 @@ __build_message(AFSMTPDriver *self, LogMessage *msg, smtp_session_t session)
   message = smtp_add_message(session);
 
   log_template_format(self->mail_from->template, msg, &self->template_options, LTZ_SEND,
-                      self->super.seq_num, NULL, self->str);
+                      self->super.worker.instance.seq_num, NULL, self->str);
   smtp_set_reverse_path(message, afsmtp_wash_string(self->str->str));
 
   /* Defaults */
@@ -405,7 +406,7 @@ __build_message(AFSMTPDriver *self, LogMessage *msg, smtp_session_t session)
   smtp_set_header(message, "From", NULL, NULL);
 
   log_template_format(self->subject_template, msg, &self->template_options, LTZ_SEND,
-                      self->super.seq_num, NULL, self->str);
+                      self->super.worker.instance.seq_num, NULL, self->str);
   smtp_set_header(message, "Subject", afsmtp_wash_string(self->str->str));
   smtp_set_header_option(message, "Subject", Hdr_OVERRIDE, 1);
 
@@ -426,7 +427,7 @@ __build_message(AFSMTPDriver *self, LogMessage *msg, smtp_session_t session)
    */
   g_string_assign(self->str, "X-Mailer: syslog-ng " SYSLOG_NG_VERSION "\r\n\r\n");
   log_template_append_format(self->body_template, msg, &self->template_options,
-                             LTZ_SEND, self->super.seq_num,
+                             LTZ_SEND, self->super.worker.instance.seq_num,
                              NULL, self->str);
   smtp_set_message_str(message, self->str->str);
   return message;
@@ -481,18 +482,8 @@ __send_message(AFSMTPDriver *self, smtp_session_t session)
   return success;
 }
 
-static void
-__worker_message_retry_over(LogThrDestDriver *self, LogMessage *msg)
-{
-  msg_error("Multiple failures while sending message in email to the server, "
-            "message dropped",
-            evt_tag_str("driver", self->super.super.id),
-            evt_tag_int("attempts", self->retries.counter),
-            evt_tag_int("max-attempts", self->retries.max));
-}
-
 static worker_insert_result_t
-afsmtp_worker_insert(LogThrDestDriver *s, LogMessage *msg)
+afsmtp_worker_insert(LogThreadedDestDriver *s, LogMessage *msg)
 {
   AFSMTPDriver *self = (AFSMTPDriver *)s;
   gboolean success = TRUE;
@@ -527,7 +518,7 @@ afsmtp_worker_insert(LogThrDestDriver *s, LogMessage *msg)
 }
 
 static void
-afsmtp_worker_thread_init(LogThrDestDriver *d)
+afsmtp_worker_thread_init(LogThreadedDestDriver *d)
 {
   AFSMTPDriver *self = (AFSMTPDriver *)d;
 
@@ -537,7 +528,7 @@ afsmtp_worker_thread_init(LogThrDestDriver *d)
 }
 
 static void
-afsmtp_worker_thread_deinit(LogThrDestDriver *d)
+afsmtp_worker_thread_deinit(LogThreadedDestDriver *d)
 {
   AFSMTPDriver *self = (AFSMTPDriver *)d;
 
@@ -558,8 +549,8 @@ __check_rcpt_tos(AFSMTPDriver *self)
     {
       AFSMTPRecipient *rcpt = (AFSMTPRecipient *)l->data;
       gboolean rcpt_type_accepted = rcpt->type == AFSMTP_RCPT_TYPE_BCC ||
-                                    rcpt->type == AFSMTP_RCPT_TYPE_CC  ||
-                                    rcpt->type == AFSMTP_RCPT_TYPE_TO;
+      rcpt->type == AFSMTP_RCPT_TYPE_CC  ||
+      rcpt->type == AFSMTP_RCPT_TYPE_TO;
 
       if (rcpt->template && rcpt_type_accepted)
         {
@@ -611,7 +602,7 @@ afsmtp_dd_init(LogPipe *s)
   AFSMTPDriver *self = (AFSMTPDriver *)s;
   GlobalConfig *cfg = log_pipe_get_config(s);
 
-  if (!log_dest_driver_init_method(s))
+  if (!log_threaded_dest_driver_init_method(s))
     return FALSE;
 
   msg_verbose("Initializing SMTP destination",
@@ -623,7 +614,7 @@ afsmtp_dd_init(LogPipe *s)
     return FALSE;
 
   log_template_options_init(&self->template_options, cfg);
-  return log_threaded_dest_driver_start(s);
+  return log_threaded_dest_driver_start_workers(&self->super);
 }
 
 static void
@@ -681,10 +672,8 @@ afsmtp_dd_new(GlobalConfig *cfg)
   self->super.worker.thread_deinit = afsmtp_worker_thread_deinit;
   self->super.worker.insert = afsmtp_worker_insert;
 
-  self->super.format.stats_instance = afsmtp_dd_format_stats_instance;
+  self->super.format_stats_instance = afsmtp_dd_format_stats_instance;
   self->super.stats_source = SCS_SMTP;
-
-  self->super.messages.retry_over = __worker_message_retry_over;
 
   afsmtp_dd_set_host((LogDriver *)self, "127.0.0.1");
   afsmtp_dd_set_port((LogDriver *)self, 25);
@@ -706,9 +695,9 @@ static Plugin afsmtp_plugin =
 };
 
 gboolean
-afsmtp_module_init(GlobalConfig *cfg, CfgArgs *args)
+afsmtp_module_init(PluginContext *context, CfgArgs *args)
 {
-  plugin_register(cfg, &afsmtp_plugin, 1);
+  plugin_register(context, &afsmtp_plugin, 1);
   return TRUE;
 }
 

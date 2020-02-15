@@ -69,9 +69,9 @@ path_resolver_populate_configure_variables(PathResolver *self, const gchar *sysp
  * stderr and then abort the process. */
 
 #define handle_fatal_error(fmt, ...) \
-    do {						\
-      fprintf(stderr, fmt, __VA_ARGS__);		\
-      g_assert_not_reached();				\
+    do {            \
+      fprintf(stderr, fmt, __VA_ARGS__);    \
+      g_assert_not_reached();       \
     } while (0)
 
 gpointer
@@ -100,7 +100,8 @@ path_resolver_resolve(CacheResolver *s, const gchar *orig)
       subst_end = strchr(subst_start, '}');
 
       if (subst_end == NULL)
-        handle_fatal_error("Relocation resolution error: missing '}' in string '%s'. Please re-compile syslog-ng with proper path variables.\n", value);
+        handle_fatal_error("Relocation resolution error: missing '}' in string '%s'. Please re-compile syslog-ng with proper path variables.\n",
+                           value);
 
       /* extract confvar */
 
@@ -112,7 +113,8 @@ path_resolver_resolve(CacheResolver *s, const gchar *orig)
       replacement = g_hash_table_lookup(self->configure_variables, confvar);
 
       if (replacement == NULL)
-        handle_fatal_error("Relocation resolution error: Unknown configure variable: '%s' in string '%s'.\nPlease re-compile syslog-ng with proper path variables.\n", confvar, value);
+        handle_fatal_error("Relocation resolution error: Unknown configure variable: '%s' in string '%s'.\nPlease re-compile syslog-ng with proper path variables.\n",
+                           confvar, value);
 
       g_free(confvar);
 
@@ -159,7 +161,7 @@ path_resolver_new(const gchar *sysprefix)
   return &self->super;
 }
 
-static gchar *
+static const gchar *
 lookup_sysprefix(void)
 {
   gchar *v;
@@ -176,4 +178,14 @@ get_installation_path_for(const gchar *template)
   if (!path_cache)
     path_cache = cache_new(path_resolver_new(lookup_sysprefix()));
   return cache_lookup(path_cache, template);
+}
+
+void
+reloc_deinit(void)
+{
+  if (path_cache)
+    {
+      cache_free(path_cache);
+      path_cache = NULL;
+    }
 }

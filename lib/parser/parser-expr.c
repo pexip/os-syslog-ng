@@ -70,30 +70,43 @@ log_parser_process_message(LogParser *self, LogMessage **pmsg, const LogPathOpti
       g_string_free(input, TRUE);
     }
 
+  if (!success)
+    stats_counter_inc(self->super.discarded_messages);
+
   return success;
 }
 
 static void
-log_parser_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options, gpointer user_data)
+log_parser_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options)
 {
   LogParser *self = (LogParser *) s;
   gboolean success;
+  gchar *parser_result;
+
+  msg_trace(">>>>>> parser rule evaluation begin",
+            evt_tag_str("rule", self->name),
+            log_pipe_location_tag(s),
+            evt_tag_printf("msg", "%p", msg));
 
   success = log_parser_process_message(self, &msg, path_options);
-  msg_debug("Message parsing complete",
-            evt_tag_int("result", success),
-            evt_tag_str("rule", self->name),
-            log_pipe_location_tag(s));
+
   if (success)
     {
+      parser_result = "Forwarding message to the next LogPipe";
       log_pipe_forward_msg(s, msg, path_options);
     }
   else
     {
+      parser_result = "Dropping message from LogPipe";
       if (path_options->matched)
         (*path_options->matched) = FALSE;
       log_msg_drop(msg, path_options, AT_PROCESSED);
     }
+  msg_trace("<<<<<< parser rule evaluation result",
+            evt_tag_str("result", parser_result),
+            evt_tag_str("rule", self->name),
+            log_pipe_location_tag(s),
+            evt_tag_printf("msg", "%p", msg));
 }
 
 gboolean
@@ -104,6 +117,13 @@ log_parser_init_method(LogPipe *s)
 
   if (!self->name && s->expr_node)
     self->name = cfg_tree_get_rule_name(&cfg->tree, ENC_PARSER, s->expr_node);
+
+  stats_lock();
+  StatsClusterKey sc_key;
+  stats_cluster_logpipe_key_set(&sc_key, SCS_PARSER, self->name, NULL );
+  stats_register_counter(1, &sc_key, SC_TYPE_DISCARDED, &self->super.discarded_messages);
+  stats_unlock();
+
   return TRUE;
 }
 
@@ -112,9 +132,16 @@ log_parser_free_method(LogPipe *s)
 {
   LogParser *self = (LogParser *) s;
 
+  stats_lock();
+  StatsClusterKey sc_key;
+  stats_cluster_logpipe_key_set(&sc_key, SCS_PARSER, self->name, NULL );
+  stats_unregister_counter(&sc_key, SC_TYPE_DISCARDED, &self->super.discarded_messages);
+  stats_unlock();
+
   g_free(self->name);
   log_template_unref(self->template);
   log_pipe_free_method(s);
+
 }
 
 void
@@ -122,6 +149,7 @@ log_parser_init_instance(LogParser *self, GlobalConfig *cfg)
 {
   log_pipe_init_instance(&self->super, cfg);
   self->super.init = log_parser_init_method;
+  self->super.deinit = log_parser_deinit_method;
   self->super.free_fn = log_parser_free_method;
   self->super.queue = log_parser_queue;
 }

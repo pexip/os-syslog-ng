@@ -24,6 +24,7 @@
 #include "cfg-parser.h"
 #include "plugin.h"
 #include "plugin-types.h"
+#include "affile-dest.h"
 
 extern CfgParser affile_parser;
 
@@ -40,6 +41,16 @@ static Plugin affile_plugins[] =
     .parser = &affile_parser,
   },
   {
+    .type = LL_CONTEXT_SOURCE,
+    .name = "wildcard_file",
+    .parser = &affile_parser,
+  },
+  {
+    .type = LL_CONTEXT_SOURCE,
+    .name = "stdin",
+    .parser = &affile_parser,
+  },
+  {
     .type = LL_CONTEXT_DESTINATION,
     .name = "file",
     .parser = &affile_parser,
@@ -52,9 +63,10 @@ static Plugin affile_plugins[] =
 };
 
 gboolean
-affile_module_init(GlobalConfig *cfg, CfgArgs *args)
+affile_module_init(PluginContext *context, CfgArgs *args)
 {
-  plugin_register(cfg, affile_plugins, G_N_ELEMENTS(affile_plugins));
+  plugin_register(context, affile_plugins, G_N_ELEMENTS(affile_plugins));
+  affile_dd_global_init();
   return TRUE;
 }
 

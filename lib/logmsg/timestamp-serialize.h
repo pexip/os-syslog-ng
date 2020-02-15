@@ -30,6 +30,7 @@
 
 gboolean timestamp_serialize(SerializeArchive *sa, LogStamp *timestamps);
 
+gboolean timestamp_deserialize_legacy(SerializeArchive *sa, LogStamp *timestamps);
 gboolean timestamp_deserialize(SerializeArchive *sa, LogStamp *timestamps);
 
 

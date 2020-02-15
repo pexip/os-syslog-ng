@@ -21,7 +21,6 @@
 #############################################################################
 
 from __future__ import print_function, absolute_import
-import sys
 from abc import abstractmethod, ABCMeta
 import ply.yacc as yacc
 from .tablexer import TabLexer
@@ -57,25 +56,9 @@ class CompleterLang(object):
     def p_error(self, p):
         if p is None:
             # EOF
-            return None
+            return
         elif p.type == 'TAB':
-            # We look up the current grammar state from the local variables of the caller,
-            # as it doesn't publish this information in self.
-            #
-            # This is somewhat fragile, however I don't really expect this variable to change
-            # too frequently.
-            #
-            # I don't want to hide this call within the _handle_injected_tab_token() call, as
-            # this is the very function that is close enough to the caller, moving this information
-            # deeper would probably improve readability at the cost of increasing fragility.
-
-            # pylint: disable=protected-access
-            if 'state' in sys._getframe(1).f_locals:
-                parser_state = sys._getframe(1).f_locals['state']
-            elif 'state' in sys._getframe(2).f_locals:
-                parser_state = sys._getframe(2).f_locals['state']
-            else:
-                return None
+            parser_state = self._parser.state
 
             # now handle the error that the TAB token caused
             self._token_position = p.lexpos
@@ -136,8 +119,7 @@ class CompleterLang(object):
         if self._are_we_shifting_a_production(state):
             production = self._lookup_production(state)
             return self._shift_production(production, token)
-        else:
-            return state
+        return state
 
     def _lookup_production(self, state):
         return self._parser.productions[-state]

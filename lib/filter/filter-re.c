@@ -24,6 +24,7 @@
 
 #include "filter-re.h"
 #include "str-utils.h"
+#include "messages.h"
 
 #include <string.h>
 
@@ -31,11 +32,17 @@ static gboolean
 filter_re_eval_string(FilterExprNode *s, LogMessage *msg, gint value_handle, const gchar *str, gssize str_len)
 {
   FilterRE *self = (FilterRE *) s;
+  gboolean result;
 
   if (str_len < 0)
     str_len = strlen(str);
-
-  return log_matcher_match(self->matcher, msg, value_handle, str, str_len) ^ self->super.comp;
+  result = log_matcher_match(self->matcher, msg, value_handle, str, str_len);
+  msg_trace("match() evaluation started",
+            evt_tag_str("input", str),
+            evt_tag_str("pattern", self->matcher->pattern),
+            evt_tag_str("value", log_msg_get_value_name(value_handle, NULL)),
+            evt_tag_printf("msg", "%p", msg));
+  return result ^ s->comp;
 }
 
 static gboolean
@@ -43,7 +50,7 @@ filter_re_eval(FilterExprNode *s, LogMessage **msgs, gint num_msg)
 {
   FilterRE *self = (FilterRE *) s;
   const gchar *value;
-  LogMessage *msg = msgs[0];
+  LogMessage *msg = msgs[num_msg - 1];
   gssize len = 0;
 
   value = log_msg_get_value(msg, self->value_handle, &len);
@@ -61,20 +68,22 @@ filter_re_free(FilterExprNode *s)
   log_matcher_options_destroy(&self->matcher_options);
 }
 
-static void
+static gboolean
 filter_re_init(FilterExprNode *s, GlobalConfig *cfg)
 {
   FilterRE *self = (FilterRE *) s;
 
   if (self->matcher_options.flags & LMF_STORE_MATCHES)
     self->super.modify = TRUE;
+
+  return TRUE;
 }
 
 gboolean
-filter_re_compile_pattern(FilterRE *self, GlobalConfig *cfg, gchar *re, GError **error)
+filter_re_compile_pattern(FilterRE *self, GlobalConfig *cfg, const gchar *re, GError **error)
 {
   log_matcher_options_init(&self->matcher_options, cfg);
-  self->matcher = log_matcher_new(&self->matcher_options);
+  self->matcher = log_matcher_new(cfg, &self->matcher_options);
   return log_matcher_compile(self->matcher, re, error);
 }
 
@@ -86,6 +95,7 @@ filter_re_init_instance(FilterRE *self, NVHandle value_handle)
   self->super.init = filter_re_init;
   self->super.eval = filter_re_eval;
   self->super.free_fn = filter_re_free;
+  self->super.type = "regexp";
   log_matcher_options_defaults(&self->matcher_options);
   self->matcher_options.flags |= LMF_MATCH_ONLY;
 }
@@ -118,7 +128,7 @@ filter_match_eval(FilterExprNode *s, LogMessage **msgs, gint num_msg)
   FilterRE *self = (FilterRE *) s;
   gchar *str;
   gboolean res;
-  LogMessage *msg = msgs[0];
+  LogMessage *msg = msgs[num_msg - 1];
 
   if (G_UNLIKELY(!self->value_handle))
     {

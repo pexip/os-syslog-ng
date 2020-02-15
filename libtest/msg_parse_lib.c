@@ -25,17 +25,19 @@
 #include "msg_parse_lib.h"
 #include "plugin.h"
 
+MsgFormatOptions parse_options;
+
 void
-init_and_load_syslogformat_module()
+init_and_load_syslogformat_module(void)
 {
-  configuration = cfg_new(VERSION_VALUE);
-  plugin_load_module("syslogformat", configuration, NULL);
+  configuration = cfg_new_snippet();
+  cfg_load_module(configuration, "syslogformat");
   msg_format_options_defaults(&parse_options);
   msg_format_options_init(&parse_options, configuration);
 }
 
 void
-deinit_syslogformat_module()
+deinit_syslogformat_module(void)
 {
   if (configuration)
     cfg_free(configuration);
@@ -113,11 +115,11 @@ void
 assert_log_messages_equal(LogMessage *log_message_a, LogMessage *log_message_b)
 {
   assert_gint(log_message_a->timestamps[LM_TS_STAMP].tv_sec, log_message_b->timestamps[LM_TS_STAMP].tv_sec,
-      "Timestamps are not the same");
+              "Timestamps are not the same");
   assert_guint32(log_message_a->timestamps[LM_TS_STAMP].tv_usec, log_message_b->timestamps[LM_TS_STAMP].tv_usec,
-      "Timestamps usec are not the same");
+                 "Timestamps usec are not the same");
   assert_guint32(log_message_a->timestamps[LM_TS_STAMP].zone_offset, log_message_b->timestamps[LM_TS_STAMP].zone_offset,
-      "Timestamp offset are not the same");
+                 "Timestamp offset are not the same");
 
   assert_guint16(log_message_a->pri, log_message_b->pri, "Priorities are not the same");
 

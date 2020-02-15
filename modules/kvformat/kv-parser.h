@@ -23,10 +23,39 @@
 #define KVPARSER_H_INCLUDED
 
 #include "parser/parser-expr.h"
-#include "kv-scanner.h"
+#include "scanner/kv-scanner/kv-scanner.h"
+
+/* base class */
+typedef struct _KVParser KVParser;
+struct _KVParser
+{
+  LogParser super;
+  gchar value_separator;
+  gchar *pair_separator;
+  gchar *prefix;
+  gchar *stray_words_value_name;
+  gsize prefix_len;
+  void (*init_scanner)(KVParser *self, KVScanner *kv_scanner);
+};
+
+static inline void
+kv_parser_init_scanner(KVParser *self, KVScanner *kv_scanner)
+{
+  self->init_scanner(self, kv_scanner);
+}
 
 void kv_parser_set_prefix(LogParser *p, const gchar *prefix);
 void kv_parser_set_value_separator(LogParser *p, gchar value_separator);
-LogParser *kv_parser_new(GlobalConfig *cfg, KVScanner *kv_scanner);
+void kv_parser_set_pair_separator(LogParser *p, const gchar *pair_separator);
+void kv_parser_set_stray_words_value_name(LogParser *s, const gchar *value_name);
+gboolean kv_parser_is_valid_separator_character(gchar c);
+
+void kv_parser_init_scanner_method(KVParser *self, KVScanner *kv_scanner);
+
+gboolean kv_parser_init_method(LogPipe *s);
+gboolean kv_parser_deinit_method(LogPipe *s);
+LogPipe *kv_parser_clone_method(KVParser *dst, KVParser *src);
+void kv_parser_init_instance(KVParser *self, GlobalConfig *cfg);
+LogParser *kv_parser_new(GlobalConfig *cfg);
 
 #endif

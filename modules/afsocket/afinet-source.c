@@ -59,7 +59,7 @@ afinet_sd_set_tls_context(LogDriver *s, TLSContext *tls_context)
 {
   AFInetSourceDriver *self = (AFInetSourceDriver *) s;
 
-  transport_mapper_inet_set_tls_context((TransportMapperInet *) self->super.transport_mapper, tls_context, NULL, NULL);
+  transport_mapper_inet_set_tls_context((TransportMapperInet *) self->super.transport_mapper, tls_context, NULL);
 }
 
 static gboolean
@@ -69,6 +69,9 @@ afinet_sd_setup_addresses(AFSocketSourceDriver *s)
 
   if (!afsocket_sd_setup_addresses_method(s))
     return FALSE;
+
+  if (self->super.proto_factory->default_inet_port)
+    transport_mapper_inet_set_server_port(self->super.transport_mapper, self->super.proto_factory->default_inet_port);
 
   g_sockaddr_unref(self->super.bind_addr);
 

@@ -21,7 +21,6 @@
  */
 
 #include "add-contextual-data.h"
-#include "cfg-lexer.h"
 #include "cfg-parser.h"
 #include "add-contextual-data-grammar.h"
 #include "logpipe.h"
@@ -37,10 +36,12 @@ int add_contextual_data_parse(CfgLexer *lexer, LogParser **instance,
 static CfgLexerKeyword add_contextual_data_keywords[] =
 {
   {"add_contextual_data", KW_ADD_CONTEXTUAL_DATA},
-  {"database", KW_ADD_CONTEXTUAL_DATA_DATABASE},
-  {"selector", KW_ADD_CONTEXTUAL_DATA_SELECTOR},
-  {"default_selector", KW_ADD_CONTEXTUAL_DATA_DEFAULT_SELECTOR},
-  {"prefix", KW_ADD_CONTEXTUAL_DATA_PREFIX},
+  {"database", KW_DATABASE},
+  {"selector", KW_SELECTOR},
+  {"default_selector", KW_DEFAULT_SELECTOR},
+  {"prefix", KW_PREFIX},
+  {"filters", KW_FILTERS},
+  {"ignore_case", KW_IGNORE_CASE},
   {NULL}
 };
 

@@ -74,21 +74,24 @@ void main_loop_worker_job_complete(void);
 
 void main_loop_worker_thread_start(void *cookie);
 void main_loop_worker_thread_stop(void);
+void main_loop_worker_run_gc(void);
 
-void main_loop_create_worker_thread(WorkerThreadFunc func, WorkerExitNotificationFunc terminate_func, gpointer data, WorkerOptions *worker_options);
+void main_loop_create_worker_thread(WorkerThreadFunc func, WorkerExitNotificationFunc terminate_func, gpointer data,
+                                    WorkerOptions *worker_options);
 
-void main_loop_worker_sync_call(void (*func)(void));
+void main_loop_worker_sync_call(void (*func)(void *user_data), void *user_data);
+void main_loop_sync_worker_startup_and_teardown(void);
 
 void main_loop_worker_init(void);
 void main_loop_worker_deinit(void);
 
 extern volatile gboolean main_loop_workers_quit;
+extern volatile gboolean is_reloading_scheduled;
 
 static inline gboolean
 main_loop_worker_job_quit(void)
 {
   return main_loop_workers_quit;
 }
-
 
 #endif

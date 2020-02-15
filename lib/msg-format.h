@@ -53,6 +53,9 @@ enum
   LP_EXPECT_HOSTNAME = 0x0100,
   /* message is locally generated and should be marked with LF_LOCAL */
   LP_LOCAL = 0x0200,
+  /* for the date part of a message, only skip it, don't fully parse - recommended for keep_timestamp(no) */
+  LP_NO_PARSE_DATE = 0x0400,
+  LP_STORE_RAW_MESSAGE = 0x0800,
 };
 
 typedef struct _MsgFormatHandler MsgFormatHandler;
@@ -76,16 +79,18 @@ struct _MsgFormatHandler
    * match the requirements of the "format" in question.  This is used by
    * the "pacct" plugin to set the record length the proper size
    */
-  LogProtoServer *(*construct_proto)(const MsgFormatOptions *options, LogTransport *transport, const LogProtoServerOptions *proto_options);
+  LogProtoServer *(*construct_proto)(const MsgFormatOptions *options, LogTransport *transport,
+                                     const LogProtoServerOptions *proto_options);
   void (*parse)(const MsgFormatOptions *options, const guchar *data, gsize length, LogMessage *msg);
 };
 
 void msg_format_options_defaults(MsgFormatOptions *options);
 void msg_format_options_init(MsgFormatOptions *parse_options, GlobalConfig *cfg);
 void msg_format_options_destroy(MsgFormatOptions *parse_options);
+void msg_format_options_copy(MsgFormatOptions *options, const MsgFormatOptions *source);
 
-gboolean msg_format_options_process_flag(MsgFormatOptions *options, gchar *flag);
+gboolean msg_format_options_process_flag(MsgFormatOptions *options, const gchar *flag);
 
-void msg_format_inject_parse_error(LogMessage *msg, const guchar *data, gsize length);
+void msg_format_inject_parse_error(LogMessage *msg, const guchar *data, gsize length, gint problem_position);
 
 #endif

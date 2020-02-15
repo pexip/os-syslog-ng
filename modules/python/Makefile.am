@@ -21,6 +21,8 @@ modules_python_libmod_python_la_LIBADD		= \
 	$(IVYKIS_LIBS)
 
 modules_python_libmod_python_la_SOURCES		= \
+	modules/python/compat/compat-python.h     \
+	modules/python/compat/compat-python.c     \
 	modules/python/python-module.h		  \
 	modules/python/python-config.h		  \
 	modules/python/python-config.c		  \
@@ -40,9 +42,22 @@ modules_python_libmod_python_la_SOURCES		= \
 	modules/python/python-parser.h	          \
 	modules/python/python-logmsg.h		  \
 	modules/python/python-logmsg.c	          \
+	modules/python/python-logtemplate.h	  \
+	modules/python/python-logtemplate.c       \
+	modules/python/python-logtemplate-options.h\
+	modules/python/python-logtemplate-options.c\
+	modules/python/python-integerpointer.c    \
+	modules/python/python-integerpointer.h    \
+	modules/python/python-global-code-loader.h\
+	modules/python/python-global-code-loader.c\
+	modules/python/python-debugger.h	  \
 	modules/python/python-debugger.c	  \
-	modules/python/python-debugger.h
-
+	modules/python/python-logparser.h	  \
+	modules/python/python-logparser.c	  \
+	modules/python/python-source.h	  \
+	modules/python/python-source.c	  \
+	modules/python/python-fetcher.h	  \
+	modules/python/python-fetcher.c
 
 modules_python_libmod_python_la_LDFLAGS		 = \
 	$(MODULE_LDFLAGS) \
@@ -51,22 +66,26 @@ modules_python_libmod_python_la_LDFLAGS		 = \
 modules_python_libmod_python_la_DEPENDENCIES=	\
 	$(MODULE_DEPS_LIBS)
 
-BUILT_SOURCES					+= \
-	modules/python/python-grammar.y		   \
-	modules/python/python-grammar.c		   \
-	modules/python/python-grammar.h
-
 modules/python mod-python: modules/python/libmod-python.la
+
+include modules/python/tests/Makefile.am
 else
 modules/python mod-python:
 endif
 
 include modules/python/pylib/Makefile.am
 
+BUILT_SOURCES					+= \
+	modules/python/python-grammar.y		   \
+	modules/python/python-grammar.c		   \
+	modules/python/python-grammar.h
+
 EXTRA_DIST					+= \
+	modules/python/compat/compat-python-v2.c   \
+	modules/python/compat/compat-python-v3.c   \
 	modules/python/python-grammar.ym	   \
 	modules/python/python-example.conf	   \
-	modules/python/sngexample.py
+	modules/python/sngexample.py	\
+	modules/python/CMakeLists.txt
 
 .PHONY: modules/python mod-python
-

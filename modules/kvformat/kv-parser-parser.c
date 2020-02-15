@@ -29,10 +29,18 @@ int kv_parser_parse(CfgLexer *lexer, LogParser **instance, gpointer arg);
 
 static CfgLexerKeyword kv_parser_keywords[] =
 {
-  { "kv_parser",          KW_KV_PARSER,  },
-  { "linux_audit_parser", KW_LINUX_AUDIT_PARSER,  },
-  { "prefix",             KW_PREFIX,  },
-  { "value_separator",    KW_VALUE_SEPARATOR,  },
+  { "kv_parser",                     KW_KV_PARSER,  },
+  { "linux_audit_parser",            KW_LINUX_AUDIT_PARSER,  },
+  { "prefix",                        KW_PREFIX,  },
+  { "value_separator",               KW_VALUE_SEPARATOR,  },
+  { "pair_separator",                KW_PAIR_SEPARATOR,  },
+  { "extract_stray_words_into",      KW_EXTRACT_STRAY_WORDS_INTO,  },
+  {
+    "allow_pair_separator_in_value", KW_ALLOW_PAIR_SEPARATOR_OPTION,
+    .kw_status = KWS_OBSOLETE,
+    .kw_explain = "The allow-pair-separator-in-value(yes) has become the default behavior of kv-parser(), "
+    "and the option does nothing, you can safely remove it from your configuration."
+  },
   { NULL }
 };
 

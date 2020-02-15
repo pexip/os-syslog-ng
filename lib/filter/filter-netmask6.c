@@ -52,13 +52,18 @@ static inline uint64_t
 _mask(uint64_t base, uint64_t mask)
 {
   if (G_BYTE_ORDER == G_BIG_ENDIAN)
-    return base & mask;
+    {
+      return base & mask;
+    }
   else
-    return GUINT64_SWAP_LE_BE(GUINT64_SWAP_LE_BE(base) & mask);
+    {
+      const uint64_t reversed_base = GUINT64_SWAP_LE_BE(base);
+      return GUINT64_SWAP_LE_BE(reversed_base & mask);
+    }
 }
 
 void
-get_network_address(unsigned char *ipv6, int prefix, struct in6_addr *network)
+get_network_address(const struct in6_addr *address, int prefix, struct in6_addr *network)
 {
   struct ipv6_parts
   {
@@ -68,7 +73,8 @@ get_network_address(unsigned char *ipv6, int prefix, struct in6_addr *network)
 
   int length;
 
-  memcpy(&ipv6_parts, ipv6, sizeof(ipv6_parts));
+  memset(network, 0, sizeof(*network));
+  memcpy(&ipv6_parts, address, sizeof(*address));
   if (prefix <= 64)
     {
       ipv6_parts.lo = _mask(ipv6_parts.lo, _calculate_mask_by_prefix(prefix));
@@ -84,7 +90,7 @@ get_network_address(unsigned char *ipv6, int prefix, struct in6_addr *network)
 }
 
 static inline gboolean
-_in6_addr_compare(const struct in6_addr* address1, const struct in6_addr* address2)
+_in6_addr_compare(const struct in6_addr *address1, const struct in6_addr *address2)
 {
   return memcmp(address1, address2, sizeof(struct in6_addr)) == 0;
 }
@@ -93,36 +99,45 @@ static gboolean
 _eval(FilterExprNode *s, LogMessage **msgs, gint num_msg)
 {
   FilterNetmask6 *self = (FilterNetmask6 *) s;
-  LogMessage *msg = msgs[0];
+  LogMessage *msg = msgs[num_msg - 1];
   gboolean result = FALSE;
   struct in6_addr network_address;
-  struct in6_addr address;
+  const struct in6_addr *address;
 
   if (!self->is_valid)
     return s->comp;
 
   if (msg->saddr && g_sockaddr_inet6_check(msg->saddr))
     {
-      address = ((struct sockaddr_in6 *) &msg->saddr->sa)->sin6_addr;
+      address = &((struct sockaddr_in6 *) &msg->saddr->sa)->sin6_addr;
     }
   else if (!msg->saddr || msg->saddr->sa.sa_family == AF_UNIX)
     {
-      address = in6addr_loopback;
+      address = &in6addr_loopback;
     }
   else
     {
-      return s->comp;
+      address = NULL;
     }
 
-  memset(&network_address, 0, sizeof(struct in6_addr));
-  get_network_address((unsigned char *) &address, self->prefix, &network_address);
-  result = _in6_addr_compare(&network_address, &self->address);
+  if (address)
+    {
+      get_network_address(address, self->prefix, &network_address);
+      result = _in6_addr_compare(&network_address, &self->address);
+    }
+  else
+    result = FALSE;
 
+  msg_trace("netmask6() evaluation started",
+            evt_tag_inaddr6("msg_address", address),
+            evt_tag_inaddr6("address", &self->address),
+            evt_tag_int("prefix", self->prefix),
+            evt_tag_printf("msg", "%p", msg));
   return result ^ s->comp;
 }
 
 FilterExprNode *
-filter_netmask6_new(gchar *cidr)
+filter_netmask6_new(const gchar *cidr)
 {
   FilterNetmask6 *self = g_new0(FilterNetmask6, 1);
   struct in6_addr packet_addr;
@@ -147,7 +162,7 @@ filter_netmask6_new(gchar *cidr)
 
   self->is_valid = ((strlen(address) > 0) && inet_pton(AF_INET6, address, &packet_addr) == 1);
   if (self->is_valid)
-    get_network_address((unsigned char *) &packet_addr, self->prefix, &self->address);
+    get_network_address(&packet_addr, self->prefix, &self->address);
   else
     self->address = in6addr_loopback;
 

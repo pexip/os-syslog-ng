@@ -35,7 +35,7 @@ typedef struct _DateParser
 } DateParser;
 
 void
-date_parser_set_format(LogParser *s, gchar *format)
+date_parser_set_format(LogParser *s, const gchar *format)
 {
   DateParser *self = (DateParser *) s;
 
@@ -111,9 +111,9 @@ static void
 _adjust_tvsec_to_move_it_into_given_timezone(LogStamp *timestamp, gint normalized_hour, gint unnormalized_hour)
 {
   timestamp->tv_sec = timestamp->tv_sec
-    + get_local_timezone_ofs(timestamp->tv_sec)
-    - (normalized_hour - unnormalized_hour) * 3600
-    - timestamp->zone_offset;
+                      + get_local_timezone_ofs(timestamp->tv_sec)
+                      - (normalized_hour - unnormalized_hour) * 3600
+                      - timestamp->zone_offset;
 }
 
 static glong
@@ -145,6 +145,9 @@ _convert_struct_tm_to_logstamp(DateParser *self, time_t now, struct tm *tm, glon
   /* FIRST: We convert the timestamp as it was in our local time zone. */
   unnormalized_hour = tm->tm_hour;
   target->tv_sec = cached_mktime(tm);
+
+  /* we can't parse USEC value, as strptime() does not support that */
+  target->tv_usec = 0;
 
   /* SECOND: adjust tv_sec as if we converted it according to our timezone. */
   _adjust_tvsec_to_move_it_into_given_timezone(target, tm->tm_hour, unnormalized_hour);
@@ -180,16 +183,22 @@ date_parser_process(LogParser *s,
 {
   DateParser *self = (DateParser *) s;
   LogMessage *msg = log_msg_make_writable(pmsg, path_options);
+  msg_trace("date-parser message processing started",
+            evt_tag_str ("input", input),
+            evt_tag_str ("format", self->date_format),
+            evt_tag_printf("msg", "%p", *pmsg));
 
   /* this macro ensures zero termination by copying input to a
    * g_alloca()-d buffer if necessary. In most cases it's not though.
    */
 
   APPEND_ZERO(input, input, input_len);
-  return _convert_timestamp_to_logstamp(self,
-                                        msg->timestamps[LM_TS_RECVD].tv_sec,
-                                        &msg->timestamps[self->time_stamp],
-                                        input);
+  gboolean res = _convert_timestamp_to_logstamp(self,
+                                                msg->timestamps[LM_TS_RECVD].tv_sec,
+                                                &msg->timestamps[self->time_stamp],
+                                                input);
+
+  return res;
 }
 
 static LogPipe *

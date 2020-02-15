@@ -36,7 +36,7 @@ log_multiplexer_init(LogPipe *s)
 {
   LogMultiplexer *self = (LogMultiplexer *) s;
   gint i;
-  
+
   for (i = 0; i < self->next_hops->len; i++)
     {
       LogPipe *branch_head = g_ptr_array_index(self->next_hops, i);
@@ -46,7 +46,7 @@ log_multiplexer_init(LogPipe *s)
         {
           branch_head->flags |= (p->flags & PIF_BRANCH_PROPERTIES);
         }
-          
+
       if (branch_head->flags & PIF_BRANCH_FALLBACK)
         {
           self->fallback_exists = TRUE;
@@ -55,14 +55,14 @@ log_multiplexer_init(LogPipe *s)
   return TRUE;
 }
 
-static gboolean 
+static gboolean
 log_multiplexer_deinit(LogPipe *self)
 {
   return TRUE;
 }
 
 static void
-log_multiplexer_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options, gpointer user_data)
+log_multiplexer_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options)
 {
   LogMultiplexer *self = (LogMultiplexer *) s;
   gint i;
@@ -70,8 +70,12 @@ log_multiplexer_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_op
   gboolean matched;
   gboolean delivered = FALSE;
   gint fallback;
-  
+
   local_options.matched = &matched;
+  if (self->next_hops->len > 1)
+    {
+      log_msg_write_protect(msg);
+    }
   for (fallback = 0; (fallback == 0) || (fallback == 1 && self->fallback_exists && !delivered); fallback++)
     {
       for (i = 0; i < self->next_hops->len; i++)
@@ -90,15 +94,38 @@ log_multiplexer_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_op
           matched = TRUE;
           log_msg_add_ack(msg, &local_options);
           log_pipe_queue(next_hop, log_msg_ref(msg), &local_options);
-          
+
           if (matched)
             {
-              delivered = TRUE; 
+              delivered = TRUE;
               if (G_UNLIKELY(next_hop->flags & PIF_BRANCH_FINAL))
                 break;
             }
         }
     }
+  if (self->next_hops->len > 1)
+    {
+      log_msg_write_unprotect(msg);
+    }
+
+  /* NOTE: non of our multiplexed destinations delivered this message, let's
+   * propagate this result.  But only if we don't have a "next".  If we do,
+   * that would be responsible for doing the same, for instance if it is a
+   * filter.
+   *
+   * In case where this matters most (e.g.  the multiplexer attached to the
+   * source LogPipe), "next" will always be NULL.  I am not sure if there's
+   * ever a case, where a LogMpx has both "next" set, and have branches as
+   * well.
+   *
+   * If there's such a case, then from a conceptual point of view, this Mpx
+   * instance should transfer the responsibility for setting "matched" to
+   * the next pipeline element, which is what we do here.
+   */
+
+  if (!s->pipe_next && !delivered && path_options->matched)
+    *path_options->matched = FALSE;
+
   log_pipe_forward_msg(s, msg, path_options);
 }
 
@@ -115,7 +142,7 @@ LogMultiplexer *
 log_multiplexer_new(GlobalConfig *cfg)
 {
   LogMultiplexer *self = g_new0(LogMultiplexer, 1);
-  
+
   log_pipe_init_instance(&self->super, cfg);
   self->super.init = log_multiplexer_init;
   self->super.deinit = log_multiplexer_deinit;

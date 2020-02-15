@@ -13,11 +13,6 @@ modules_systemd_journal_libsdjournal_la_SOURCES = \
 	modules/systemd-journal/journald-subsystem.h \
 	modules/systemd-journal/journald-helper.c
 
-
-BUILT_SOURCES += modules/systemd-journal/systemd-journal-grammar.y \
-		 modules/systemd-journal/systemd-journal-grammar.c \
-		 modules/systemd-journal/systemd-journal-grammar.h
-
 modules_systemd_journal_libsdjournal_la_CPPFLAGS = $(AM_CPPFLAGS) $(libsystemd_CFLAGS) -I$(top_srcdir)/modules/systemd-journal -I$(top_builddir)/modules/systemd-journal
 modules_systemd_journal_libsdjournal_la_LIBADD = $(MODULE_DEPS_LIBS) $(libsystemd_LIBS)
 modules_systemd_journal_libsdjournal_la_LDFLAGS = $(MODULE_LDFLAGS)
@@ -29,6 +24,12 @@ else
 modules/systemd-journal mod-systemd-journal:
 endif
 
-EXTRA_DIST += modules/systemd-journal/systemd-journal-grammar.ym
+BUILT_SOURCES += modules/systemd-journal/systemd-journal-grammar.y \
+		 modules/systemd-journal/systemd-journal-grammar.c \
+		 modules/systemd-journal/systemd-journal-grammar.h
+
+EXTRA_DIST +=	\
+	modules/systemd-journal/CMakeLists.txt	\
+	modules/systemd-journal/systemd-journal-grammar.ym
 
 .PHONY: modules/systemd-journal mod-systemd-journal

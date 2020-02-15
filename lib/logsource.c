@@ -21,7 +21,7 @@
  * COPYING for details.
  *
  */
-  
+
 #include "logsource.h"
 #include "messages.h"
 #include "host-resolve.h"
@@ -40,30 +40,49 @@ log_source_wakeup(LogSource *self)
 {
   if (self->wakeup)
     self->wakeup(self);
+
+  msg_diagnostics("Source has been resumed", log_pipe_location_tag(&self->super));
+}
+
+void
+log_source_window_empty(LogSource *self)
+{
+  if (self->window_empty_cb)
+    self->window_empty_cb(self);
+  msg_diagnostics("LogSource window is empty");
 }
 
 static inline void
-_flow_control_window_size_adjust(LogSource *self, guint32 window_size_increment)
+_flow_control_window_size_adjust(LogSource *self, guint32 window_size_increment, gboolean last_ack_type_is_suspended)
 {
-  guint32 old_window_size;
+  gboolean suspended;
+  gsize old_window_size = window_size_counter_add(&self->window_size, window_size_increment, &suspended);
 
-  window_size_increment += g_atomic_counter_get(&self->suspended_window_size);
-  old_window_size = g_atomic_counter_exchange_and_add(&self->window_size, window_size_increment);
-  g_atomic_counter_set(&self->suspended_window_size, 0);
+  msg_diagnostics("Window size adjustment",
+                  evt_tag_int("old_window_size", old_window_size),
+                  evt_tag_int("window_size_increment", window_size_increment),
+                  evt_tag_str("suspended_before_increment", suspended ? "TRUE" : "FALSE"),
+                  evt_tag_str("last_ack_type_is_suspended", last_ack_type_is_suspended ? "TRUE" : "FALSE"));
 
-  if (old_window_size == 0)
+  gboolean need_to_resume_counter = !last_ack_type_is_suspended && suspended;
+  if (need_to_resume_counter)
+    window_size_counter_resume(&self->window_size);
+  if (old_window_size == 0 || need_to_resume_counter)
     log_source_wakeup(self);
+
+  if (old_window_size+window_size_increment == self->options->init_window_size)
+    log_source_window_empty(self);
 }
 
 static void
 _flow_control_rate_adjust(LogSource *self)
 {
+#ifdef SYSLOG_NG_HAVE_CLOCK_GETTIME
   guint32 cur_ack_count, last_ack_count;
   /* NOTE: this is racy. msg_ack may be executing in different writer
    * threads. I don't want to lock, all we need is an approximate value of
    * the ACK rate of the last couple of seconds.  */
 
-#ifdef SYSLOG_NG_HAVE_CLOCK_GETTIME
   if (accurate_nanosleep && self->threaded)
     {
       cur_ack_count = ++self->ack_count;
@@ -121,7 +140,14 @@ _flow_control_rate_adjust(LogSource *self)
 void
 log_source_flow_control_adjust(LogSource *self, guint32 window_size_increment)
 {
-  _flow_control_window_size_adjust(self, window_size_increment);
+  _flow_control_window_size_adjust(self, window_size_increment, FALSE);
+  _flow_control_rate_adjust(self);
+}
+
+void
+log_source_flow_control_adjust_when_suspended(LogSource *self, guint32 window_size_increment)
+{
+  _flow_control_window_size_adjust(self, window_size_increment, TRUE);
   _flow_control_rate_adjust(self);
 }
 
@@ -141,9 +167,11 @@ log_source_msg_ack(LogMessage *msg, AckType ack_type)
 void
 log_source_flow_control_suspend(LogSource *self)
 {
-  g_atomic_counter_set(&self->suspended_window_size, g_atomic_counter_get(&self->window_size));
-  g_atomic_counter_set(&self->window_size, 0);
-  _flow_control_rate_adjust(self);
+  msg_debug("Source has been suspended",
+            log_pipe_location_tag(&self->super),
+            evt_tag_str("function", __FUNCTION__));
+
+  window_size_counter_suspend(&self->window_size);
 }
 
 void
@@ -152,7 +180,7 @@ log_source_mangle_hostname(LogSource *self, LogMessage *msg)
   const gchar *resolved_name;
   gsize resolved_name_len;
   const gchar *orig_host;
-  
+
   resolved_name = resolve_sockaddr_to_hostname(&resolved_name_len, msg->saddr, &self->options->host_resolve_options);
   log_msg_set_value(msg, LM_V_HOST_FROM, resolved_name, resolved_name_len);
 
@@ -161,39 +189,44 @@ log_source_mangle_hostname(LogSource *self, LogMessage *msg)
     {
       gchar host[256];
       gint host_len = -1;
-      if (G_UNLIKELY(self->options->chain_hostnames)) 
-	{
+      if (G_UNLIKELY(self->options->chain_hostnames))
+        {
           msg->flags |= LF_CHAINED_HOSTNAME;
-	  if (msg->flags & LF_LOCAL) 
-	    {
-	      /* local */
-	      host_len = g_snprintf(host, sizeof(host), "%s@%s", self->options->group_name, resolved_name);
-	    }
-	  else if (!orig_host || !orig_host[0])
-	    {
-	      /* remote && no hostname */
-	      host_len = g_snprintf(host, sizeof(host), "%s/%s", resolved_name, resolved_name);
-	    } 
-	  else 
-	    {
-	      /* everything else, append source hostname */
-	      if (orig_host && orig_host[0])
-		host_len = g_snprintf(host, sizeof(host), "%s/%s", orig_host, resolved_name);
-	      else
+          if (msg->flags & LF_SIMPLE_HOSTNAME)
+            {
+              /* local without group name */
+              host_len = g_snprintf(host, sizeof(host), "%s", resolved_name);
+            }
+          else if (msg->flags & LF_LOCAL)
+            {
+              /* local */
+              host_len = g_snprintf(host, sizeof(host), "%s@%s", self->options->group_name, resolved_name);
+            }
+          else if (!orig_host || !orig_host[0])
+            {
+              /* remote && no hostname */
+              host_len = g_snprintf(host, sizeof(host), "%s/%s", resolved_name, resolved_name);
+            }
+          else
+            {
+              /* everything else, append source hostname */
+              if (orig_host && orig_host[0])
+                host_len = g_snprintf(host, sizeof(host), "%s/%s", orig_host, resolved_name);
+              else
                 {
                   strncpy(host, resolved_name, sizeof(host));
                   /* just in case it is not zero terminated */
                   host[255] = 0;
                 }
-	    }
+            }
           if (host_len >= sizeof(host))
             host_len = sizeof(host) - 1;
           log_msg_set_value(msg, LM_V_HOST, host, host_len);
-	}
+        }
       else
-	{
+        {
           log_msg_set_value(msg, LM_V_HOST, resolved_name, resolved_name_len);
-	}
+        }
     }
 }
 
@@ -203,9 +236,13 @@ log_source_init(LogPipe *s)
   LogSource *self = (LogSource *) s;
 
   stats_lock();
-  stats_register_counter(self->stats_level, self->stats_source | SCS_SOURCE, self->stats_id, self->stats_instance, SC_TYPE_PROCESSED, &self->recvd_messages);
-  stats_register_counter(self->stats_level, self->stats_source | SCS_SOURCE, self->stats_id, self->stats_instance, SC_TYPE_STAMP, &self->last_message_seen);
+  StatsClusterKey sc_key;
+  stats_cluster_logpipe_key_set(&sc_key, self->options->stats_source | SCS_SOURCE, self->stats_id, self->stats_instance);
+  stats_register_counter(self->options->stats_level, &sc_key,
+                         SC_TYPE_PROCESSED, &self->recvd_messages);
+  stats_register_counter(self->options->stats_level, &sc_key, SC_TYPE_STAMP, &self->last_message_seen);
   stats_unlock();
+
   return TRUE;
 }
 
@@ -213,11 +250,14 @@ gboolean
 log_source_deinit(LogPipe *s)
 {
   LogSource *self = (LogSource *) s;
-  
+
   stats_lock();
-  stats_unregister_counter(self->stats_source | SCS_SOURCE, self->stats_id, self->stats_instance, SC_TYPE_PROCESSED, &self->recvd_messages);
-  stats_unregister_counter(self->stats_source | SCS_SOURCE, self->stats_id, self->stats_instance, SC_TYPE_STAMP, &self->last_message_seen);
+  StatsClusterKey sc_key;
+  stats_cluster_logpipe_key_set(&sc_key, self->options->stats_source | SCS_SOURCE, self->stats_id, self->stats_instance);
+  stats_unregister_counter(&sc_key, SC_TYPE_PROCESSED, &self->recvd_messages);
+  stats_unregister_counter(&sc_key, SC_TYPE_STAMP, &self->last_message_seen);
   stats_unlock();
+
   return TRUE;
 }
 
@@ -235,7 +275,14 @@ log_source_post(LogSource *self, LogMessage *msg)
   log_msg_add_ack(msg, &path_options);
   msg->ack_func = log_source_msg_ack;
 
-  old_window_size = g_atomic_counter_exchange_and_add(&self->window_size, -1);
+  old_window_size = window_size_counter_sub(&self->window_size, 1, NULL);
+
+  if (G_UNLIKELY(old_window_size == 1))
+    {
+      msg_debug("Source has been suspended",
+                log_pipe_location_tag(&self->super),
+                evt_tag_str("function", __FUNCTION__));
+    }
 
   /*
    * NOTE: this assertion validates that the source is not overflowing its
@@ -249,37 +296,92 @@ log_source_post(LogSource *self, LogMessage *msg)
   log_pipe_queue(&self->super, msg, &path_options);
 }
 
+static gboolean
+_invoke_mangle_callbacks(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options)
+{
+  LogSource *self = (LogSource *) s;
+  GList *next_item = g_list_first(self->options->source_queue_callbacks);
+
+  while(next_item)
+    {
+      if(next_item->data)
+        {
+          if(!((mangle_callback) (next_item->data))(log_pipe_get_config(s),msg,self))
+            {
+              log_msg_drop(msg, path_options, AT_PROCESSED);
+              return FALSE;
+            }
+        }
+      next_item = next_item->next;
+    }
+  return TRUE;
+}
+
+static inline void
+_increment_dynamic_stats_counters(const gchar *source_id, const LogMessage *msg)
+{
+  if (stats_check_level(2))
+    {
+      stats_lock();
+
+      StatsClusterKey sc_key;
+      stats_cluster_logpipe_key_set(&sc_key, SCS_HOST | SCS_SOURCE, NULL, log_msg_get_value(msg, LM_V_HOST, NULL) );
+      stats_register_and_increment_dynamic_counter(2, &sc_key, msg->timestamps[LM_TS_RECVD].tv_sec);
+
+      if (stats_check_level(3))
+        {
+          stats_cluster_logpipe_key_set(&sc_key, SCS_SENDER | SCS_SOURCE, NULL, log_msg_get_value(msg, LM_V_HOST_FROM, NULL) );
+          stats_register_and_increment_dynamic_counter(3, &sc_key, msg->timestamps[LM_TS_RECVD].tv_sec);
+          stats_cluster_logpipe_key_set(&sc_key, SCS_PROGRAM | SCS_SOURCE, NULL, log_msg_get_value(msg, LM_V_PROGRAM, NULL) );
+          stats_register_and_increment_dynamic_counter(3, &sc_key, msg->timestamps[LM_TS_RECVD].tv_sec);
+
+          stats_cluster_logpipe_key_set(&sc_key, SCS_HOST | SCS_SOURCE, source_id, log_msg_get_value(msg, LM_V_HOST, NULL));
+          stats_register_and_increment_dynamic_counter(3, &sc_key, msg->timestamps[LM_TS_RECVD].tv_sec);
+          stats_cluster_logpipe_key_set(&sc_key, SCS_SENDER | SCS_SOURCE, source_id, log_msg_get_value(msg, LM_V_HOST_FROM,
+                                        NULL));
+          stats_register_and_increment_dynamic_counter(3, &sc_key, msg->timestamps[LM_TS_RECVD].tv_sec);
+        }
+
+      stats_unlock();
+    }
+}
+
 static void
-log_source_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options, gpointer user_data)
+log_source_override_host(LogSource *self, LogMessage *msg)
+{
+  if (self->options->host_override_len < 0)
+    self->options->host_override_len = strlen(self->options->host_override);
+  log_msg_set_value(msg, LM_V_HOST, self->options->host_override, self->options->host_override_len);
+}
+
+static void
+log_source_override_program(LogSource *self, LogMessage *msg)
+{
+  if (self->options->program_override_len < 0)
+    self->options->program_override_len = strlen(self->options->program_override);
+  log_msg_set_value(msg, LM_V_PROGRAM, self->options->program_override, self->options->program_override_len);
+}
+
+static void
+log_source_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options)
 {
   LogSource *self = (LogSource *) s;
   gint i;
-  
+
   msg_set_context(msg);
 
-  if (msg->timestamps[LM_TS_STAMP].tv_sec == -1 || !self->options->keep_timestamp)
+  msg_diagnostics(">>>>>> Source side message processing begin",
+                  evt_tag_str("instance", self->stats_instance ? self->stats_instance : "internal"),
+                  log_pipe_location_tag(s),
+                  evt_tag_printf("msg", "%p", msg));
+
+  if (!self->options->keep_timestamp)
     msg->timestamps[LM_TS_STAMP] = msg->timestamps[LM_TS_RECVD];
-    
+
   g_assert(msg->timestamps[LM_TS_STAMP].zone_offset != -1);
 
   /* $HOST setup */
   log_source_mangle_hostname(self, msg);
-
-  /* $PROGRAM override */
-  if (self->options->program_override)
-    {
-      if (self->options->program_override_len < 0)
-        self->options->program_override_len = strlen(self->options->program_override);
-      log_msg_set_value(msg, LM_V_PROGRAM, self->options->program_override, self->options->program_override_len);
-    }
-
-  /* $HOST override */
-  if (self->options->host_override)
-    {
-      if (self->options->host_override_len < 0)
-        self->options->host_override_len = strlen(self->options->host_override);
-      log_msg_set_value(msg, LM_V_HOST, self->options->host_override, self->options->host_override_len);
-    }
 
   /* source specific tags */
   if (self->options->tags)
@@ -292,30 +394,24 @@ log_source_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options
 
   log_msg_set_tag_by_id(msg, self->options->source_group_tag);
 
-  /* stats counters */
-  if (stats_check_level(2))
-    {
-      stats_lock();
 
-      stats_register_and_increment_dynamic_counter(2, SCS_HOST | SCS_SOURCE, NULL, log_msg_get_value(msg, LM_V_HOST, NULL), msg->timestamps[LM_TS_RECVD].tv_sec);
-      if (stats_check_level(3))
-        {
-          stats_register_and_increment_dynamic_counter(3, SCS_SENDER | SCS_SOURCE, NULL, log_msg_get_value(msg, LM_V_HOST_FROM, NULL), msg->timestamps[LM_TS_RECVD].tv_sec);
-          stats_register_and_increment_dynamic_counter(3, SCS_PROGRAM | SCS_SOURCE, NULL, log_msg_get_value(msg, LM_V_PROGRAM, NULL), msg->timestamps[LM_TS_RECVD].tv_sec);
-        }
+  if (!_invoke_mangle_callbacks(s, msg, path_options))
+    return;
 
-      stats_unlock();
-    }
+  if (self->options->host_override)
+    log_source_override_host(self, msg);
+
+  if (self->options->program_override)
+    log_source_override_program(self, msg);
+
+  _increment_dynamic_stats_counters(self->stats_id, msg);
   stats_syslog_process_message_pri(msg->pri);
 
   /* message setup finished, send it out */
 
-
   stats_counter_inc(self->recvd_messages);
   stats_counter_set(self->last_message_seen, msg->timestamps[LM_TS_RECVD].tv_sec);
   log_pipe_forward_msg(s, msg, path_options);
-
-  msg_set_context(NULL);
 
   if (accurate_nanosleep && self->threaded && self->window_full_sleep_nsec > 0 && !log_source_free_to_send(self))
     {
@@ -326,6 +422,12 @@ log_source_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options
       ts.tv_nsec = self->window_full_sleep_nsec;
       nanosleep(&ts, NULL);
     }
+  msg_diagnostics("<<<<<< Source side message processing finish",
+                  evt_tag_str("instance", self->stats_instance ? self->stats_instance : "internal"),
+                  log_pipe_location_tag(s),
+                  evt_tag_printf("msg", "%p", msg));
+
+  msg_set_context(NULL);
 
 }
 
@@ -342,17 +444,17 @@ _create_ack_tracker_if_not_exists(LogSource *self, gboolean pos_tracked)
 }
 
 void
-log_source_set_options(LogSource *self, LogSourceOptions *options, gint stats_level, gint stats_source, const gchar *stats_id, const gchar *stats_instance, gboolean threaded, gboolean pos_tracked, LogExprNode *expr_node)
+log_source_set_options(LogSource *self, LogSourceOptions *options,
+                       const gchar *stats_id, const gchar *stats_instance,
+                       gboolean threaded, gboolean pos_tracked, LogExprNode *expr_node)
 {
   /* NOTE: we don't adjust window_size even in case it was changed in the
    * configuration and we received a SIGHUP.  This means that opened
    * connections will not have their window_size changed. */
-  
-  if (g_atomic_counter_get(&self->window_size) == -1)
-    g_atomic_counter_set(&self->window_size, options->init_window_size);
+
+  if ((gint)window_size_counter_get(&self->window_size, NULL) == -1)
+    window_size_counter_set(&self->window_size, options->init_window_size);
   self->options = options;
-  self->stats_level = stats_level;
-  self->stats_source = stats_source;
   if (self->stats_id)
     g_free(self->stats_id);
   self->stats_id = stats_id ? g_strdup(stats_id) : NULL;
@@ -361,7 +463,9 @@ log_source_set_options(LogSource *self, LogSourceOptions *options, gint stats_le
   self->stats_instance = stats_instance ? g_strdup(stats_instance): NULL;
   self->threaded = threaded;
   self->pos_tracked = pos_tracked;
-  self->super.expr_node = expr_node;
+  log_pipe_detach_expr_node(&self->super);
+  log_pipe_attach_expr_node(&self->super, expr_node);
+
   _create_ack_tracker_if_not_exists(self, pos_tracked);
 }
 
@@ -373,7 +477,7 @@ log_source_init_instance(LogSource *self, GlobalConfig *cfg)
   self->super.free_fn = log_source_free;
   self->super.init = log_source_init;
   self->super.deinit = log_source_deinit;
-  g_atomic_counter_set(&self->window_size, -1);
+  window_size_counter_set(&self->window_size, (gsize)-1);
   self->ack_tracker = NULL;
 }
 
@@ -381,9 +485,10 @@ void
 log_source_free(LogPipe *s)
 {
   LogSource *self = (LogSource *) s;
-  
+
   g_free(self->stats_id);
   g_free(self->stats_instance);
+  log_pipe_detach_expr_node(&self->super);
   log_pipe_free_method(s);
 
   ack_tracker_free(self->ack_tracker);
@@ -399,6 +504,7 @@ log_source_options_defaults(LogSourceOptions *options)
   options->program_override_len = -1;
   options->host_override_len = -1;
   options->tags = NULL;
+  options->read_old_records = TRUE;
   host_resolve_options_defaults(&options->host_resolve_options);
 }
 
@@ -407,6 +513,8 @@ void
 log_source_options_init(LogSourceOptions *options, GlobalConfig *cfg, const gchar *group_name)
 {
   gchar *source_group_name;
+
+  options->source_queue_callbacks = cfg->source_mangle_callback_list;
 
   if (options->keep_hostname == -1)
     options->keep_hostname = cfg->keep_hostname;
@@ -419,7 +527,7 @@ log_source_options_init(LogSourceOptions *options, GlobalConfig *cfg, const gcha
   source_group_name = g_strdup_printf(".source.%s", group_name);
   options->source_group_tag = log_tags_get_by_name(source_group_name);
   g_free(source_group_name);
-  host_resolve_options_init(&options->host_resolve_options, cfg);
+  host_resolve_options_init(&options->host_resolve_options, &cfg->host_resolve_options);
 }
 
 void

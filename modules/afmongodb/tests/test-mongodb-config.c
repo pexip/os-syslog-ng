@@ -80,7 +80,7 @@ _execute(const gchar *testcase, Checks checks, const gchar *user_data)
 static gboolean
 _execute_find_text_in_log(const gchar *pattern)
 {
-  return assert_grabbed_messages_contain_non_fatal(pattern, "mismatch", NULL);
+  return assert_grabbed_messages_contain_non_fatal(pattern, "mismatch");
 }
 
 static void
@@ -130,7 +130,7 @@ _expect_uri_in_log(const gchar *testcase, const gchar *uri, const gchar *db, con
 static gboolean
 _execute_compare_persist_name(const gchar *expected_name)
 {
-  LogThrDestDriver *self = (LogThrDestDriver *)mongodb;
+  LogThreadedDestDriver *self = (LogThreadedDestDriver *)mongodb;
   const gchar *name = log_pipe_get_persist_name((const LogPipe *)self);
   return assert_nstring_non_fatal(name, -1, expected_name, -1, "mismatch");
 }
@@ -147,8 +147,8 @@ _test_persist_name(void)
 static gboolean
 _execute_compare_stats_name(const gchar *expected_name)
 {
-  LogThrDestDriver *self = (LogThrDestDriver *)mongodb;
-  const gchar *name = self->format.stats_instance(self);
+  LogThreadedDestDriver *self = (LogThreadedDestDriver *)mongodb;
+  const gchar *name = self->format_stats_instance(self);
   return assert_nstring_non_fatal(name, -1, expected_name, -1, "mismatch");
 }
 
@@ -166,8 +166,8 @@ _test_uri_correct(void)
 {
   _expect_uri_in_log("default_uri", "127.0.0.1:27017/syslog" SAFEOPTS, "syslog", "messages");
 
-  afmongodb_dd_set_uri(mongodb, "mongodb:///tmp/mongo.sock");
-  _expect_uri_in_log("socket", "/tmp/mongo.sock", "tmp/mongo.sock", "messages");
+  afmongodb_dd_set_uri(mongodb, "mongodb://%2Ftmp%2Fmongo.sock/syslog");
+  _expect_uri_in_log("socket", "%2Ftmp%2Fmongo.sock/syslog", "syslog", "messages");
 
   afmongodb_dd_set_uri(mongodb, "mongodb://localhost:1234/syslog-ng");
   _expect_uri_in_log("uri", "localhost:1234/syslog-ng", "syslog-ng", "messages");
@@ -216,9 +216,6 @@ _test_legacy_correct(void)
   afmongodb_dd_set_port(mongodb, 1234);
   _expect_uri_in_log("port", "127.0.0.1:1234/syslog" SAFEOPTS, "syslog", "messages");
 
-  afmongodb_dd_set_path(mongodb, "/tmp/mongo.sock");
-  _expect_uri_in_log("path", "/tmp/mongo.sock" SAFEOPTS, "tmp/mongo.sock", "messages");
-
   afmongodb_dd_set_database(mongodb, "syslog-ng");
   _expect_uri_in_log("database", "127.0.0.1:27017/syslog-ng" SAFEOPTS, "syslog-ng", "messages");
 
@@ -265,7 +262,7 @@ _test_legacy_error(void)
   afmongodb_dd_set_safe_mode(mongodb, FALSE);
   afmongodb_dd_set_uri(mongodb, "mongodb://127.0.0.1:27017/syslog");
   _expect_error_in_log("uri_safe_mode", "Error: either specify a MongoDB URI "
-                      "(and optional collection) or only legacy options;");
+                       "(and optional collection) or only legacy options;");
 
   afmongodb_dd_set_host(mongodb, "?");
   _expect_error_in_log("host_invalid", "Cannot parse MongoDB URI; uri=");
@@ -297,14 +294,14 @@ _setup(void)
 {
   msg_init(FALSE);
   g_thread_init(NULL);
-  syntax_only = FALSE;
+
   debug_flag = TRUE;
   verbose_flag = TRUE;
   trace_flag = TRUE;
 
   log_msg_registry_init();
 
-  test_cfg = cfg_new(0x0308);
+  test_cfg = cfg_new_snippet();
   g_assert(test_cfg);
 
   const gchar *persist_filename = "";

@@ -25,6 +25,7 @@
 #include "debugger/tracer.h"
 #include "logmsg/logmsg.h"
 #include "logpipe.h"
+#include "apphook.h"
 #include "mainloop.h"
 
 #include <stdio.h>
@@ -33,6 +34,7 @@
 struct _Debugger
 {
   Tracer *tracer;
+  MainLoop *main_loop;
   GlobalConfig *cfg;
   gchar *command_buffer;
   LogTemplate *display_template;
@@ -100,13 +102,17 @@ _display_source_line(LogExprNode *expr_node)
   if (f)
     {
       while (fgets(buf, sizeof(buf), f) && lineno < expr_node->line)
-        lineno++;
+               lineno++;
       if (lineno != expr_node->line)
         buf[0] = 0;
       fclose(f);
     }
+  else
+    {
+      buf[0] = 0;
+    }
   printf("%-8d %s", expr_node->line, buf);
-  if (buf[strlen(buf) - 1] != '\n')
+  if (buf[0] == 0 || buf[strlen(buf) - 1] != '\n')
     putc('\n', stdout);
   fflush(stdout);
 }
@@ -121,7 +127,7 @@ _cmd_help(Debugger *self, gint argc, gchar *argv[])
          "  print, p                 Print the current log message\n"
          "  drop, d                  Drop the current message\n"
          "  quit, q                  Tell syslog-ng to exit\n"
-         );
+        );
   return TRUE;
 }
 
@@ -177,17 +183,19 @@ _cmd_drop(Debugger *self, gint argc, gchar *argv[])
 static gboolean
 _cmd_quit(Debugger *self, gint argc, gchar *argv[])
 {
-  main_loop_exit();
+  main_loop_exit(self->main_loop);
   self->drop_current_message = TRUE;
   return FALSE;
 }
 
 typedef gboolean (*DebuggerCommandFunc)(Debugger *self, gint argc, gchar *argv[]);
 
-struct {
+struct
+{
   const gchar *name;
   DebuggerCommandFunc command;
-} command_table[] = {
+} command_table[] =
+{
   { "help",     _cmd_help },
   { "h",        _cmd_help },
   { "?",        _cmd_help },
@@ -308,6 +316,7 @@ _handle_interactive_prompt(Debugger *self)
 static gpointer
 _interactive_console_thread_func(Debugger *self)
 {
+  app_thread_start();
   printf("Waiting for breakpoint...\n");
   while (1)
     {
@@ -316,6 +325,7 @@ _interactive_console_thread_func(Debugger *self)
       _handle_interactive_prompt(self);
       tracer_resume_after_breakpoint(self->tracer);
     }
+  app_thread_stop();
   return NULL;
 }
 
@@ -340,10 +350,11 @@ debugger_stop_at_breakpoint(Debugger *self, LogPipe *pipe_, LogMessage *msg)
 }
 
 Debugger *
-debugger_new(GlobalConfig *cfg)
+debugger_new(MainLoop *main_loop, GlobalConfig *cfg)
 {
   Debugger *self = g_new0(Debugger, 1);
 
+  self->main_loop = main_loop;
   self->tracer = tracer_new(cfg);
   self->cfg = cfg;
   self->display_template = log_template_new(cfg, NULL);

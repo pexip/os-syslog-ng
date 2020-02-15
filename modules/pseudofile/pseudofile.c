@@ -20,7 +20,7 @@
  * COPYING for details.
  *
  */
-  
+
 #include "pseudofile.h"
 #include "messages.h"
 #include "scratch-buffers.h"
@@ -84,8 +84,8 @@ _evt_tag_message(const GString *msg)
 {
   const int max_len = 30;
 
-  return evt_tag_printf("message", "%.*s%s", 
-                        (int) MIN(max_len, msg->len), msg->str, 
+  return evt_tag_printf("message", "%.*s%s",
+                        (int) MIN(max_len, msg->len), msg->str,
                         msg->len > max_len ? "..." : "");
 }
 
@@ -101,12 +101,12 @@ _write_message(PseudoFileDestDriver *self, const GString *msg)
             evt_tag_str("driver", self->super.super.id),
             _evt_tag_message(msg));
   fd = open(self->pseudofile_name, O_NOCTTY | O_WRONLY | O_NONBLOCK);
-  if (fd < 0) 
+  if (fd < 0)
     {
       msg_error("Error opening pseudo file",
                 evt_tag_str("pseudofile", self->pseudofile_name),
                 evt_tag_str("driver", self->super.super.id),
-                evt_tag_errno("error", errno),
+                evt_tag_error("error"),
                 _evt_tag_message(msg));
       goto exit;
     }
@@ -117,7 +117,7 @@ _write_message(PseudoFileDestDriver *self, const GString *msg)
       msg_error("Error writing to pseudo file",
                 evt_tag_str("pseudofile", self->pseudofile_name),
                 evt_tag_str("driver", self->super.super.id),
-                evt_tag_errno("error", errno),
+                evt_tag_error("error"),
                 _evt_tag_message(msg));
       goto exit;
     }
@@ -131,9 +131,11 @@ _write_message(PseudoFileDestDriver *self, const GString *msg)
     }
 
   success = TRUE;
-  close(fd);
 
- exit:
+exit:
+  if (fd >= 0)
+    close(fd);
+
   return success;
 }
 
@@ -154,28 +156,27 @@ _suspend_output(PseudoFileDestDriver *self, time_t now)
 }
 
 static void
-pseudofile_dd_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options, gpointer user_data)
+pseudofile_dd_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options)
 {
   PseudoFileDestDriver *self = (PseudoFileDestDriver *) s;
-  SBGString *formatted_message = sb_gstring_acquire();
+  GString *formatted_message = scratch_buffers_alloc();
   gboolean success;
   time_t now = msg->timestamps[LM_TS_RECVD].tv_sec;
-  
+
   if (_is_output_suspended(self, now))
     goto finish;
-  
-  _format_message(self, msg, sb_gstring_string(formatted_message));
-  
+
+  _format_message(self, msg, formatted_message);
+
   G_LOCK(pseudofile_lock);
-  success = _write_message(self, sb_gstring_string(formatted_message));
+  success = _write_message(self, formatted_message);
   G_UNLOCK(pseudofile_lock);
-  
+
   if (!success)
     _suspend_output(self, now);
 
-  sb_gstring_release(formatted_message);
 finish:
-  log_dest_driver_queue_method(s, msg, path_options, user_data);
+  log_dest_driver_queue_method(s, msg, path_options);
 }
 
 static gboolean
@@ -203,7 +204,7 @@ LogDriver *
 pseudofile_dd_new(gchar *pseudofile_name, GlobalConfig *cfg)
 {
   PseudoFileDestDriver *self = g_new0(PseudoFileDestDriver, 1);
-  
+
   log_dest_driver_init_instance(&self->super, cfg);
   log_template_options_defaults(&self->template_options);
   self->super.super.super.init = pseudofile_dd_init;

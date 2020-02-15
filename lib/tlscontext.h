@@ -25,7 +25,8 @@
 #define TLSCONTEXT_H_INCLUDED
 
 #include "syslog-ng.h"
-
+#include "messages.h"
+#include "atomic.h"
 #include <openssl/ssl.h>
 
 typedef enum
@@ -54,45 +55,77 @@ typedef enum
   TSO_NOTLSv12=0x0010,
 } TLSSslOptions;
 
+typedef enum
+{
+  TLS_CONTEXT_SETUP_OK,
+  TLS_CONTEXT_SETUP_ERROR,
+  TLS_CONTEXT_SETUP_BAD_PASSWORD
+} TLSContextSetupResult;
+
 typedef gint (*TLSSessionVerifyFunc)(gint ok, X509_STORE_CTX *ctx, gpointer user_data);
 typedef struct _TLSContext TLSContext;
+
+#define X509_MAX_CN_LEN 64
+#define X509_MAX_O_LEN 64
+#define X509_MAX_OU_LEN 32
+
+typedef struct _TLSVerifier
+{
+  GAtomicCounter ref_cnt;
+  TLSSessionVerifyFunc verify_func;
+  gpointer verify_data;
+  GDestroyNotify verify_data_destroy;
+} TLSVerifier;
 
 typedef struct _TLSSession
 {
   SSL *ssl;
   TLSContext *ctx;
-  TLSSessionVerifyFunc verify_func;
-  gpointer verify_data;
-  GDestroyNotify verify_data_destroy;
+  TLSVerifier *verifier;
+  struct
+  {
+    int found;
+    gchar o[X509_MAX_O_LEN];
+    gchar ou[X509_MAX_OU_LEN];
+    gchar cn[X509_MAX_CN_LEN];
+  } peer_info;
 } TLSSession;
 
-void tls_session_set_verify(TLSSession *self, TLSSessionVerifyFunc verify_func, gpointer verify_data, GDestroyNotify verify_destroy);
+#define TMI_ALLOW_COMPRESS 0x1
+
+void tls_session_set_verifier(TLSSession *self, TLSVerifier *verifier);
 void tls_session_free(TLSSession *self);
 
-struct _TLSContext
-{
-  TLSMode mode;
-  gint verify_mode;
-  gchar *key_file;
-  gchar *cert_file;
-  gchar *ca_dir;
-  gchar *crl_dir;
-  gchar *cipher_suite;
-  SSL_CTX *ssl_ctx;
-  GList *trusted_fingerpint_list;
-  GList *trusted_dn_list;
-  gint ssl_options;
-};
-
-
+TLSContextSetupResult tls_context_setup_context(TLSContext *self);
 TLSSession *tls_context_setup_session(TLSContext *self);
 void tls_session_set_trusted_fingerprints(TLSContext *self, GList *fingerprints);
 void tls_session_set_trusted_dn(TLSContext *self, GList *dns);
-TLSContext *tls_context_new(TLSMode mode);
-void tls_context_free(TLSContext *s);
 
-TLSVerifyMode tls_lookup_verify_mode(const gchar *mode_str);
-gint tls_lookup_options(GList *options);
+TLSContext *tls_context_new(TLSMode mode, const gchar *config_location);
+TLSContext *tls_context_ref(TLSContext *self);
+void tls_context_unref(TLSContext *self);
+TLSVerifier *tls_verifier_new(TLSSessionVerifyFunc verify_func, gpointer verify_data,
+                              GDestroyNotify verify_data_destroy);
+TLSVerifier *tls_verifier_ref(TLSVerifier *self);
+void tls_verifier_unref(TLSVerifier *self);
+
+
+void tls_session_configure_allow_compress(TLSSession *tls_session, gboolean allow_compress);
+gboolean tls_context_set_verify_mode_by_name(TLSContext *self, const gchar *mode_str);
+gboolean tls_context_set_ssl_options_by_name(TLSContext *self, GList *options);
+gint tls_context_get_verify_mode(const TLSContext *self);
+void tls_context_set_verify_mode(TLSContext *self, gint verify_mode);
+void tls_context_set_key_file(TLSContext *self, const gchar *key_file);
+void tls_context_set_cert_file(TLSContext *self, const gchar *cert_file);
+void tls_context_set_pkcs12_file(TLSContext *self, const gchar *pkcs12_file);
+void tls_context_set_ca_dir(TLSContext *self, const gchar *ca_dir);
+void tls_context_set_crl_dir(TLSContext *self, const gchar *crl_dir);
+void tls_context_set_cipher_suite(TLSContext *self, const gchar *cipher_suite);
+void tls_context_set_ecdh_curve_list(TLSContext *self, const gchar *ecdh_curve_list);
+void tls_context_set_dhparam_file(TLSContext *self, const gchar *dhparam_file);
+const gchar *tls_context_get_key_file(TLSContext *self);
+EVTTAG *tls_context_format_tls_error_tag(TLSContext *self);
+EVTTAG *tls_context_format_location_tag(TLSContext *self);
 
 void tls_log_certificate_validation_progress(int ok, X509_STORE_CTX *ctx);
 gboolean tls_verify_certificate_name(X509 *cert, const gchar *hostname);
