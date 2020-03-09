@@ -16,5 +16,4 @@
 0023-groupingby_fix_invalid_memory_access.patch
 
 add_ca_file.patch
-tlscontext_refcnt.patch
 systemd_default_prio.patch

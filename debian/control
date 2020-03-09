@@ -126,13 +126,8 @@ Recommends: logrotate
 Suggests: ${sng:CoreModules}, ${sng:Modules}
 Provides: system-log-daemon, linux-kernel-log-daemon, libsyslog-ng-dev
 Conflicts: system-log-daemon, linux-kernel-log-daemon
-<<<<<<< HEAD
-Replaces: syslog-ng (<< 3.3.0~), libsyslog-ng-dev
-Breaks: syslog-ng (<< 3.3.0~), libsyslog-ng-dev, pexip-common-overrides (<< 1.77~)
-=======
 Replaces: syslog-ng (<< 3.3.0~), libsyslog-ng-dev, syslog-ng-mod-json (<< 3.19.1~)
-Breaks: syslog-ng (<< 3.3.0~), libsyslog-ng-dev, syslog-ng-mod-json (<< 3.19.1~)
->>>>>>> debian/3.19.1-5
+Breaks: syslog-ng (<< 3.3.0~), libsyslog-ng-dev, syslog-ng-mod-json (<< 3.19.1~), pexip-common-overrides (<< 1.77~)
 Description: Enhanced system logging daemon (core)
  syslog-ng is an enhanced log daemon, supporting a wide range of input
  and output methods: syslog, unstructured text, message queues,

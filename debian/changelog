@@ -1,3 +1,14 @@
+syslog-ng (3.19.1-5pexip1) pexip; urgency=medium
+
+  * Migrate to Buster
+  * Refresh patch:
+    debian/patches/add_ca_file.patch
+  * Remove patch applied upstream:
+    debian/patches/tlscontext_refcnt.patch
+  * Update control file with pexip ovveride file breaks
+
+ -- Vincent Sanders <vince@pexip.com>  Mon, 09 Mar 2020 11:48:51 +0000
+
 syslog-ng (3.19.1-5) unstable; urgency=high
 
   * Backport security fixes:

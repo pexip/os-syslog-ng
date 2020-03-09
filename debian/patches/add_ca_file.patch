@@ -1,63 +1,77 @@
-diff --git a/lib/tlscontext.c b/lib/tlscontext.c
-index dc34f2c..8eb09ce 100644
 --- a/lib/tlscontext.c
 +++ b/lib/tlscontext.c
-@@ -298,6 +298,9 @@ tls_context_setup_session(TLSContext *self)
-       if (self->key_file && self->cert_file && !SSL_CTX_check_private_key(self->ssl_ctx))
-         goto error;
- 
-+      if (file_exists(self->ca_file) && !SSL_CTX_load_verify_locations(self->ssl_ctx, self->ca_file, NULL))
-+        goto error;
-+
-       if (file_exists(self->ca_dir) && !SSL_CTX_load_verify_locations(self->ssl_ctx, NULL, self->ca_dir))
-         goto error;
- 
-@@ -383,6 +386,7 @@ tls_context_free(TLSContext *self)
-   g_free(self->key_file);
-   g_free(self->cert_file);
-   g_free(self->ca_dir);
-+  g_free(self->ca_file);
-   g_free(self->crl_dir);
-   g_free(self->cipher_suite);
-   g_free(self);
-diff --git a/lib/tlscontext.h b/lib/tlscontext.h
-index 98a2f85..7ceec51 100644
---- a/lib/tlscontext.h
-+++ b/lib/tlscontext.h
-@@ -68,6 +68,7 @@ struct _TLSContext
-   gchar *key_file;
-   gchar *cert_file;
+@@ -48,6 +48,7 @@
+   gchar *dhparam_file;
+   gchar *pkcs12_file;
    gchar *ca_dir;
 +  gchar *ca_file;
    gchar *crl_dir;
    gchar *cipher_suite;
-   SSL_CTX *ssl_ctx;
-diff --git a/modules/afsocket/afsocket-grammar.ym b/modules/afsocket/afsocket-grammar.ym
-index 9a4ccf0..0402f19 100644
+   gchar *ecdh_curve_list;
+@@ -691,6 +692,9 @@
+         goto error;
+     }
+ 
++  if (_is_file_accessible(self, self->ca_file) && !SSL_CTX_load_verify_locations(self->ssl_ctx, NULL, self->ca_file))
++    goto error;
++
+   if (_is_file_accessible(self, self->ca_dir) && !SSL_CTX_load_verify_locations(self->ssl_ctx, NULL, self->ca_dir))
+     goto error;
+ 
+@@ -788,6 +792,7 @@
+   g_free(self->cert_file);
+   g_free(self->dhparam_file);
+   g_free(self->ca_dir);
++  g_free(self->ca_file);
+   g_free(self->crl_dir);
+   g_free(self->cipher_suite);
+   g_free(self->ecdh_curve_list);
+@@ -972,6 +977,13 @@
+ }
+ 
+ void
++tls_context_set_ca_file(TLSContext *self, const gchar *ca_file)
++{
++  g_free(self->ca_file);
++  self->ca_file = g_strdup(ca_file);
++}
++
++void
+ tls_context_set_crl_dir(TLSContext *self, const gchar *crl_dir)
+ {
+   g_free(self->crl_dir);
+--- a/lib/tlscontext.h
++++ b/lib/tlscontext.h
+@@ -119,6 +119,7 @@
+ void tls_context_set_cert_file(TLSContext *self, const gchar *cert_file);
+ void tls_context_set_pkcs12_file(TLSContext *self, const gchar *pkcs12_file);
+ void tls_context_set_ca_dir(TLSContext *self, const gchar *ca_dir);
++void tls_context_set_ca_file(TLSContext *self, const gchar *ca_file);
+ void tls_context_set_crl_dir(TLSContext *self, const gchar *crl_dir);
+ void tls_context_set_cipher_suite(TLSContext *self, const gchar *cipher_suite);
+ void tls_context_set_ecdh_curve_list(TLSContext *self, const gchar *ecdh_curve_list);
 --- a/modules/afsocket/afsocket-grammar.ym
 +++ b/modules/afsocket/afsocket-grammar.ym
-@@ -155,6 +155,7 @@ afinet_grammar_set_dest_driver(AFInetDestDriver *dd)
- %token KW_KEY_FILE
- %token KW_CERT_FILE
+@@ -176,6 +176,7 @@
+ %token KW_DHPARAM_FILE
+ %token KW_PKCS12_FILE
  %token KW_CA_DIR
 +%token KW_CA_FILE
  %token KW_CRL_DIR
  %token KW_TRUSTED_KEYS
  %token KW_TRUSTED_DN
-@@ -663,6 +664,11 @@ tls_option
- 	    last_tls_context->ca_dir = g_strdup($3);
+@@ -790,6 +791,11 @@
+ 	    tls_context_set_ca_dir(last_tls_context, $3);
              free($3);
            }
 +	| KW_CA_FILE '(' string ')'
 +	  {
-+	    last_tls_context->ca_file = g_strdup($3);
++	    tls_context_set_ca_file(last_tls_context, $3);
 +	    free($3);
 +	  }
  	| KW_CRL_DIR '(' string ')'
  	  {
- 	    last_tls_context->crl_dir = g_strdup($3);
-diff --git a/modules/afsocket/afsocket-parser.c b/modules/afsocket/afsocket-parser.c
-index f9e14a4..f749f7e 100644
+ 	    tls_context_set_crl_dir(last_tls_context, $3);
 --- a/modules/afsocket/afsocket-parser.c
 +++ b/modules/afsocket/afsocket-parser.c
 @@ -24,7 +24,7 @@
@@ -69,43 +83,17 @@ index f9e14a4..f749f7e 100644
  
  extern int afsocket_debug;
  
-@@ -48,6 +48,7 @@ static CfgLexerKeyword afsocket_keywords[] = {
-   { "key_file",           KW_KEY_FILE },
-   { "cert_file",          KW_CERT_FILE },
+@@ -50,6 +50,7 @@
+   { "dhparam_file",       KW_DHPARAM_FILE },
+   { "pkcs12_file",        KW_PKCS12_FILE },
    { "ca_dir",             KW_CA_DIR },
 +  { "ca_file",            KW_CA_FILE },
    { "crl_dir",            KW_CRL_DIR },
    { "trusted_keys",       KW_TRUSTED_KEYS },
    { "trusted_dn",         KW_TRUSTED_DN },
-diff --git a/modules/afsocket/afsocket-grammar.y b/modules/afsocket/afsocket-grammar.y
-index 1cbe2cd..6122669 100644
---- a/modules/afsocket/afsocket-grammar.y
-+++ b/modules/afsocket/afsocket-grammar.y
-@@ -162,6 +162,7 @@ systemd_syslog_grammar_set_source_driver(SystemDSyslogSourceDriver *sd)
- %token KW_KEY_FILE
- %token KW_CERT_FILE
- %token KW_CA_DIR
-+%token KW_CA_FILE
- %token KW_CRL_DIR
- %token KW_TRUSTED_KEYS
- %token KW_TRUSTED_DN
-@@ -985,6 +986,11 @@ tls_option
- 	    last_tls_context->ca_dir = g_strdup($3);
-             free($3);
-           }
-+	| KW_CA_FILE '(' string ')'
-+	  {
-+	    last_tls_context->ca_file = g_strdup($3);
-+	    free($3);
-+	  }
- 	| KW_CRL_DIR '(' string ')'
- 	  {
- 	    last_tls_context->crl_dir = g_strdup($3);
-diff --git a/modules/afsocket/Makefile.am b/modules/afsocket/Makefile.am
-index 9baa4f8..98adc23 100644
 --- a/modules/afsocket/Makefile.am
 +++ b/modules/afsocket/Makefile.am
-@@ -40,8 +40,8 @@ modules_afsocket_libafsocket_la_SOURCES	=	\
+@@ -42,8 +42,8 @@
  module_LTLIBRARIES				+= modules/afsocket/libafsocket.la
  modules_afsocket_libafsocket_la_CPPFLAGS	=	\
  	$(AM_CPPFLAGS) $(libsystemd_CFLAGS)	\
