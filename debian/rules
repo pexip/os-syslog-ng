@@ -95,13 +95,12 @@ override_dh_auto_configure:
 		--enable-riemann \
 		--disable-java \
 		--enable-manpages \
-		--enable-amqp \
+		--disable-amqp \
 		$(PACCT_CONFIGURE_OPTS) \
 		--enable-python \
 		\
 		--with-ivykis=system \
 		--with-jsonc=system \
-		--with-librabbitmq-client=system \
 		\
 		--with-module-dir='$${exec_prefix}/lib/syslog-ng/${UMAJOR}' \
 		--with-systemdsystemunitdir="/lib/systemd/system" \

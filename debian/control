@@ -27,7 +27,7 @@ Build-Depends: debhelper (>= 10~),
                libgeoip-dev,
                libhiredis-dev,
                libriemann-client-dev (>= 1.6.0~),
-               librabbitmq-dev,
+#               librabbitmq-dev,
                python, python-dev, pep8, pylint, dh-python,
                dh-exec (>= 0.13~),
                python-nose, python-ply,
@@ -244,29 +244,29 @@ Description: Enhanced system logging daemon (SMTP plugin)
  This package provides the SMTP destination plugin, which allows one
  to send email messages from within syslog-ng itself.
 
-Package: syslog-ng-mod-amqp
-Architecture: any
-Multi-Arch: foreign
-Depends: ${shlibs:Depends}, ${misc:Depends}, syslog-ng-core (>= ${source:Version}), syslog-ng-core (<< ${source:Version}.1~)
-Suggests: rabbitmq-server
-Description: Enhanced system logging daemon (AMQP plugin)
- syslog-ng is an enhanced log daemon, supporting a wide range of input
- and output methods: syslog, unstructured text, message queues,
- databases (SQL and NoSQL alike) and more.
- .
- Key features:
- .
-  * receive and send RFC3164 and RFC5424 style syslog messages
-  * work with any kind of unstructured data
-  * receive and send JSON formatted messages
-  * classify and structure logs with builtin parsers (csv-parser(),
-    db-parser(), etc.)
-  * normalize, crunch and process logs as they flow through the system
-  * hand on messages for further processing using message queues (like
-    AMQP), files or databases (like PostgreSQL or MongoDB).
- .
- This package provides the AMQP destination plugin, which allows one
- to publish log messages through the AMQP protocol.
+#Package: syslog-ng-mod-amqp
+#Architecture: any
+#Multi-Arch: foreign
+#Depends: ${shlibs:Depends}, ${misc:Depends}, syslog-ng-core (>= ${source:Version}), syslog-ng-core (<< ${source:Version}.1~)
+#Suggests: rabbitmq-server
+#Description: Enhanced system logging daemon (AMQP plugin)
+# syslog-ng is an enhanced log daemon, supporting a wide range of input
+# and output methods: syslog, unstructured text, message queues,
+# databases (SQL and NoSQL alike) and more.
+# .
+# Key features:
+# .
+#  * receive and send RFC3164 and RFC5424 style syslog messages
+#  * work with any kind of unstructured data
+#  * receive and send JSON formatted messages
+#  * classify and structure logs with builtin parsers (csv-parser(),
+#    db-parser(), etc.)
+#  * normalize, crunch and process logs as they flow through the system
+#  * hand on messages for further processing using message queues (like
+#    AMQP), files or databases (like PostgreSQL or MongoDB).
+# .
+# This package provides the AMQP destination plugin, which allows one
+# to publish log messages through the AMQP protocol.
 
 Package: syslog-ng-mod-geoip
 Architecture: any
