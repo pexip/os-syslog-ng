@@ -47,11 +47,16 @@ __init(LogPipe *s)
 {
   SystemdJournalSourceDriver *self = (SystemdJournalSourceDriver *)s;
   GlobalConfig *cfg = log_pipe_get_config(&self->super.super.super);
+
+  if (!log_src_driver_init_method(s))
+    return FALSE;
+
   self->reader = journal_reader_new(cfg, self->journald);
 
   journal_reader_options_init(&self->reader_options, cfg, self->super.super.group);
 
-  journal_reader_set_options((LogPipe *)self->reader, &self->super.super.super,  &self->reader_options, 0, SCS_JOURNALD, self->super.super.id, "journal");
+  journal_reader_set_options((LogPipe *)self->reader, &self->super.super.super,  &self->reader_options,
+                             self->super.super.id, "journal");
 
   log_pipe_append((LogPipe *)self->reader, &self->super.super.super);
   if (!log_pipe_init((LogPipe *)self->reader))

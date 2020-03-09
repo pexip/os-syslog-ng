@@ -57,9 +57,11 @@ test_log_proto_framed_server_simple_messages(void)
   assert_proto_server_fetch(proto, "01234567\n\n", -1);
   assert_proto_server_fetch(proto, "01234567\0\0", 10);
   assert_proto_server_fetch(proto, "árvíztűrőtükörfúrógép", -1);
-  assert_proto_server_fetch(proto, "\xe1\x72\x76\xed\x7a\x74\xfb\x72\xf5\x74\xfc\x6b\xf6\x72\x66\xfa"        /*  |.rv.zt.r.t.k.rf.| */
+  assert_proto_server_fetch(proto,
+                            "\xe1\x72\x76\xed\x7a\x74\xfb\x72\xf5\x74\xfc\x6b\xf6\x72\x66\xfa"        /*  |.rv.zt.r.t.k.rf.| */
                             "\x72\xf3\x67\xe9\x70", -1);                                              /*  |r.g.p|            */
-  assert_proto_server_fetch(proto, "\x00\x00\x00\xe1\x00\x00\x00\x72\x00\x00\x00\x76\x00\x00\x00\xed"        /* |...á...r...v...í| */
+  assert_proto_server_fetch(proto,
+                            "\x00\x00\x00\xe1\x00\x00\x00\x72\x00\x00\x00\x76\x00\x00\x00\xed"        /* |...á...r...v...í| */
                             "\x00\x00\x00\x7a\x00\x00\x00\x74\x00\x00\x01\x71\x00\x00\x00\x72", 32);  /* |...z...t...q...r|  */
   assert_proto_server_fetch_failure(proto, LPS_EOF, NULL);
   log_proto_server_free(proto);
@@ -78,7 +80,7 @@ test_log_proto_framed_server_io_error(void)
               LTM_EOF),
             get_inited_proto_server_options());
   assert_proto_server_fetch(proto, "0123456789ABCDEF0123456789ABCDEF", -1);
-  assert_proto_server_fetch_failure(proto, LPS_ERROR, "Error reading RFC5428 style framed data");
+  assert_proto_server_fetch_failure(proto, LPS_ERROR, "Error reading RFC6587 style framed data");
   log_proto_server_free(proto);
 }
 
@@ -190,7 +192,7 @@ test_log_proto_framed_server_multi_read(void)
             get_inited_proto_server_options());
   assert_proto_server_fetch(proto, "foobar\n", -1);
   /* with multi-read, we get the injected failure at the 2nd fetch */
-  assert_proto_server_fetch_failure(proto, LPS_ERROR, "Error reading RFC5428 style framed data");
+  assert_proto_server_fetch_failure(proto, LPS_ERROR, "Error reading RFC6587 style framed data");
   log_proto_server_free(proto);
 
   /* NOTE: LPBS_NOMREAD is not implemented for framed protocol */

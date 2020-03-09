@@ -27,20 +27,23 @@
 
 int java_parse(CfgLexer *lexer, LogDriver **instance, gpointer arg);
 
-static CfgLexerKeyword java_keywords[] = {
+static CfgLexerKeyword java_keywords[] =
+{
   { "java",        KW_JAVA },
   { "class_path",  KW_CLASS_PATH},
   { "class_name",  KW_CLASS_NAME},
   { "option",      KW_OPTION},
+
+  { "jvm_options", KW_JVM_OPTIONS},
   { NULL }
 };
 
 CfgParser java_parser =
-  {
-    .name = "java",
-    .keywords = java_keywords,
-    .parse = (int (*)(CfgLexer *lexer, gpointer *instance, gpointer)) java_parse,
-    .cleanup = (void (*)(gpointer)) log_pipe_unref,
-  };
+{
+  .name = "java",
+  .keywords = java_keywords,
+  .parse = (int (*)(CfgLexer *lexer, gpointer *instance, gpointer)) java_parse,
+  .cleanup = (void (*)(gpointer)) log_pipe_unref,
+};
 
 CFG_PARSER_IMPLEMENT_LEXER_BINDING(java_, LogDriver **)

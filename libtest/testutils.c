@@ -24,24 +24,20 @@
  */
 
 #include "testutils.h"
-#include "messages.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <math.h>
 
 static gboolean testutils_global_success = TRUE;
-
-struct timeval start_time_val;
-
 GString *current_testcase_description = NULL;
-gchar *current_testcase_function = NULL;
+const gchar *current_testcase_function = NULL;
 gchar *current_testcase_file = NULL;
-GList *internal_messages = NULL;
 
-static void
-print_failure(const gchar *custom_template, va_list custom_args, gchar *assertion_failure_template, ...)
+static void G_GNUC_PRINTF(1, 0) G_GNUC_PRINTF(3, 4)
+print_failure(const gchar *custom_template, va_list custom_args, const gchar *assertion_failure_template, ...)
 {
   testutils_global_success = FALSE;
   va_list assertion_failure_args;
@@ -71,92 +67,13 @@ print_failure(const gchar *custom_template, va_list custom_args, gchar *assertio
   fprintf(stderr, "  #\n  ###########################################################################\n\n");
 }
 
-void
-start_stopwatch(void)
-{
-  gettimeofday(&start_time_val, NULL);
-}
-
-void
-stop_stopwatch_and_display_result(gint iterations, gchar *message_template, ...)
-{
-  va_list args;
-  guint64 diff;
-  struct timeval end_time_val;
-  gettimeofday(&end_time_val, NULL);
-
-  va_start(args, message_template);
-  vprintf(message_template, args);
-  va_end(args);
-
-  diff = (end_time_val.tv_sec - start_time_val.tv_sec) * 1000000 + end_time_val.tv_usec - start_time_val.tv_usec;
-  printf("; %.2f iterations/sec", iterations * 1e6 / diff);
-  printf(", runtime=%lu.%06lus\n", diff / 1000000, diff % 1000000);
-}
-
-static void
-grab_message(LogMessage *msg)
-{
-  internal_messages = g_list_append(internal_messages, msg);
-}
-
-void
-reset_grabbed_messages(void)
-{
-  g_list_foreach(internal_messages, (GFunc) log_msg_unref, NULL);
-  g_list_free(internal_messages);
-  internal_messages = NULL;
-}
-
-void
-start_grabbing_messages(void)
-{
-  reset_grabbed_messages();
-  msg_set_post_func(grab_message);
-}
-
-void
-display_grabbed_messages(void)
-{
-  GList *l;
-
-  if (internal_messages)
-    {
-      fprintf(stderr, "  # Grabbed internal messages follow:\n");
-      for (l = internal_messages; l; l = l->next)
-        {
-          LogMessage *msg = (LogMessage *) l->data;
-          const gchar *msg_text = log_msg_get_value(msg, LM_V_MESSAGE, NULL);
-
-          fprintf(stderr, "  #\t%s\n", msg_text);
-        }
-    } else {
-        fprintf(stderr, "  # No internal messeges grabbed!\n");
-    }
-}
-
-void
-stop_grabbing_messages(void)
-{
-  msg_set_post_func(NULL);
-}
-
 gboolean
 assert_grabbed_messages_contain_non_fatal(const gchar *pattern, const gchar *error_message, ...)
 {
-  GList *l;
   va_list args;
 
-  for (l = internal_messages; l; l = l->next)
-    {
-      LogMessage *msg = (LogMessage *) l->data;
-      const gchar *msg_text = log_msg_get_value(msg, LM_V_MESSAGE, NULL);
-
-      if (strstr(msg_text, pattern))
-        {
-          return TRUE;
-        }
-    }
+  if (find_grabbed_message(pattern))
+    return TRUE;
 
   va_start(args, error_message);
   print_failure(error_message, args, "no grabbed message contains the pattern=%s", pattern);
@@ -210,7 +127,7 @@ assert_gint64_non_fatal(gint64 actual, gint64 expected, const gchar *error_messa
     return TRUE;
 
   va_start(args, error_message);
-  print_failure(error_message, args, "actual=%lld, expected=%lld", actual, expected);
+  print_failure(error_message, args, "actual=%"G_GINT64_FORMAT", expected=%"G_GINT64_FORMAT, actual, expected);
   va_end(args);
 
   return FALSE;
@@ -225,7 +142,7 @@ assert_guint64_non_fatal(guint64 actual, guint64 expected, const gchar *error_me
     return TRUE;
 
   va_start(args, error_message);
-  print_failure(error_message, args, "actual=%llu, expected=%llu", actual, expected);
+  print_failure(error_message, args, "actual=%"G_GUINT64_FORMAT", expected=%"G_GUINT64_FORMAT, actual, expected);
   va_end(args);
 
   return FALSE;
@@ -236,7 +153,10 @@ assert_gdouble_non_fatal(gdouble actual, gdouble expected, const gchar *error_me
 {
   va_list args;
 
-  if (actual == expected)
+  if (isinf(actual) && isinf(expected))
+    return TRUE;
+
+  if (fabs(actual - expected) < 1e-15)
     return TRUE;
 
   va_start(args, error_message);
@@ -246,8 +166,9 @@ assert_gdouble_non_fatal(gdouble actual, gdouble expected, const gchar *error_me
   return FALSE;
 }
 
-static gboolean
-assert_nstring_non_fatal_va(const gchar *actual, gint actual_len, const gchar *expected, gint expected_len, const gchar *error_message, va_list args)
+static gboolean G_GNUC_PRINTF(5, 0)
+assert_nstring_non_fatal_va(const gchar *actual, gint actual_len, const gchar *expected, gint expected_len,
+                            const gchar *error_message, va_list args)
 {
   if (expected == NULL && actual == NULL)
     return TRUE;
@@ -275,7 +196,8 @@ assert_nstring_non_fatal_va(const gchar *actual, gint actual_len, const gchar *e
 }
 
 gboolean
-assert_nstring_non_fatal(const gchar *actual, gint actual_len, const gchar *expected, gint expected_len, const gchar *error_message, ...)
+assert_nstring_non_fatal(const gchar *actual, gint actual_len, const gchar *expected, gint expected_len,
+                         const gchar *error_message, ...)
 {
   va_list args;
   gboolean result;
@@ -289,14 +211,15 @@ assert_nstring_non_fatal(const gchar *actual, gint actual_len, const gchar *expe
 }
 
 
-static gboolean
+static gboolean G_GNUC_PRINTF(5, 0)
 compare_arrays_trivially(void *actual, guint32 actual_length,
-                               void *expected, guint32 expected_length,
-                               const gchar *error_message_template, va_list error_message_args)
+                         void *expected, guint32 expected_length,
+                         const gchar *error_message_template, va_list error_message_args)
 {
   if (expected_length != actual_length)
     {
-      print_failure(error_message_template, error_message_args, "actual_length=%u, expected_length=%u", actual_length, expected_length);
+      print_failure(error_message_template, error_message_args, "actual_length=%u, expected_length=%u", actual_length,
+                    expected_length);
       return FALSE;
     }
 
@@ -310,7 +233,8 @@ compare_arrays_trivially(void *actual, guint32 actual_length,
 }
 
 gboolean
-assert_guint32_array_non_fatal(guint32 *actual, guint32 actual_length, guint32 *expected, guint32 expected_length, const gchar *error_message, ...)
+assert_guint32_array_non_fatal(guint32 *actual, guint32 actual_length, guint32 *expected, guint32 expected_length,
+                               const gchar *error_message, ...)
 {
   va_list args;
   gboolean assertion_ok = TRUE;
@@ -318,7 +242,8 @@ assert_guint32_array_non_fatal(guint32 *actual, guint32 actual_length, guint32 *
 
   va_start(args, error_message);
 
-  assertion_ok = compare_arrays_trivially((void *)actual, actual_length, (void *)expected, expected_length, error_message, args);
+  assertion_ok = compare_arrays_trivially((void *)actual, actual_length, (void *)expected, expected_length, error_message,
+                                          args);
   if (assertion_ok)
     {
       for (i = 0; i < expected_length; ++i)
@@ -351,7 +276,8 @@ are_strings_equal(gchar *a, gchar *b)
 }
 
 gboolean
-assert_string_array_non_fatal(gchar **actual, guint32 actual_length, gchar **expected, guint32 expected_length, const gchar *error_message, ...)
+assert_string_array_non_fatal(gchar **actual, guint32 actual_length, gchar **expected, guint32 expected_length,
+                              const gchar *error_message, ...)
 {
   va_list args;
   gboolean assertion_ok = TRUE;
@@ -359,7 +285,8 @@ assert_string_array_non_fatal(gchar **actual, guint32 actual_length, gchar **exp
 
   va_start(args, error_message);
 
-  assertion_ok = compare_arrays_trivially((void *)actual, actual_length, (void *)expected, expected_length, error_message, args);
+  assertion_ok = compare_arrays_trivially((void *)actual, actual_length, (void *)expected, expected_length, error_message,
+                                          args);
   if (assertion_ok)
     {
       for (i = 0; i < expected_length; ++i)
@@ -367,7 +294,7 @@ assert_string_array_non_fatal(gchar **actual, guint32 actual_length, gchar **exp
           if (!are_strings_equal(actual[i], expected[i]))
             {
               print_failure(error_message, args, "actual=" PRETTY_STRING_FORMAT ", expected=" PRETTY_STRING_FORMAT ", index=%u",
-                                                 PRETTY_STRING(actual[i]), PRETTY_STRING(expected[i]), i);
+                            PRETTY_STRING(actual[i]), PRETTY_STRING(expected[i]), i);
               assertion_ok = FALSE;
               break;
             }
@@ -377,6 +304,18 @@ assert_string_array_non_fatal(gchar **actual, guint32 actual_length, gchar **exp
   va_end(args);
 
   return assertion_ok;
+}
+
+gboolean
+expect_not_reached(const gchar *error_message, ...)
+{
+  va_list args;
+
+  va_start(args, error_message);
+  print_failure(error_message, args, "execution was not expected to reach this point");
+  va_end(args);
+
+  return FALSE;
 }
 
 gboolean
@@ -394,13 +333,13 @@ assert_gboolean_non_fatal(gboolean actual, gboolean expected, const gchar *error
   return FALSE;
 }
 
-gboolean
+gboolean G_GNUC_PRINTF(2, 0)
 assert_null_non_fatal_va(const void *pointer, const gchar *error_message, va_list args)
 {
   if (pointer == NULL)
     return TRUE;
 
-  print_failure(error_message, args, "Pointer expected to be NULL; pointer=%llx", (guint64)pointer);
+  print_failure(error_message, args, "Pointer expected to be NULL; pointer=%p", pointer);
 
   return FALSE;
 }
@@ -417,7 +356,7 @@ assert_null_non_fatal(const void *pointer, const gchar *error_message, ...)
   return success;
 }
 
-gboolean
+gboolean G_GNUC_PRINTF(2, 0)
 assert_not_null_non_fatal_va(void *pointer, const gchar *error_message, va_list args)
 {
   if (pointer != NULL)
@@ -462,7 +401,8 @@ cmp_guint32(const void *a, const void *b)
 }
 
 gboolean
-assert_guint32_set_non_fatal(guint32 *actual, guint32 actual_length, guint32 *expected, guint32 expected_length, const gchar *error_message, ...)
+assert_guint32_set_non_fatal(guint32 *actual, guint32 actual_length, guint32 *expected, guint32 expected_length,
+                             const gchar *error_message, ...)
 {
   va_list args;
   gboolean ret;
@@ -494,35 +434,37 @@ assert_gpointer_non_fatal(gpointer actual, gpointer expected, const gchar *error
     return TRUE;
 
   va_start(args, error_message);
-  print_failure(error_message, args, "actual=%x, expected=%x", actual, expected);
+  print_failure(error_message, args, "actual=%p, expected=%p", actual, expected);
   va_end(args);
 
   return FALSE;
 }
 
 gboolean
-assert_msg_field_equals_non_fatal(LogMessage *msg, gchar *field_name, gchar *expected_value, gssize expected_value_len, const gchar *error_message, ...)
+assert_msg_field_equals_non_fatal(LogMessage *msg, const gchar *field_name, const gchar *expected_value,
+                                  gssize expected_value_len, const gchar *error_message, ...)
 {
   gssize actual_value_len;
-  const gchar* actual_value;
+  const gchar *actual_value;
   va_list args;
   gboolean result;
 
   if (expected_value_len < 0)
-     expected_value_len = strlen(expected_value);
+    expected_value_len = strlen(expected_value);
 
   NVHandle handle = log_msg_get_value_handle(field_name);
   actual_value = log_msg_get_value(msg, handle, &actual_value_len);
 
   va_start(args, error_message);
-  result = assert_nstring_non_fatal_va(actual_value, actual_value_len, expected_value, expected_value_len, error_message, args);
+  result = assert_nstring_non_fatal_va(actual_value, actual_value_len, expected_value, expected_value_len, error_message,
+                                       args);
   va_end(args);
 
   return result;
 }
 
 gboolean
-assert_msg_field_unset_non_fatal(LogMessage *msg, gchar *field_name, const gchar *error_message, ...)
+assert_msg_field_unset_non_fatal(LogMessage *msg, const gchar *field_name, const gchar *error_message, ...)
 {
   gssize actual_value_len;
   const gchar *actual_value;

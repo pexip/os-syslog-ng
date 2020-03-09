@@ -1,0 +1,31 @@
+From 8082c33d3340018edbb7356441cf5301ae0b2ef9 Mon Sep 17 00:00:00 2001
+From: Antal Nemes <antal.nemes@balabit.com>
+Date: Fri, 25 Jan 2019 09:26:11 +0100
+Subject: [PATCH] cmake: fix typo in HAVE_STRNLEN
+
+Signed-off-by: Antal Nemes <antal.nemes@balabit.com>
+---
+ syslog-ng-config.h.in | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/syslog-ng-config.h.in b/syslog-ng-config.h.in
+index 8eec0a15e5..952c22abb2 100644
+--- a/syslog-ng-config.h.in
++++ b/syslog-ng-config.h.in
+@@ -27,7 +27,7 @@
+ #cmakedefine01 SYSLOG_NG_ENABLE_IPV6
+ #cmakedefine01 SYSLOG_NG_HAVE_GETADDRINFO
+ #cmakedefine01 SYSLOG_NG_HAVE_GETNAMEINFO
+-#cmakedefine01 SYSLOG_NG_HAVE_STRNLNE
++#cmakedefine01 SYSLOG_NG_HAVE_STRNLEN
+ #cmakedefine01 SYSLOG_NG_ENABLE_LINUX_CAPS
+ #cmakedefine01 SYSLOG_NG_ENABLE_MEMTRACE
+ #cmakedefine01 SYSLOG_NG_ENABLE_TCP_WRAPPER
+@@ -44,7 +44,6 @@
+ #cmakedefine SYSLOG_NG_ENABLE_IPV6 @SYSLOG_NG_ENABLE_IPV6@
+ #cmakedefine SYSLOG_NG_HAVE_GETADDRINFO @SYSLOG_NG_HAVE_GETADDRINFO@
+ #cmakedefine SYSLOG_NG_HAVE_GETNAMEINFO @SYSLOG_NG_HAVE_GETNAMEINFO@
+-#cmakedefine SYSLOG_NG_HAVE_STRNLEN @SYSLOG_NG_HAVE_STRNLEN@
+ #cmakedefine SYSLOG_NG_JAVA_MODULE_PATH "@SYSLOG_NG_JAVA_MODULE_PATH@"
+ #cmakedefine SYSLOG_NG_ENABLE_DEBUG @SYSLOG_NG_ENABLE_DEBUG@
+ #cmakedefine SYSLOG_NG_ENABLE_FORCED_SERVER_MODE @SYSLOG_NG_ENABLE_FORCED_SERVER_MODE@

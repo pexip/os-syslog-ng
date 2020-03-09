@@ -28,11 +28,13 @@
 extern int pragma_debug;
 int pragma_parse(CfgLexer *lexer, gpointer *result, gpointer arg);
 
-static CfgLexerKeyword pragma_keywords[] = {
+static CfgLexerKeyword pragma_keywords[] =
+{
   { "version",            KW_VERSION, },
   { "include",            KW_INCLUDE, },
   { "module",             KW_MODULE, },
   { "define",             KW_DEFINE, },
+  { "requires",           KW_REQUIRES, },
   { CFG_KEYWORD_STOP },
 };
 

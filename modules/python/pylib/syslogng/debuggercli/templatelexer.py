@@ -42,7 +42,7 @@ class LexBasedLexer(Lexer):
         return token
 
     def input(self, text):
-        while len(self._lexer.lexstatestack) > 0:
+        while self._lexer.lexstatestack:
             self._lexer.pop_state()
         return self._lexer.input(text)
 
@@ -135,6 +135,8 @@ class TemplateLexer(LexBasedLexer):
             t.lexer.pop_state()
             t.lexer.pop_state()
             return t
+
+        return None
 
     def t_dollarparen_QUOTE(self, t):
         r'"'

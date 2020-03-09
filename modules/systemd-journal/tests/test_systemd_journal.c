@@ -111,7 +111,8 @@ __test_cursors(Journald *journald)
   journald_seek_head(journald);
   journald_next(journald);
   gint result = journald_get_cursor(journald, &cursor);
-  assert_string(cursor, "test_data1", ASSERTION_ERROR("Bad cursor fetched"));\
+  assert_string(cursor, "test_data1", ASSERTION_ERROR("Bad cursor fetched"));
+  \
   g_free(cursor);
 
   result = journald_next(journald);
@@ -167,7 +168,8 @@ __test_enumerate(Journald *journald)
 
   result = journald_enumerate_data(journald, &data, &length);
   assert_gint(result, 1, ASSERTION_ERROR("Data should exist"));
-  assert_gpointer((gpointer )data, (gpointer )prev_data, ASSERTION_ERROR("restart data should seek the start of the data"));
+  assert_gpointer((gpointer )data, (gpointer )prev_data,
+                  ASSERTION_ERROR("restart data should seek the start of the data"));
   assert_gint(length, prev_len, ASSERTION_ERROR("Bad length after restart data"));
 
   result = journald_next(journald);
@@ -212,7 +214,7 @@ __test_fd_handling(Journald *journald)
 }
 
 void
-test_journald_mock()
+test_journald_mock(void)
 {
   Journald *journald = journald_mock_new();
   gint result = journald_open(journald, 0);
@@ -239,7 +241,7 @@ __helper_test(gchar *key, gchar *value, gpointer user_data)
 
 
 void
-test_journald_helper()
+test_journald_helper(void)
 {
   Journald *journald = journald_mock_new();
   journald_open(journald, 0);
@@ -313,7 +315,8 @@ __create_dummy_entry(Journald *journal, gchar *cursor_name)
 }
 
 void
-_test_default_working_init(TestCase *self, TestSource *src, Journald *journal, JournalReader *reader, JournalReaderOptions *options)
+_test_default_working_init(TestCase *self, TestSource *src, Journald *journal, JournalReader *reader,
+                           JournalReaderOptions *options)
 {
   MockEntry *entry = __create_dummy_entry(journal, "default_test");
   journald_mock_add_entry(journal, entry);
@@ -330,13 +333,14 @@ _test_default_working_test(TestCase *self, TestSource *src, LogMessage *msg)
   assert_gint(msg->pri, options->default_pri, ASSERTION_ERROR("Bad default prio"));
   assert_gint(options->fetch_limit, 10, ASSERTION_ERROR("Bad default fetch_limit"));
   assert_gint(options->max_field_size, 64 * 1024, ASSERTION_ERROR("Bad max field size"));
-  assert_gpointer(options->prefix, NULL, ASSERTION_ERROR("Bad default prefix value"));
+  assert_string(options->prefix, ".journald.", ASSERTION_ERROR("Bad default prefix value"));
   assert_string(options->recv_time_zone, configuration->recv_time_zone, ASSERTION_ERROR("Bad default timezone"));
   test_source_finish_tc(src);
 }
 
 void
-_test_prefix_init(TestCase *self, TestSource *src, Journald *journal, JournalReader *reader, JournalReaderOptions *options)
+_test_prefix_init(TestCase *self, TestSource *src, Journald *journal, JournalReader *reader,
+                  JournalReaderOptions *options)
 {
   MockEntry *entry = __create_real_entry(journal, "prefix_test");
 
@@ -359,7 +363,8 @@ void
 _test_prefix_test(TestCase *self, TestSource *src, LogMessage *msg)
 {
   const gchar *message = log_msg_get_value(msg, LM_V_MESSAGE, NULL);
-  assert_string(message, "pam_unix(sshd:session): session opened for user foo_user by (uid=0)", ASSERTION_ERROR("Bad message"));
+  assert_string(message, "pam_unix(sshd:session): session opened for user foo_user by (uid=0)",
+                ASSERTION_ERROR("Bad message"));
 
   __test_other_has_prefix(self, msg);
 
@@ -367,7 +372,8 @@ _test_prefix_test(TestCase *self, TestSource *src, LogMessage *msg)
 }
 
 void
-_test_field_size_init(TestCase *self, TestSource *src, Journald *journal, JournalReader *reader, JournalReaderOptions *options)
+_test_field_size_init(TestCase *self, TestSource *src, Journald *journal, JournalReader *reader,
+                      JournalReaderOptions *options)
 {
   MockEntry *entry = __create_real_entry(journal, "field_size_test");
   options->max_field_size = GPOINTER_TO_INT(self->user_data);
@@ -396,7 +402,8 @@ _test_field_size_test(TestCase *self, TestSource *src, LogMessage *msg)
 }
 
 void
-_test_timezone_init(TestCase *self, TestSource *src, Journald *journal, JournalReader *reader, JournalReaderOptions *options)
+_test_timezone_init(TestCase *self, TestSource *src, Journald *journal, JournalReader *reader,
+                    JournalReaderOptions *options)
 {
   MockEntry *entry = __create_real_entry(journal, "time_zone_test");
   options->recv_time_zone = g_strdup("+09:00");
@@ -411,7 +418,8 @@ _test_timezone_test(TestCase *self, TestSource *src, LogMessage *msg)
 }
 
 void
-_test_default_level_init(TestCase *self, TestSource *src, Journald *journal, JournalReader *reader, JournalReaderOptions *options)
+_test_default_level_init(TestCase *self, TestSource *src, Journald *journal, JournalReader *reader,
+                         JournalReaderOptions *options)
 {
   MockEntry *entry = __create_dummy_entry(journal, "test default level");
   gint level = GPOINTER_TO_INT(self->user_data);
@@ -431,7 +439,8 @@ _test_default_level_test(TestCase *self, TestSource *src, LogMessage *msg)
 }
 
 void
-_test_default_facility_init(TestCase *self, TestSource *src, Journald *journal, JournalReader *reader, JournalReaderOptions *options)
+_test_default_facility_init(TestCase *self, TestSource *src, Journald *journal, JournalReader *reader,
+                            JournalReaderOptions *options)
 {
   MockEntry *entry = __create_dummy_entry(journal, "test default facility");
   gint facility = GPOINTER_TO_INT(self->user_data);
@@ -450,7 +459,8 @@ _test_default_facility_test(TestCase *self, TestSource *src, LogMessage *msg)
 }
 
 void
-_test_program_field_init(TestCase *self, TestSource *src, Journald *journal, JournalReader *reader, JournalReaderOptions *options)
+_test_program_field_init(TestCase *self, TestSource *src, Journald *journal, JournalReader *reader,
+                         JournalReaderOptions *options)
 {
   MockEntry *entry = mock_entry_new("test _COMM first win");
   mock_entry_add_data(entry, "_COMM=comm_program");
@@ -489,7 +499,7 @@ _test_program_field_test(TestCase *self, TestSource *src, LogMessage *msg)
 }
 
 void
-test_journal_reader()
+test_journal_reader(void)
 {
   TestSource *src = test_source_new(configuration);
   TestCase tc_default_working = { _test_default_working_init, _test_default_working_test, NULL, NULL };
@@ -517,7 +527,7 @@ main(int argc, char **argv)
 {
   app_startup();
   main_thread_handle =  get_thread_id();
-  configuration = cfg_new(0x306);
+  configuration = cfg_new_snippet();
   configuration->threaded = FALSE;
   configuration->state = persist_state_new(TEST_PERSIST_FILE_NAME);
   configuration->keep_hostname = TRUE;

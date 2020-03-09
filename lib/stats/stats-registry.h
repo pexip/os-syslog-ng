@@ -33,12 +33,18 @@ typedef gboolean (*StatsForeachClusterRemoveFunc)(StatsCluster *sc, gpointer use
 void stats_lock(void);
 void stats_unlock(void);
 gboolean stats_check_level(gint level);
-void stats_register_counter(gint level, gint component, const gchar *id, const gchar *instance, StatsCounterType type, StatsCounterItem **counter);
-StatsCluster *stats_register_dynamic_counter(gint stats_level, gint component, const gchar *id, const gchar *instance, StatsCounterType type, StatsCounterItem **counter);
-void stats_register_and_increment_dynamic_counter(gint stats_level, gint component, const gchar *id, const gchar *instance, time_t timestamp);
-void stats_register_associated_counter(StatsCluster *handle, StatsCounterType type, StatsCounterItem **counter);
-void stats_unregister_counter(gint component, const gchar *id, const gchar *instance, StatsCounterType type, StatsCounterItem **counter);
-void stats_unregister_dynamic_counter(StatsCluster *handle, StatsCounterType type, StatsCounterItem **counter);
+StatsCluster *stats_register_counter(gint level, const StatsClusterKey *sc_key, gint type, StatsCounterItem **counter);
+StatsCluster *stats_register_counter_and_index(gint level, const StatsClusterKey *sc_key, gint type,
+                                               StatsCounterItem **counter);
+StatsCluster *stats_register_dynamic_counter(gint stats_level, const StatsClusterKey *sc_key, gint type,
+                                             StatsCounterItem **counter);
+void stats_register_and_increment_dynamic_counter(gint stats_level, const StatsClusterKey *sc_key, time_t timestamp);
+void stats_register_associated_counter(StatsCluster *handle, gint type, StatsCounterItem **counter);
+void stats_unregister_counter(const StatsClusterKey *sc_key, gint type, StatsCounterItem **counter);
+void stats_unregister_dynamic_counter(StatsCluster *handle, gint type, StatsCounterItem **counter);
+
+gboolean stats_contains_counter(const StatsClusterKey *sc_key, gint type);
+StatsCounterItem *stats_get_counter(const StatsClusterKey *sc_key, gint type);
 
 void stats_foreach_counter(StatsForeachCounterFunc func, gpointer user_data);
 void stats_foreach_cluster(StatsForeachClusterFunc func, gpointer user_data);
@@ -46,5 +52,8 @@ void stats_foreach_cluster_remove(StatsForeachClusterRemoveFunc func, gpointer u
 
 void stats_registry_init(void);
 void stats_registry_deinit(void);
+
+gboolean stats_check_dynamic_clusters_limit(guint number_of_clusters);
+gint stats_number_of_dynamic_clusters_limit(void);
 
 #endif

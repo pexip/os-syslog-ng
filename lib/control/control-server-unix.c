@@ -21,8 +21,11 @@
  *
  */
 
+#include "control-server.h"
+#include "messages.h"
+
 #include "gsocket.h"
- 
+
 #include <iv.h>
 
 typedef struct _ControlServerUnix
@@ -53,8 +56,8 @@ control_connection_unix_read(ControlConnection *s, gpointer buffer, gsize size)
   return read(self->control_io.fd, buffer, size);
 }
 
-void
-control_connection_start_watches(ControlConnection *s)
+static void
+control_connection_unix_start_watches(ControlConnection *s)
 {
   ControlConnectionUnix *self = (ControlConnectionUnix *)s;
   IV_FD_INIT(&self->control_io);
@@ -65,15 +68,15 @@ control_connection_start_watches(ControlConnection *s)
   control_connection_update_watches(s);
 }
 
-void
-control_connection_stop_watches(ControlConnection *s)
+static void
+control_connection_unix_stop_watches(ControlConnection *s)
 {
   ControlConnectionUnix *self = (ControlConnectionUnix *)s;
   iv_fd_unregister(&self->control_io);
 }
 
-void
-control_connection_update_watches(ControlConnection *s)
+static void
+control_connection_unix_update_watches(ControlConnection *s)
 {
   ControlConnectionUnix *self = (ControlConnectionUnix *)s;
   if (s->output_buffer->len > s->pos)
@@ -105,6 +108,9 @@ control_connection_new(ControlServer *server, gint sock)
   self->super.free_fn = control_connection_unix_free;
   self->super.read = control_connection_unix_read;
   self->super.write = control_connection_unix_write;
+  self->super.events.start_watches = control_connection_unix_start_watches;
+  self->super.events.update_watches = control_connection_unix_update_watches;
+  self->super.events.stop_watches = control_connection_unix_stop_watches;
 
   control_connection_start_watches(&self->super);
   return &self->super;
@@ -124,13 +130,13 @@ control_socket_accept(void *cookie)
   if (status != G_IO_STATUS_NORMAL)
     {
       msg_error("Error accepting control socket connection",
-                evt_tag_errno("error", errno));
+                evt_tag_error("error"));
       goto error;
     }
   /* NOTE: the connection will free itself if the peer terminates */
   control_connection_new(&self->super, conn_socket);
   g_sockaddr_unref(peer_addr);
- error:
+error:
   ;
 }
 
@@ -145,21 +151,21 @@ control_server_start(ControlServer *s)
   if (self->control_socket == -1)
     {
       msg_error("Error opening control socket, external controls will not be available",
-               evt_tag_str("socket", self->super.control_socket_name));
+                evt_tag_str("socket", self->super.control_socket_name));
       return;
     }
   if (g_bind(self->control_socket, saddr) != G_IO_STATUS_NORMAL)
     {
       msg_error("Error opening control socket, bind() failed",
-               evt_tag_str("socket", self->super.control_socket_name),
-               evt_tag_errno("error", errno));
+                evt_tag_str("socket", self->super.control_socket_name),
+                evt_tag_error("error"));
       goto error;
     }
   if (listen(self->control_socket, 255) < 0)
     {
       msg_error("Error opening control socket, listen() failed",
-               evt_tag_str("socket", self->super.control_socket_name),
-               evt_tag_errno("error", errno));
+                evt_tag_str("socket", self->super.control_socket_name),
+                evt_tag_error("error"));
       goto error;
     }
 
@@ -170,7 +176,7 @@ control_server_start(ControlServer *s)
 
   g_sockaddr_unref(saddr);
   return;
- error:
+error:
   if (self->control_socket != -1)
     {
       close(self->control_socket);

@@ -1,0 +1,93 @@
+From 8400d4aa419a9fe818d09c0a1fbfff173dbaff38 Mon Sep 17 00:00:00 2001
+From: Balazs Scheidler <balazs.scheidler@oneidentity.com>
+Date: Tue, 18 Dec 2018 09:52:50 +0100
+Subject: [PATCH] cfg-block: make CfgBlockGenerator instances refcounted
+
+Sometimes CfgBlock instances are constructed every time they are
+referenced (e.g. app-parser() in its construct method), in other cases
+the same generator instance is returned (e.g. those created by
+block {} statements).
+
+The shared ones were properly freed, but the dynamic kind were not.
+
+This patch adds reference counting, the followup patch will fix the leak.
+
+Signed-off-by: Balazs Scheidler <balazs.scheidler@oneidentity.com>
+---
+ lib/cfg-block-generator.c | 19 +++++++++++++++----
+ lib/cfg-block-generator.h |  4 +++-
+ lib/cfg-lexer.c           |  2 +-
+ 3 files changed, 19 insertions(+), 6 deletions(-)
+
+diff --git a/lib/cfg-block-generator.c b/lib/cfg-block-generator.c
+index 292094cb6a..c096fd38d5 100644
+--- a/lib/cfg-block-generator.c
++++ b/lib/cfg-block-generator.c
+@@ -51,6 +51,7 @@ cfg_block_generator_generate(CfgBlockGenerator *self, GlobalConfig *cfg, CfgArgs
+ void
+ cfg_block_generator_init_instance(CfgBlockGenerator *self, gint context, const gchar *name)
+ {
++  self->ref_cnt = 1;
+   self->context = context;
+   self->name = g_strdup(name);
+   self->format_name = cfg_block_generator_format_name_method;
+@@ -63,10 +64,20 @@ cfg_block_generator_free_instance(CfgBlockGenerator *self)
+   g_free(self->name);
+ }
+ 
++CfgBlockGenerator *
++cfg_block_generator_ref(CfgBlockGenerator *self)
++{
++  self->ref_cnt++;
++  return self;
++}
++
+ void
+-cfg_block_generator_free(CfgBlockGenerator *self)
++cfg_block_generator_unref(CfgBlockGenerator *self)
+ {
+-  if (self->free_fn)
+-    self->free_fn(self);
+-  g_free(self);
++  if (--self->ref_cnt == 0)
++    {
++      if (self->free_fn)
++        self->free_fn(self);
++      g_free(self);
++    }
+ }
+diff --git a/lib/cfg-block-generator.h b/lib/cfg-block-generator.h
+index f835179d8e..a2717703d7 100644
+--- a/lib/cfg-block-generator.h
++++ b/lib/cfg-block-generator.h
+@@ -41,6 +41,7 @@
+ typedef struct _CfgBlockGenerator CfgBlockGenerator;
+ struct _CfgBlockGenerator
+ {
++  gint ref_cnt;
+   gint context;
+   gchar *name;
+   gboolean suppress_backticks;
+@@ -60,7 +61,8 @@ gboolean cfg_block_generator_generate(CfgBlockGenerator *self, GlobalConfig *cfg
+                                       const gchar *reference);
+ void cfg_block_generator_init_instance(CfgBlockGenerator *self, gint context, const gchar *name);
+ void cfg_block_generator_free_instance(CfgBlockGenerator *self);
+-void cfg_block_generator_free(CfgBlockGenerator *self);
++CfgBlockGenerator *cfg_block_generator_ref(CfgBlockGenerator *self);
++void cfg_block_generator_unref(CfgBlockGenerator *self);
+ 
+ 
+ #endif
+diff --git a/lib/cfg-lexer.c b/lib/cfg-lexer.c
+index cf8a2df6b3..6b7854f284 100644
+--- a/lib/cfg-lexer.c
++++ b/lib/cfg-lexer.c
+@@ -739,7 +739,7 @@ _generator_plugin_free(Plugin *s)
+ {
+   GeneratorPlugin *self = (GeneratorPlugin *) s;
+ 
+-  cfg_block_generator_free(self->gen);
++  cfg_block_generator_unref(self->gen);
+   g_free((gchar *) self->super.name);
+   g_free(s);
+ }

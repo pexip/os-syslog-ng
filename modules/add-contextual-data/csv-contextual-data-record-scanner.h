@@ -31,9 +31,9 @@ typedef struct _CSVContextualDataRecordScanner
   ContextualDataRecordScanner super;
   CSVScanner scanner;
   CSVScannerOptions options;
-
+  gchar *filename;
 } CSVContextualDataRecordScanner;
 
-ContextualDataRecordScanner *csv_contextual_data_record_scanner_new();
+ContextualDataRecordScanner *csv_contextual_data_record_scanner_new(const gchar *filename);
 
 #endif

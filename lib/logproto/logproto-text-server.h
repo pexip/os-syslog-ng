@@ -62,7 +62,8 @@ struct _LogProtoTextServer
  * This class processes text files/streams. Each record is terminated via an EOL character.
  */
 LogProtoServer *log_proto_text_server_new(LogTransport *transport, const LogProtoServerOptions *options);
-void log_proto_text_server_init(LogProtoTextServer *self, LogTransport *transport, const LogProtoServerOptions *options);
+void log_proto_text_server_init(LogProtoTextServer *self, LogTransport *transport,
+                                const LogProtoServerOptions *options);
 
 static inline gint
 log_proto_text_server_accumulate_line(LogProtoTextServer *self,
@@ -74,5 +75,11 @@ log_proto_text_server_accumulate_line(LogProtoTextServer *self,
 }
 
 gint log_proto_get_char_size_for_fixed_encoding(const gchar *encoding);
+
+static inline gboolean
+log_proto_text_server_validate_options_method(LogProtoServer *s)
+{
+  return log_proto_buffered_server_validate_options_method(s);
+}
 
 #endif

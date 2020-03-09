@@ -121,7 +121,7 @@ vp_cmdline_parse_exclude(const gchar *option_name, const gchar *value,
 
 static gboolean
 vp_cmdline_parse_key(const gchar *option_name, const gchar *value,
-		      gpointer data, GError **error)
+                     gpointer data, GError **error)
 {
   gpointer *args = (gpointer *) data;
   ValuePairs *vp = (ValuePairs *) args[1];
@@ -169,7 +169,7 @@ value_pairs_parse_type(gchar *spec, gchar **value, gchar **type)
       return;
     }
 
-  ep = strchr(sp, ')');
+  ep = strrchr(sp, ')');
   if (ep == NULL || ep[1] != '\0')
     {
       *value = spec;
@@ -184,7 +184,7 @@ value_pairs_parse_type(gchar *spec, gchar **value, gchar **type)
 
 static gboolean
 vp_cmdline_parse_pair (const gchar *option_name, const gchar *value,
-		       gpointer data, GError **error)
+                       gpointer data, GError **error)
 {
   gpointer *args = (gpointer *) data;
   ValuePairs *vp = (ValuePairs *) args[1];
@@ -198,7 +198,7 @@ vp_cmdline_parse_pair (const gchar *option_name, const gchar *value,
   if (strchr(value, '=') == NULL)
     {
       g_set_error (error, G_OPTION_ERROR, G_OPTION_ERROR_BAD_VALUE,
-		   "Error parsing value-pairs: expected an equal sign in key=value pair");
+                   "Error parsing value-pairs: expected an equal sign in key=value pair");
       return FALSE;
     }
 
@@ -214,7 +214,7 @@ vp_cmdline_parse_pair (const gchar *option_name, const gchar *value,
   value_pairs_add_pair(vp, kv[0], template);
 
   res = TRUE;
- error:
+error:
   log_template_unref(template);
   g_strfreev(kv);
 
@@ -223,7 +223,7 @@ vp_cmdline_parse_pair (const gchar *option_name, const gchar *value,
 
 static gboolean
 vp_cmdline_parse_pair_or_key (const gchar *option_name, const gchar *value,
-		              gpointer data, GError **error)
+                              gpointer data, GError **error)
 {
   if (strchr(value, '=') == NULL)
     return vp_cmdline_parse_key(option_name, value, data, error);
@@ -233,11 +233,18 @@ vp_cmdline_parse_pair_or_key (const gchar *option_name, const gchar *value,
 
 static gboolean
 vp_cmdline_parse_subkeys(const gchar *option_name, const gchar *value,
-                       gpointer data, GError **error)
+                         gpointer data, GError **error)
 {
   gpointer *args = (gpointer *) data;
   ValuePairs *vp = (ValuePairs *) args[1];
   ValuePairsTransformSet *vpts = (ValuePairsTransformSet *) args[2];
+
+  if (!value[0])
+    {
+      g_set_error(error, G_OPTION_ERROR, G_OPTION_ERROR_FAILED,
+                  "Error parsing value-pairs: --subkeys requires a non-empty argument");
+      return FALSE;
+    }
 
   GString *prefix = g_string_new(value);
   g_string_append_c(prefix, '*');
@@ -249,13 +256,13 @@ vp_cmdline_parse_subkeys(const gchar *option_name, const gchar *value,
   if (!vpts)
     {
       g_set_error(error, G_OPTION_ERROR, G_OPTION_ERROR_FAILED,
-                   "Error parsing value-pairs: --subkeys failed to create key");
+                  "Error parsing value-pairs: --subkeys failed to create key");
       g_string_free(prefix, TRUE);
       return FALSE;
     }
 
   value_pairs_transform_set_add_func
-    (vpts, value_pairs_new_transform_replace_prefix(value, ""));
+  (vpts, value_pairs_new_transform_replace_prefix(value, ""));
 
   g_string_free(prefix, TRUE);
   return TRUE;
@@ -287,7 +294,7 @@ vp_cmdline_parse_rekey_replace_prefix (const gchar *option_name, const gchar *va
 
   kv = g_strsplit(value, "=", 2);
   value_pairs_transform_set_add_func
-    (vpts, value_pairs_new_transform_replace_prefix (kv[0], kv[1]));
+  (vpts, value_pairs_new_transform_replace_prefix (kv[0], kv[1]));
 
   g_free (kv[0]);
   g_free (kv[1]);
@@ -313,7 +320,7 @@ vp_cmdline_parse_rekey_add_prefix (const gchar *option_name, const gchar *value,
     }
 
   value_pairs_transform_set_add_func
-    (vpts, value_pairs_new_transform_add_prefix (value));
+  (vpts, value_pairs_new_transform_add_prefix (value));
   return TRUE;
 }
 
@@ -324,6 +331,15 @@ vp_cmdline_parse_rekey_shift (const gchar *option_name, const gchar *value,
   gpointer *args = (gpointer *) data;
   ValuePairsTransformSet *vpts = (ValuePairsTransformSet *) args[2];
   gchar *key = (gchar *) args[3];
+  gchar *end = NULL;
+  gint number_to_shift = strtol(value, &end, 0);
+
+  if (number_to_shift <= 0 || *end != 0)
+    {
+      g_set_error (error, G_OPTION_ERROR, G_OPTION_ERROR_FAILED,
+                   "Error parsing value-pairs, argument to --shift is not numeric or not a positive number");
+      return FALSE;
+    }
 
   vpts = vp_cmdline_rekey_verify (key, vpts, data);
   if (!vpts)
@@ -333,42 +349,100 @@ vp_cmdline_parse_rekey_shift (const gchar *option_name, const gchar *value,
       return FALSE;
     }
 
-  value_pairs_transform_set_add_func
-    (vpts, value_pairs_new_transform_shift (atoi (value)));
+  value_pairs_transform_set_add_func(vpts,
+                                     value_pairs_new_transform_shift (number_to_shift));
+  return TRUE;
+}
+
+static gboolean
+vp_cmdline_parse_rekey_shift_levels (const gchar *option_name, const gchar *value,
+                                     gpointer data, GError **error)
+{
+  gpointer *args = (gpointer *) data;
+  ValuePairsTransformSet *vpts = (ValuePairsTransformSet *) args[2];
+  gchar *key = (gchar *) args[3];
+  gchar *end = NULL;
+  gint number_to_shift = strtol(value, &end, 0);
+
+  if (number_to_shift <= 0 || *end != 0)
+    {
+      g_set_error (error, G_OPTION_ERROR, G_OPTION_ERROR_FAILED,
+                   "Error parsing value-pairs, argument to --shift-levels is not numeric or not a positive number");
+      return FALSE;
+    }
+
+  vpts = vp_cmdline_rekey_verify (key, vpts, data);
+  if (!vpts)
+    {
+      g_set_error (error, G_OPTION_ERROR, G_OPTION_ERROR_FAILED,
+                   "Error parsing value-pairs: --shift-levels used without --key or --rekey");
+      return FALSE;
+    }
+
+  value_pairs_transform_set_add_func(vpts,
+                                     value_pairs_new_transform_shift_levels (number_to_shift));
   return TRUE;
 }
 
 ValuePairs *
 value_pairs_new_from_cmdline (GlobalConfig *cfg,
-			      gint argc, gchar **argv,
-			      GError **error)
+                              gint *argc, gchar ***argv,
+                              gboolean ignore_unknown_options,
+                              GError **error)
 {
   ValuePairs *vp;
   GOptionContext *ctx;
 
-  GOptionEntry vp_options[] = {
-    { "scope", 's', 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_scope,
-      NULL, NULL },
-    { "exclude", 'x', 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_exclude,
-      NULL, NULL },
-    { "key", 'k', 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_key,
-      NULL, NULL },
-    { "rekey", 'r', 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_rekey,
-      NULL, NULL },
-    { "pair", 'p', 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_pair,
-      NULL, NULL },
-    { "shift", 'S', 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_rekey_shift,
-      NULL, NULL },
-    { "add-prefix", 'A', 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_rekey_add_prefix,
-      NULL, NULL },
-    { "replace-prefix", 'R', 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_rekey_replace_prefix,
-      NULL, NULL },
-    { "replace", 0, G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_CALLBACK,
-      vp_cmdline_parse_rekey_replace_prefix, NULL, NULL },
-    { "subkeys", 0, 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_subkeys,
-      NULL, NULL },
-    { G_OPTION_REMAINING, 0, 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_pair_or_key,
-      NULL, NULL },
+  GOptionEntry vp_options[] =
+  {
+    {
+      "scope", 's', 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_scope,
+      NULL, NULL
+    },
+    {
+      "exclude", 'x', 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_exclude,
+      NULL, NULL
+    },
+    {
+      "key", 'k', 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_key,
+      NULL, NULL
+    },
+    {
+      "rekey", 'r', 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_rekey,
+      NULL, NULL
+    },
+    {
+      "pair", 'p', 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_pair,
+      NULL, NULL
+    },
+    {
+      "shift", 'S', 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_rekey_shift,
+      NULL, NULL
+    },
+    {
+      "shift-levels", 0, 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_rekey_shift_levels,
+      NULL, NULL
+    },
+    {
+      "add-prefix", 'A', 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_rekey_add_prefix,
+      NULL, NULL
+    },
+    {
+      "replace-prefix", 'R', 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_rekey_replace_prefix,
+      NULL, NULL
+    },
+    {
+      "replace", 0, G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_CALLBACK,
+      vp_cmdline_parse_rekey_replace_prefix, NULL, NULL
+    },
+    {
+      "subkeys", 0, 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_subkeys,
+      NULL, NULL
+    },
+    {
+      G_OPTION_REMAINING, 0, 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_pair_or_key,
+      NULL, NULL
+    },
     { NULL }
   };
   GOptionGroup *og;
@@ -381,18 +455,19 @@ value_pairs_new_from_cmdline (GlobalConfig *cfg,
   user_data_args[2] = NULL;
   user_data_args[3] = NULL;
 
-  ctx = g_option_context_new ("value-pairs");
-  og = g_option_group_new (NULL, NULL, NULL, user_data_args, NULL);
-  g_option_group_add_entries (og, vp_options);
-  g_option_context_set_main_group (ctx, og);
+  ctx = g_option_context_new("value-pairs");
+  og = g_option_group_new(NULL, NULL, NULL, user_data_args, NULL);
+  g_option_group_add_entries(og, vp_options);
+  g_option_context_set_main_group(ctx, og);
+  g_option_context_set_ignore_unknown_options(ctx, ignore_unknown_options);
 
-  success = g_option_context_parse (ctx, &argc, &argv, error);
-  vp_cmdline_parse_rekey_finish (user_data_args);
-  g_option_context_free (ctx);
+  success = g_option_context_parse(ctx, argc, argv, error);
+  vp_cmdline_parse_rekey_finish(user_data_args);
+  g_option_context_free(ctx);
 
   if (!success)
     {
-      value_pairs_unref (vp);
+      value_pairs_unref(vp);
       vp = NULL;
     }
 

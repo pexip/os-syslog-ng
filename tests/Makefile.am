@@ -5,10 +5,13 @@ EXTRA_DIST += \
 	tests/copyright/license.text.GPLv2+.txt \
 	tests/copyright/license.text.GPLv2+_SSL.txt \
 	tests/copyright/license.text.LGPLv2.1+.txt \
-	tests/copyright/license.text.LGPLv2.1+_SSL.txt
+	tests/copyright/license.text.LGPLv2.1+_SSL.txt \
+	tests/valgrind/unit-test-leak.supp	\
+	tests/build-log-cflags-propagation.sh	\
+	tests/CMakeLists.txt
 
 check-copyright:
-	@$(top_srcdir)/tests/copyright/check.sh $(top_srcdir) $(top_builddir) policy
+	@cd $(top_srcdir) && ./tests/copyright/check.sh . $(abs_builddir) policy
 
 CLEAN_HOOKS += clean-check-copyright
 
@@ -24,3 +27,4 @@ coverage-clean:
 include tests/unit/Makefile.am
 include tests/loggen/Makefile.am
 include tests/functional/Makefile.am
+include tests/pytest_framework/Makefile.am

@@ -26,15 +26,17 @@
 #define PAYLOAD_H_INCLUDED
 
 #include "syslog-ng.h"
+#include "nvhandle-descriptors.h"
 
 typedef struct _NVTable NVTable;
 typedef struct _NVRegistry NVRegistry;
 typedef struct _NVIndexEntry NVIndexEntry;
 typedef struct _NVEntry NVEntry;
 typedef guint32 NVHandle;
-typedef struct _NVHandleDesc NVHandleDesc;
-typedef gboolean (*NVTableForeachFunc)(NVHandle handle, const gchar *name, const gchar *value, gssize value_len, gpointer user_data);
-typedef gboolean (*NVTableForeachEntryFunc)(NVHandle handle, NVEntry *entry, NVIndexEntry *index_entry, gpointer user_data);
+typedef gboolean (*NVTableForeachFunc)(NVHandle handle, const gchar *name, const gchar *value, gssize value_len,
+                                       gpointer user_data);
+typedef gboolean (*NVTableForeachEntryFunc)(NVHandle handle, NVEntry *entry, NVIndexEntry *index_entry,
+                                            gpointer user_data);
 
 #define NVHANDLE_MAX_VALUE ((NVHandle)-1)
 
@@ -53,18 +55,11 @@ struct _NVIndexEntry
   guint32 ofs;
 };
 
-struct _NVHandleDesc
-{
-  gchar *name;
-  guint16 flags;
-  guint8 name_len;
-};
-
 struct _NVRegistry
 {
   /* number of static names that are statically allocated in each payload */
   gint num_static_names;
-  GArray *names;
+  NVHandleDescArray *names;
   GHashTable *name_map;
   guint32 nvhandle_max_value;
 };
@@ -87,7 +82,7 @@ nv_registry_get_handle_flags(NVRegistry *self, NVHandle handle)
   if (G_UNLIKELY(!handle))
     return 0;
 
-  stored = &g_array_index(self->names, NVHandleDesc, handle - 1);
+  stored = &nvhandle_desc_array_index(self->names, handle - 1);
   return stored->flags;
 }
 
@@ -104,13 +99,27 @@ nv_registry_get_handle_name(NVRegistry *self, NVHandle handle, gssize *length)
     }
 
   if (handle - 1 >= self->names->len)
-    return NULL;
+    {
+      if (length)
+        *length = 0;
+      return NULL;
+    }
 
-  stored = &g_array_index(self->names, NVHandleDesc, handle - 1);
+  stored = &nvhandle_desc_array_index(self->names, handle - 1);
   if (G_LIKELY(length))
     *length = stored->name_len;
   return stored->name;
 }
+
+typedef struct _NVReferencedSlice
+{
+  NVHandle handle;
+  guint32 ofs;
+  guint32 len;
+  guint8 type;
+
+  gchar name[0];
+} NVReferencedSlice;
 
 /*
  * Contains a name-value pair.
@@ -118,8 +127,10 @@ nv_registry_get_handle_name(NVRegistry *self, NVHandle handle, gssize *length)
 struct _NVEntry
 {
   /* negative offset, counting from string table top, e.g. start of the string is at @top + ofs */
-  union {
-    struct {
+  union
+  {
+    struct
+    {
       /* make sure you don't exceed 8 bits here. So if you want to add new
        * bits, decrease the size of __bit_padding below */
       guint8 indirect:1,
@@ -139,14 +150,8 @@ struct _NVEntry
       /* variable data, first the name of this entry, then the value, both are NUL terminated */
       gchar data[0];
     } vdirect;
-    struct
-    {
-      NVHandle handle;
-      guint32 ofs;
-      guint32 len;
-      guint8 type;
-      gchar name[0];
-    } vindirect;
+
+    NVReferencedSlice vindirect;
   };
 };
 
@@ -231,7 +236,7 @@ struct _NVTable
   guint16 index_size;
   guint8 num_static_entries;
   guint8 ref_cnt:7,
-    borrowed:1; /* specifies if the memory used by NVTable was borrowed from the container struct */
+         borrowed:1; /* specifies if the memory used by NVTable was borrowed from the container struct */
 
   /* variable data, see memory layout in the comment above */
   union
@@ -253,14 +258,15 @@ struct _NVTable
  * static values */
 #define NV_TABLE_MIN_BYTES  128
 
-gboolean nv_table_add_value(NVTable *self, NVHandle handle, const gchar *name, gsize name_len, const gchar *value, gsize value_len, gboolean *new_entry);
+gboolean nv_table_add_value(NVTable *self, NVHandle handle, const gchar *name, gsize name_len, const gchar *value,
+                            gsize value_len, gboolean *new_entry);
 void nv_table_unset_value(NVTable *self, NVHandle handle);
-gboolean nv_table_add_value_indirect(NVTable *self, NVHandle handle, const gchar *name, gsize name_len, NVHandle ref_handle, guint8 type, guint32 ofs, guint32 len, gboolean *new_entry);
+gboolean nv_table_add_value_indirect(NVTable *self, NVHandle handle, const gchar *name, gsize name_len,
+                                     NVReferencedSlice *referenced_slice, gboolean *new_entry);
 
 gboolean nv_table_foreach(NVTable *self, NVRegistry *registry, NVTableForeachFunc func, gpointer user_data);
 gboolean nv_table_foreach_entry(NVTable *self, NVTableForeachEntryFunc func, gpointer user_data);
 
-void nv_table_clear(NVTable *self);
 NVTable *nv_table_new(gint num_static_values, gint index_size_hint, gint init_length);
 NVTable *nv_table_init_borrowed(gpointer space, gsize space_len, gint num_static_entries);
 gboolean nv_table_realloc(NVTable *self, NVTable **new);
@@ -274,7 +280,8 @@ nv_table_get_alloc_size(gint num_static_entries, gint index_size_hint, gint init
   NVTable *self G_GNUC_UNUSED = NULL;
   gsize size;
 
-  size = NV_TABLE_BOUND(init_length) + NV_TABLE_BOUND(sizeof(NVTable) + num_static_entries * sizeof(self->static_entries[0]) + index_size_hint * sizeof(NVIndexEntry));
+  size = NV_TABLE_BOUND(init_length) + NV_TABLE_BOUND(sizeof(NVTable) + num_static_entries * sizeof(
+                                                        self->static_entries[0]) + index_size_hint * sizeof(NVIndexEntry));
   if (size < NV_TABLE_MIN_BYTES)
     return NV_TABLE_MIN_BYTES;
   if (size > NV_TABLE_MAX_BYTES)
@@ -304,7 +311,7 @@ nv_table_get_ofs_table_top(NVTable *self)
 static inline gboolean
 nv_table_alloc_check(NVTable *self, gsize alloc_size)
 {
-  if (nv_table_get_bottom(self) - alloc_size < nv_table_get_ofs_table_top(self))
+  if (nv_table_get_bottom(self) - nv_table_get_ofs_table_top(self) < alloc_size)
     return FALSE;
   return TRUE;
 }
@@ -404,6 +411,14 @@ static inline guint32
 nv_table_get_ofs_for_an_entry(NVTable *self, NVEntry *entry)
 {
   return (nv_table_get_top(self) - (gchar *) entry);
+}
+
+static inline gssize
+nv_table_get_memory_consumption(NVTable *self)
+{
+  return sizeof(*self)+
+         self->num_static_entries*sizeof(self->static_entries[0])+
+         self->used;
 }
 
 #endif

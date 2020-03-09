@@ -20,7 +20,7 @@
  * COPYING for details.
  *
  */
-  
+
 #include "afprog.h"
 #include "driver.h"
 #include "messages.h"
@@ -92,24 +92,24 @@ _exec_program(const gchar *cmdline)
 }
 
 static gboolean
-afprogram_popen(AFProgramProcessInfo* process_info, GIOCondition cond, gint *fd)
+afprogram_popen(AFProgramProcessInfo *process_info, GIOCondition cond, gint *fd)
 {
   int msg_pipe[2];
-  
+
   g_return_val_if_fail(cond == G_IO_IN || cond == G_IO_OUT, FALSE);
-  
+
   if (pipe(msg_pipe) == -1)
     {
       msg_error("Error creating program pipe",
                 evt_tag_str("cmdline", process_info->cmdline->str),
-                evt_tag_errno(EVT_TAG_OSERROR, errno));
+                evt_tag_error(EVT_TAG_OSERROR));
       return FALSE;
     }
 
   if ((process_info->pid = fork()) < 0)
     {
       msg_error("Error in fork()",
-                evt_tag_errno(EVT_TAG_OSERROR, errno));
+                evt_tag_error(EVT_TAG_OSERROR));
       close(msg_pipe[0]);
       close(msg_pipe[1]);
       return FALSE;
@@ -123,12 +123,12 @@ afprogram_popen(AFProgramProcessInfo* process_info, GIOCondition cond, gint *fd)
       setpgid(0, 0);
 
       devnull = open("/dev/null", O_WRONLY);
-      
+
       if (devnull == -1)
         {
           _exit(127);
         }
-        
+
       if (cond == G_IO_IN)
         {
           dup2(msg_pipe[1], 1);
@@ -162,6 +162,9 @@ afprogram_popen(AFProgramProcessInfo* process_info, GIOCondition cond, gint *fd)
       *fd = msg_pipe[1];
       close(msg_pipe[0]);
     }
+  msg_verbose(cond == G_IO_IN ? "Program source started" : "Program destination started",
+              evt_tag_str("cmdline", process_info->cmdline->str),
+              evt_tag_int("fd", *fd));
   return TRUE;
 }
 
@@ -218,22 +221,25 @@ afprogram_sd_init(LogPipe *s)
     return FALSE;
 
   /* parent */
-  child_manager_register(self->process_info.pid, afprogram_sd_exit, log_pipe_ref(&self->super.super.super), (GDestroyNotify) log_pipe_unref);
+  child_manager_register(self->process_info.pid, afprogram_sd_exit, log_pipe_ref(&self->super.super.super),
+                         (GDestroyNotify) log_pipe_unref);
 
   g_fd_set_nonblock(fd, TRUE);
   g_fd_set_cloexec(fd, TRUE);
   if (!self->reader)
     {
       LogTransport *transport;
+      LogProtoServer *proto;
 
       transport = log_transport_pipe_new(fd);
+      proto = log_proto_text_server_new(transport, &self->reader_options.proto_options.super);
+
       self->reader = log_reader_new(s->cfg);
-      log_reader_reopen(self->reader, log_proto_text_server_new(transport, &self->reader_options.proto_options.super), poll_fd_events_new(fd));
+      log_reader_reopen(self->reader, proto,
+                        poll_fd_events_new(fd));
       log_reader_set_options(self->reader,
                              s,
                              &self->reader_options,
-                             STATS_LEVEL0,
-                             SCS_PROGRAM,
                              self->super.super.id,
                              self->process_info.cmdline->str);
     }
@@ -284,11 +290,13 @@ afprogram_sd_notify(LogPipe *s, gint notify_code, gpointer user_data)
 {
   switch (notify_code)
     {
-      case NC_CLOSE:
-      case NC_READ_ERROR:
-        afprogram_sd_deinit(s);
-        afprogram_sd_init(s);
-        break;
+    case NC_CLOSE:
+    case NC_READ_ERROR:
+      afprogram_sd_deinit(s);
+      afprogram_sd_init(s);
+      break;
+    default:
+      break;
     }
 }
 
@@ -306,6 +314,8 @@ afprogram_sd_new(gchar *cmdline, GlobalConfig *cfg)
   afprogram_set_inherit_environment(&self->process_info, TRUE);
   log_reader_options_defaults(&self->reader_options);
   self->reader_options.parse_options.flags |= LP_LOCAL;
+  self->reader_options.super.stats_level = STATS_LEVEL0;
+  self->reader_options.super.stats_source = SCS_PROGRAM;
   return &self->super.super;
 }
 
@@ -366,7 +376,8 @@ afprogram_dd_open_program(AFProgramDestDriver *self, int *fd)
       g_fd_set_nonblock(*fd, TRUE);
     }
 
-  child_manager_register(self->process_info.pid, afprogram_dd_exit, log_pipe_ref(&self->super.super.super), (GDestroyNotify)log_pipe_unref);
+  child_manager_register(self->process_info.pid, afprogram_dd_exit, log_pipe_ref(&self->super.super.super),
+                         (GDestroyNotify)log_pipe_unref);
 
   return TRUE;
 }
@@ -381,8 +392,28 @@ afprogram_dd_reopen(AFProgramDestDriver *self)
   if (!afprogram_dd_open_program(self, &fd))
     return FALSE;
 
-  log_writer_reopen(self->writer, log_proto_text_client_new(log_transport_pipe_new(fd), &self->writer_options.proto_options.super));
+  log_writer_reopen(self->writer, log_proto_text_client_new(log_transport_pipe_new(fd),
+                                                            &self->writer_options.proto_options.super));
   return TRUE;
+}
+
+static gboolean
+afprogram_dd_is_command_not_found(int status)
+{
+  /*
+   * Status here is a 16-bit int, the real exit status is the 8 least
+   * significant bits of it, and an exit status of 127 from the shell is
+   * supposed to signal a command-not-found case. The other 8 bits are one bit
+   * to signal if the child dumped core, the other 7 the signal - if any - with
+   * which it exited.
+   *
+   * In our case, we want to make sure that the other 8 bits are all empty (no
+   * core dump; and normal exit, not one due to a signal), hence the second part
+   * of the check.
+   *
+   * See wait(2) for more information.
+   */
+  return (status >> 8) == 127 && ((status & 0x00ff) == 0);
 }
 
 static void
@@ -395,11 +426,23 @@ afprogram_dd_exit(pid_t pid, int status, gpointer s)
    * handling restarting the command before this handler is run. */
   if (self->process_info.pid != -1 && self->process_info.pid == pid)
     {
-      msg_verbose("Child program exited, restarting",
-                  evt_tag_str("cmdline", self->process_info.cmdline->str),
-                  evt_tag_int("status", status));
-      self->process_info.pid = -1;
-      afprogram_dd_reopen(self);
+      if (afprogram_dd_is_command_not_found(status))
+        {
+          msg_error("Child program exited with command not found, stopping the destination.",
+                    evt_tag_str("cmdline", self->process_info.cmdline->str),
+                    evt_tag_int("status", status));
+
+          self->process_info.pid = -1;
+        }
+      else
+        {
+          msg_info("Child program exited, restarting",
+                   evt_tag_str("cmdline", self->process_info.cmdline->str),
+                   evt_tag_int("status", status));
+
+          self->process_info.pid = -1;
+          afprogram_dd_reopen(self);
+        }
     }
 }
 
@@ -408,14 +451,15 @@ afprogram_dd_restore_reload_store_item(AFProgramDestDriver *self, GlobalConfig *
 {
   const gchar *persist_name = afprogram_dd_format_persist_name((const LogPipe *)self);
   AFProgramReloadStoreItem *restored_info =
-      (AFProgramReloadStoreItem *)cfg_persist_config_fetch(cfg, persist_name);
+    (AFProgramReloadStoreItem *)cfg_persist_config_fetch(cfg, persist_name);
 
   if (restored_info)
     {
       self->process_info.pid = restored_info->pid;
       self->writer = restored_info->writer;
 
-      child_manager_register(self->process_info.pid, afprogram_dd_exit, log_pipe_ref(&self->super.super.super), (GDestroyNotify)log_pipe_unref);
+      child_manager_register(self->process_info.pid, afprogram_dd_exit, log_pipe_ref(&self->super.super.super),
+                             (GDestroyNotify)log_pipe_unref);
       g_free(restored_info);
     }
 
@@ -441,11 +485,10 @@ afprogram_dd_init(LogPipe *s)
   log_writer_set_options(self->writer,
                          s,
                          &self->writer_options,
-                         STATS_LEVEL0,
-                         SCS_PROGRAM,
                          self->super.super.id,
                          self->process_info.cmdline->str);
-  log_writer_set_queue(self->writer, log_dest_driver_acquire_queue(&self->super, afprogram_dd_format_queue_persist_name(self)));
+  log_writer_set_queue(self->writer, log_dest_driver_acquire_queue(&self->super,
+                       afprogram_dd_format_queue_persist_name(self)));
 
   if (!log_pipe_init((LogPipe *) self->writer))
     {
@@ -519,8 +562,14 @@ afprogram_dd_notify(LogPipe *s, gint notify_code, gpointer user_data)
   switch (notify_code)
     {
     case NC_CLOSE:
-    case NC_WRITE_ERROR:
       afprogram_dd_reopen(self);
+      break;
+    case NC_WRITE_ERROR:
+      /* We let this fall through, to be handled by the child manager. We do
+         this to have access to the exit status, and which we use to decide
+         whether to restart immediately, or stop the destination. */
+      break;
+    default:
       break;
     }
 }
@@ -540,6 +589,8 @@ afprogram_dd_new(gchar *cmdline, GlobalConfig *cfg)
   self->process_info.pid = -1;
   afprogram_set_inherit_environment(&self->process_info, TRUE);
   log_writer_options_defaults(&self->writer_options);
+  self->writer_options.stats_level = STATS_LEVEL0;
+  self->writer_options.stats_source = SCS_PROGRAM;
   return &self->super.super;
 }
 

@@ -21,7 +21,7 @@
  * COPYING for details.
  *
  */
-  
+
 #ifndef G_SOCKADDR_H_INCLUDED
 #define G_SOCKADDR_H_INCLUDED
 
@@ -30,7 +30,7 @@
 
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <sys/un.h>
+#include <compat/un.h>
 #include <netinet/in.h>
 
 /* sockaddr public interface */
@@ -51,7 +51,7 @@ typedef struct _GSockAddr
   struct sockaddr sa;
 } GSockAddr;
 
-struct _GSockAddrFuncs 
+struct _GSockAddrFuncs
 {
   GIOStatus (*bind_prepare)(gint sock, GSockAddr *addr);
   GIOStatus (*bind)(int sock, GSockAddr *addr);
@@ -63,8 +63,10 @@ struct _GSockAddrFuncs
 gchar *g_sockaddr_format(GSockAddr *a, gchar *text, gulong n, gint format);
 guint16 g_sockaddr_get_port(GSockAddr *a);
 void g_sockaddr_set_port(GSockAddr *a, guint16 port);
+guint8 *g_sockaddr_get_address(GSockAddr *self, guint8 *buffer, socklen_t buffer_size);
 
 GSockAddr *g_sockaddr_new(struct sockaddr *sa, int salen);
+GSockAddr *g_sockaddr_new_from_peer_fd(gint fd);
 GSockAddr *g_sockaddr_ref(GSockAddr *a);
 void g_sockaddr_unref(GSockAddr *a);
 
@@ -82,10 +84,10 @@ static inline struct sockaddr_in *
 g_sockaddr_inet_get_sa(GSockAddr *s)
 {
   g_assert(g_sockaddr_inet_check(s));
-  
+
   return (struct sockaddr_in *) g_sockaddr_get_sa(s);
 }
-    
+
 
 /**
  * g_sockaddr_inet_get_address:
@@ -124,7 +126,7 @@ static inline struct sockaddr_in6 *
 g_sockaddr_inet6_get_sa(GSockAddr *s)
 {
   g_assert(g_sockaddr_inet6_check(s));
-  
+
   return (struct sockaddr_in6 *) g_sockaddr_get_sa(s);
 }
 

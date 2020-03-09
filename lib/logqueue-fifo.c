@@ -36,7 +36,7 @@
 #include <string.h>
 #include <iv_thread.h>
 
-const QueueType log_queue_fifo_type = "FIFO";
+QueueType log_queue_fifo_type = "FIFO";
 
 /*
  * LogFifo is a scalable first-in-first-output queue implementation, that:
@@ -75,7 +75,7 @@ const QueueType log_queue_fifo_type = "FIFO";
 typedef struct _LogQueueFifo
 {
   LogQueue super;
-  
+
   /* scalable qoverflow implementation */
   struct iv_list_head qoverflow_output;
   struct iv_list_head qoverflow_wait;
@@ -103,6 +103,19 @@ typedef struct _LogQueueFifo
  * log_queue_fifo_push_head() or log_queue_fifo_rewind_backlog().
  *
  */
+
+static void
+iv_list_update_msg_size(LogQueueFifo *self, struct iv_list_head *head)
+{
+  LogMessage *msg;
+  struct iv_list_head *ilh, *ilh2;
+  iv_list_for_each_safe(ilh, ilh2, head)
+  {
+    msg = iv_list_entry(ilh, LogMessageQueueNode, list)->msg;
+    log_queue_memory_usage_add(&self->super, log_msg_get_size(msg));
+  }
+}
+
 static gint64
 log_queue_fifo_get_length(LogQueue *s)
 {
@@ -195,7 +208,9 @@ log_queue_fifo_move_input_unlocked(LogQueueFifo *self, gint thread_id)
                 evt_tag_int("count", n),
                 evt_tag_str("persist_name", self->super.persist_name));
     }
-  stats_counter_add(self->super.stored_messages, self->qoverflow_input[thread_id].len);
+  log_queue_queued_messages_add(&self->super, self->qoverflow_input[thread_id].len);
+  iv_list_update_msg_size(self, &self->qoverflow_input[thread_id].items);
+
   iv_list_splice_tail_init(&self->qoverflow_input[thread_id].items, &self->qoverflow_wait);
   self->qoverflow_wait_len += self->qoverflow_input[thread_id].len;
   self->qoverflow_input[thread_id].len = 0;
@@ -221,6 +236,7 @@ log_queue_fifo_move_input(gpointer user_data)
   log_queue_push_notify(&self->super);
   g_static_mutex_unlock(&self->super.lock);
   self->qoverflow_input[thread_id].finish_cb_registered = FALSE;
+  log_queue_unref(&self->super);
   return NULL;
 }
 
@@ -257,16 +273,21 @@ log_queue_fifo_push_tail(LogQueue *s, LogMessage *msg, const LogPathOptions *pat
    * the "wait" queue.
    */
 
-  if (thread_id >= 0) {
+  if (thread_id >= 0)
+    {
       /* fastpath, use per-thread input FIFOs */
       if (!self->qoverflow_input[thread_id].finish_cb_registered)
         {
           /* this is the first item in the input FIFO, register a finish
            * callback to make sure it gets moved to the wait_queue if the
-           * input thread finishes */
+           * input thread finishes
+           * One reference should be held, while the callback is registered
+           * avoiding use-after-free situation
+           */
 
           main_loop_worker_register_batch_callback(&self->qoverflow_input[thread_id].cb);
           self->qoverflow_input[thread_id].finish_cb_registered = TRUE;
+          log_queue_ref(&self->super);
         }
 
       node = log_msg_alloc_queue_node(msg, path_options);
@@ -279,10 +300,10 @@ log_queue_fifo_push_tail(LogQueue *s, LogMessage *msg, const LogPathOptions *pat
   /* slow path, put the pending item and the whole input queue to the wait_queue */
 
   g_static_mutex_lock(&self->super.lock);
-  
+
   if (thread_id >= 0)
     log_queue_fifo_move_input_unlocked(self, thread_id);
-  
+
   if (log_queue_fifo_get_length(s) < self->qoverflow_size)
     {
       node = log_msg_alloc_queue_node(msg, path_options);
@@ -290,8 +311,9 @@ log_queue_fifo_push_tail(LogQueue *s, LogMessage *msg, const LogPathOptions *pat
       iv_list_add_tail(&node->list, &self->qoverflow_wait);
       self->qoverflow_wait_len++;
       log_queue_push_notify(&self->super);
+      log_queue_queued_messages_inc(&self->super);
 
-      stats_counter_inc(self->super.stored_messages);
+      log_queue_memory_usage_add(&self->super, log_msg_get_size(msg));
       g_static_mutex_unlock(&self->super.lock);
 
       log_msg_unref(msg);
@@ -336,7 +358,8 @@ log_queue_fifo_push_head(LogQueue *s, LogMessage *msg, const LogPathOptions *pat
   self->qoverflow_output_len++;
   log_msg_unref(msg);
 
-  stats_counter_inc(self->super.stored_messages);
+  log_queue_queued_messages_inc(&self->super);
+  log_queue_memory_usage_add(&self->super, log_msg_get_size(msg));
 }
 
 /*
@@ -390,7 +413,8 @@ log_queue_fifo_pop_head(LogQueue *s, LogPathOptions *path_options)
        */
       return NULL;
     }
-  stats_counter_dec(self->super.stored_messages);
+  log_queue_queued_messages_dec(&self->super);
+  log_queue_memory_usage_sub(&self->super, log_msg_get_size(msg));
 
   if (self->super.use_backlog)
     {
@@ -444,9 +468,11 @@ log_queue_fifo_rewind_backlog_all(LogQueue *s)
 {
   LogQueueFifo *self = (LogQueueFifo *) s;
 
+  iv_list_update_msg_size(self, &self->qbacklog);
   iv_list_splice_tail_init(&self->qbacklog, &self->qoverflow_output);
+
   self->qoverflow_output_len += self->qbacklog_len;
-  stats_counter_add(self->super.stored_messages, self->qbacklog_len);
+  log_queue_queued_messages_add(&self->super, self->qbacklog_len);
   self->qbacklog_len = 0;
 }
 
@@ -472,7 +498,8 @@ log_queue_fifo_rewind_backlog(LogQueue *s, guint rewind_count)
 
       self->qbacklog_len--;
       self->qoverflow_output_len++;
-      stats_counter_inc(self->super.stored_messages);
+      log_queue_queued_messages_inc(&self->super);
+      log_queue_memory_usage_add(&self->super, log_msg_get_size(node->msg));
     }
 }
 
@@ -503,7 +530,10 @@ log_queue_fifo_free(LogQueue *s)
   gint i;
 
   for (i = 0; i < log_queue_max_threads; i++)
-    log_queue_fifo_free_queue(&self->qoverflow_input[i].items);
+    {
+      g_assert(self->qoverflow_input[i].finish_cb_registered == FALSE);
+      log_queue_fifo_free_queue(&self->qoverflow_input[i].items);
+    }
 
   log_queue_fifo_free_queue(&self->qoverflow_wait);
   log_queue_fifo_free_queue(&self->qoverflow_output);
@@ -533,13 +563,13 @@ log_queue_fifo_new(gint qoverflow_size, const gchar *persist_name)
   self->super.rewind_backlog_all = log_queue_fifo_rewind_backlog_all;
 
   self->super.free_fn = log_queue_fifo_free;
-  
+
   for (i = 0; i < log_queue_max_threads; i++)
     {
       INIT_IV_LIST_HEAD(&self->qoverflow_input[i].items);
       worker_batch_callback_init(&self->qoverflow_input[i].cb);
-      self->qoverflow_input[i].cb.user_data = self;
       self->qoverflow_input[i].cb.func = log_queue_fifo_move_input;
+      self->qoverflow_input[i].cb.user_data = self;
     }
   INIT_IV_LIST_HEAD(&self->qoverflow_wait);
   INIT_IV_LIST_HEAD(&self->qoverflow_output);

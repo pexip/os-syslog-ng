@@ -40,13 +40,12 @@
 
 typedef struct
 {
-  LogThrDestDriver super;
+  LogThreadedDestDriver super;
   JavaDestinationProxy *proxy;
   GString *class_path;
   gchar *class_name;
   LogTemplate *template;
   gchar *template_string;
-  GString *formatted_message;
   GHashTable *options;
   LogTemplateOptions template_options;
 } JavaDestDriver;

@@ -29,6 +29,7 @@
 #include "gsockaddr.h"
 
 typedef struct _TransportMapper TransportMapper;
+typedef gboolean (*TransportMapperAsyncInitCB)(gpointer arg);
 
 struct _TransportMapper
 {
@@ -41,12 +42,16 @@ struct _TransportMapper
   gint sock_type;
   /* protocol parameter for the socket() call, 0 for default or IPPROTO_XXX for specific transports */
   gint sock_proto;
+  /* when a proto needs a Multitransport instance */
+  gboolean create_multitransport;
 
   const gchar *logproto;
   gint stats_source;
 
   gboolean (*apply_transport)(TransportMapper *self, GlobalConfig *cfg);
   LogTransport *(*construct_log_transport)(TransportMapper *self, gint fd);
+  gboolean (*init)(TransportMapper *self);
+  gboolean (*async_init)(TransportMapper *self, TransportMapperAsyncInitCB func, gpointer arg);
   void (*free_fn)(TransportMapper *self);
 };
 
@@ -78,4 +83,23 @@ transport_mapper_construct_log_transport(TransportMapper *self, gint fd)
   return self->construct_log_transport(self, fd);
 }
 
+static inline gboolean
+transport_mapper_init(TransportMapper *self)
+{
+  if (self->init)
+    return self->init(self);
+
+  return TRUE;
+}
+
+static inline gboolean
+transport_mapper_async_init(TransportMapper *self, TransportMapperAsyncInitCB func, gpointer arg)
+{
+  if (self->async_init)
+    {
+      return self->async_init(self, func, arg);
+    }
+
+  return func(arg);
+}
 #endif

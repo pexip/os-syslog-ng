@@ -129,7 +129,7 @@ afstreams_init_door(int hook_type G_GNUC_UNUSED, gpointer user_data)
         {
           msg_error("Error creating syslog door file",
                     evt_tag_str(EVT_TAG_FILENAME, self->door_filename->str),
-                    evt_tag_errno(EVT_TAG_OSERROR, errno));
+                    evt_tag_error(EVT_TAG_OSERROR));
           close(fd);
           return;
         }
@@ -140,7 +140,7 @@ afstreams_init_door(int hook_type G_GNUC_UNUSED, gpointer user_data)
     {
       msg_error("Error creating syslog door",
                 evt_tag_str(EVT_TAG_FILENAME, self->door_filename->str),
-                evt_tag_errno(EVT_TAG_OSERROR, errno));
+                evt_tag_error(EVT_TAG_OSERROR));
       return;
     }
   g_fd_set_cloexec(self->door_fd, TRUE);
@@ -148,7 +148,7 @@ afstreams_init_door(int hook_type G_GNUC_UNUSED, gpointer user_data)
     {
       msg_error("Error attaching syslog door",
                 evt_tag_str(EVT_TAG_FILENAME, self->door_filename->str),
-                evt_tag_errno(EVT_TAG_OSERROR, errno));
+                evt_tag_error(EVT_TAG_OSERROR));
       close(self->door_fd);
       self->door_fd = -1;
       return;
@@ -179,18 +179,17 @@ afstreams_sd_init(LogPipe *s)
         {
           msg_error("Error in ioctl(I_STR, I_CONSLOG)",
                     evt_tag_str(EVT_TAG_FILENAME, self->dev_filename->str),
-                    evt_tag_errno(EVT_TAG_OSERROR, errno));
+                    evt_tag_error(EVT_TAG_OSERROR));
           close(fd);
           return FALSE;
         }
       g_fd_set_nonblock(fd, TRUE);
       self->reader = log_reader_new(cfg);
-      log_reader_reopen(self->reader, log_proto_dgram_server_new(log_transport_streams_new(fd), &self->reader_options.proto_options.super), poll_fd_events_new(fd));
+      log_reader_reopen(self->reader, log_proto_dgram_server_new(log_transport_streams_new(fd),
+                                                                 &self->reader_options.proto_options.super), poll_fd_events_new(fd));
       log_reader_set_options(self->reader,
                              s,
                              &self->reader_options,
-                             STATS_LEVEL1,
-                             SCS_SUN_STREAMS,
                              self->super.super.id,
                              self->dev_filename->str);
       log_pipe_append((LogPipe *) self->reader, s);
@@ -219,7 +218,7 @@ afstreams_sd_init(LogPipe *s)
     {
       msg_error("Error opening syslog device",
                 evt_tag_str(EVT_TAG_FILENAME, self->dev_filename->str),
-                evt_tag_errno(EVT_TAG_OSERROR, errno));
+                evt_tag_error(EVT_TAG_OSERROR));
       return FALSE;
     }
   return TRUE;
@@ -276,5 +275,7 @@ afstreams_sd_new(gchar *filename, GlobalConfig *cfg)
   log_reader_options_defaults(&self->reader_options);
   self->reader_options.parse_options.flags |= LP_LOCAL;
   self->reader_options.parse_options.flags &= ~LP_EXPECT_HOSTNAME;
+  self->reader_options.super.stats_level = STATS_LEVEL1;
+  self->reader_options.super.stats_source = SCS_SUN_STREAMS;
   return &self->super.super;
 }

@@ -94,6 +94,7 @@ enum
   M_RECVD_OFS = M_TIME_MACROS_MAX,
   M_STAMP_OFS = 2 * M_TIME_MACROS_MAX,
   M_CSTAMP_OFS = 3 * M_TIME_MACROS_MAX,
+  M_PROCESSED_OFS = 4 * M_TIME_MACROS_MAX,
 };
 
 /* macros (not NV pairs!) that syslog-ng knows about. This was the
@@ -103,15 +104,16 @@ enum
  */
 typedef struct _LogMacroDef
 {
-  char *name;
+  const char *name;
   int id;
 } LogMacroDef;
 
 extern LogMacroDef macros[];
 
 /* low level macro functions */
-guint log_macro_lookup(gchar *macro, gint len);
-gboolean log_macro_expand(GString *result, gint id, gboolean escape, const LogTemplateOptions *opts, gint tz, gint32 seq_num, const gchar *context_id, const LogMessage *msg);
+guint log_macro_lookup(const gchar *macro, gint len);
+gboolean log_macro_expand(GString *result, gint id, gboolean escape, const LogTemplateOptions *opts, gint tz,
+                          gint32 seq_num, const gchar *context_id, const LogMessage *msg);
 gboolean log_macro_expand_simple(GString *result, gint id, const LogMessage *msg);
 
 void log_macros_global_init(void);

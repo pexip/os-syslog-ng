@@ -1,0 +1,8 @@
+scl/default-network-drivers/plugin.conf usr/share/syslog-ng/include/scl/default-network-drivers/
+scl/ewmm/ewmm.conf usr/share/syslog-ng/include/scl/ewmm/
+scl/graylog2/plugin.conf usr/share/syslog-ng/include/scl/graylog2/
+scl/loadbalancer/gen-loadbalancer.sh usr/share/syslog-ng/include/scl/loadbalancer/
+scl/loadbalancer/plugin.conf usr/share/syslog-ng/include/scl/loadbalancer/
+scl/osquery/plugin.conf usr/share/syslog-ng/include/scl/osquery/
+scl/windowseventlog/plugin.conf usr/share/syslog-ng/include/scl/windowseventlog/
+scl/windowseventlog/windowseventlog.xml usr/share/syslog-ng/include/scl/windowseventlog/

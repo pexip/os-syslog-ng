@@ -28,13 +28,17 @@
 extern int riemann_debug;
 int riemann_parse(CfgLexer *lexer, LogDriver **instance, gpointer arg);
 
-static CfgLexerKeyword riemann_keywords[] = {
+static CfgLexerKeyword riemann_keywords[] =
+{
   { "riemann",                  KW_RIEMANN },
   { "server",                   KW_SERVER },
   { "port",                     KW_PORT },
   { "timeout",                  KW_TIMEOUT },
   { "host",                     KW_HOST },
   { "service",                  KW_SERVICE },
+  { "event_time",               KW_EVENT_TIME },
+  { "seconds",                  KW_SECONDS },
+  { "microseconds",             KW_MICROSECONDS },
   { "state",                    KW_STATE },
   { "description",              KW_DESCRIPTION },
   { "metric",                   KW_METRIC },
@@ -44,15 +48,13 @@ static CfgLexerKeyword riemann_keywords[] = {
   { "ca_file",                  KW_CA_FILE },
   { "cert_file",                KW_CERT_FILE },
   { "key_file",                 KW_KEY_FILE },
+  { "flush_lines",              KW_BATCH_LINES, KWS_OBSOLETE, "The flush-lines option is deprecated in favour of batch-lines()" },
 
   /* compatibility with original but inconsistent option naming */
-  { "cacert",                   KW_CA_FILE },
-  { "cert",                     KW_CERT_FILE },
+  { "cacert",                   KW_CA_FILE, KWS_OBSOLETE, "The cacert() option is deprecated in favour of ca-file()" },
+  { "cert",                     KW_CERT_FILE, KWS_OBSOLETE, "The cert() option is deprecated in favour of cert-file()" },
 
-  /* this one overrides the token in the core set (cfg-parser.c), but
-   * we use it for compatibility reasons, and I didn't want duplicate
-   * rules in the grammar just for this */
-  { "key",                      KW_KEY_FILE },
+  { "tls",                      KW_TLS },
 
   { NULL }
 };

@@ -36,16 +36,27 @@ static gboolean
 filter_tags_eval(FilterExprNode *s, LogMessage **msgs, gint num_msg)
 {
   FilterTags *self = (FilterTags *)s;
-  LogMessage *msg = msgs[0];
+  LogMessage *msg = msgs[num_msg - 1];
+  gboolean res;
   gint i;
 
   for (i = 0; i < self->tags->len; i++)
     {
-      if (log_msg_is_tag_by_id(msg, g_array_index(self->tags, LogTagId, i)))
-        return TRUE ^ s->comp;
+      LogTagId tag_id = g_array_index(self->tags, LogTagId, i);
+      if (log_msg_is_tag_by_id(msg, tag_id))
+        {
+          res = TRUE;
+          msg_trace("tags() evaluation started",
+                    evt_tag_str("tag", log_tags_get_by_id(tag_id)),
+                    evt_tag_printf("msg", "%p", msg));
+          return res ^ s->comp;
+        }
     }
 
-  return FALSE ^ s->comp;
+  res = FALSE;
+  msg_trace("tags() evaluation started",
+            evt_tag_printf("msg", "%p", msg));
+  return res ^ s->comp;
 }
 
 void
@@ -83,5 +94,6 @@ filter_tags_new(GList *tags)
 
   self->super.eval = filter_tags_eval;
   self->super.free_fn = filter_tags_free;
+  self->super.type = "tags";
   return &self->super;
 }

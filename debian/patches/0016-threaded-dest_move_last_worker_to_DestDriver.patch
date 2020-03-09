@@ -1,0 +1,53 @@
+From c4157dede3f082c7805c0a7a5f4971b69514e198 Mon Sep 17 00:00:00 2001
+From: Attila Szakacs <attila.szakacs@balabit.com>
+Date: Fri, 25 Jan 2019 09:02:28 +0100
+Subject: [PATCH] threaded-dest: move last_worker to DestDriver
+
+Before this, `last_worker` was a static variable, which meant,
+if we had two http destinations, one message sent to the
+first would step the current worker in the second causing
+uneven load between the workers.
+
+Signed-off-by: Attila Szakacs <attila.szakacs@balabit.com>
+---
+ lib/logthrdestdrv.c | 7 +++----
+ lib/logthrdestdrv.h | 1 +
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/lib/logthrdestdrv.c b/lib/logthrdestdrv.c
+index e160e972fc..e55f362248 100644
+--- a/lib/logthrdestdrv.c
++++ b/lib/logthrdestdrv.c
+@@ -857,10 +857,8 @@ log_threaded_dest_driver_set_max_retries(LogDriver *s, gint max_retries)
+ LogThreadedDestWorker *
+ _lookup_worker(LogThreadedDestDriver *self, LogMessage *msg)
+ {
+-  static guint last_worker = 0;
+-
+-  gint worker_index = last_worker % self->num_workers;
+-  last_worker++;
++  gint worker_index = self->last_worker % self->num_workers;
++  self->last_worker++;
+ 
+   /* here would come the lookup mechanism that maps msg -> worker that doesn't exist yet. */
+   return self->workers[worker_index];
+@@ -1038,6 +1036,7 @@ log_threaded_dest_driver_init_instance(LogThreadedDestDriver *self, GlobalConfig
+   self->batch_lines = -1;
+   self->batch_timeout = -1;
+   self->num_workers = 1;
++  self->last_worker = 0;
+ 
+   self->retries_max = MAX_RETRIES_OF_FAILED_INSERT_DEFAULT;
+   self->lock = g_mutex_new();
+diff --git a/lib/logthrdestdrv.h b/lib/logthrdestdrv.h
+index b1c87ecd28..394fc9e89f 100644
+--- a/lib/logthrdestdrv.h
++++ b/lib/logthrdestdrv.h
+@@ -117,6 +117,7 @@ struct _LogThreadedDestDriver
+   LogThreadedDestWorker **workers;
+   gint num_workers;
+   gint workers_started;
++  guint last_worker;
+ 
+   gint stats_source;
+ 

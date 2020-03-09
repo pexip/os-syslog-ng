@@ -2,6 +2,8 @@ lib_logproto_tests_TESTS		 = \
 	lib/logproto/tests/test_logproto   \
 	lib/logproto/tests/test_findeom
 
+EXTRA_DIST += lib/logproto/tests/CMakeLists.txt
+
 check_PROGRAMS				+= ${lib_logproto_tests_TESTS}
 
 lib_logproto_tests_test_logproto_CFLAGS  = $(TEST_CFLAGS) \
@@ -23,6 +25,7 @@ lib_logproto_tests_test_findeom_CFLAGS	= \
 	-I${top_srcdir}/libtest
 lib_logproto_tests_test_findeom_LDADD	= \
 	${top_builddir}/lib/libsyslog-ng.la \
-	${top_builddir}/libtest/libsyslog-ng-test.a
+	${top_builddir}/libtest/libsyslog-ng-test.a \
+	$(TEST_LDADD)
 lib_logproto_tests_test_findeom_SOURCES = \
 	lib/logproto/tests/test_findeom.c

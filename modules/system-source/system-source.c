@@ -22,10 +22,11 @@
  */
 
 #include "cfg.h"
-#include "cfg-lexer.h"
+#include "cfg-block-generator.h"
 #include "messages.h"
 #include "plugin.h"
 #include "plugin-types.h"
+#include "str-utils.h"
 
 #include <fcntl.h>
 #include <sys/utsname.h>
@@ -52,6 +53,7 @@ system_sysblock_add_unix_dgram_driver(GString *sysblock, const gchar *path,
     g_string_append_printf(sysblock, " perm(%s)", perms);
   if (recvbuf_size)
     g_string_append_printf(sysblock, " so_rcvbuf(%s)", recvbuf_size);
+  g_string_append(sysblock, " flags(syslog-protocol)");
   g_string_append(sysblock, ");\n");
 }
 
@@ -60,14 +62,14 @@ system_sysblock_add_unix_dgram(GString *sysblock, const gchar *path,
                                const gchar *perms, const gchar *recvbuf_size)
 {
   GString *unix_driver = g_string_sized_new(0);
-  
+
   system_sysblock_add_unix_dgram_driver(unix_driver, path, perms, recvbuf_size);
 
-  g_string_append_printf(sysblock, 
-"channel {\n"
-"    source { %s };\n"
-"    rewrite { set(\"${.unix.pid}\" value(\"PID\") condition(\"${.unix.pid}\" ne \"\")); };\n"
-"};\n", unix_driver->str);
+  g_string_append_printf(sysblock,
+                         "channel {\n"
+                         "    source { %s };\n"
+                         "    rewrite { set(\"${.unix.pid}\" value(\"PID\") condition(\"${.unix.pid}\" ne \"\")); };\n"
+                         "};\n", unix_driver->str);
 
   g_string_free(unix_driver, TRUE);
 }
@@ -113,10 +115,10 @@ system_sysblock_add_sun_streams(GString *sysblock, const gchar *path,
 
 
   g_string_append_printf(sysblock,
-"channel {\n"
-"    source { %s };\n"
-"    parser { extract-solaris-msgid(); };\n"
-"};\n", solaris_driver->str);
+                         "channel {\n"
+                         "    source { %s };\n"
+                         "    parser { extract-solaris-msgid(); };\n"
+                         "};\n", solaris_driver->str);
   g_string_free(solaris_driver, TRUE);
 }
 
@@ -180,6 +182,37 @@ _is_fd_pollable(gint fd)
   return pollable;
 }
 
+static gboolean
+_detect_linux_dev_kmsg(void)
+{
+  gint fd;
+
+  if ((fd = open("/dev/kmsg", O_RDONLY)) != -1)
+    {
+      if ((lseek (fd, 0, SEEK_END) != -1) && _is_fd_pollable(fd))
+        {
+          return TRUE;
+        }
+      close (fd);
+    }
+  return FALSE;
+}
+
+static gboolean
+_detect_linux_proc_kmsg(void)
+{
+  gint fd;
+
+  if ((fd = open("/proc/kmsg", O_RDONLY)) != -1)
+    {
+      if (_is_fd_pollable(fd))
+        {
+          return TRUE;
+        }
+      close (fd);
+    }
+  return FALSE;
+}
 
 static void
 system_sysblock_add_systemd_source(GString *sysblock)
@@ -190,55 +223,32 @@ system_sysblock_add_systemd_source(GString *sysblock)
 static void
 system_sysblock_add_linux_kmsg(GString *sysblock)
 {
-  gchar *kmsg = "/proc/kmsg";
-  int fd;
-  gchar *format = NULL;
+  const gchar *kmsg = NULL;
+  const gchar *format = NULL;
 
-  if ((fd = open("/dev/kmsg", O_RDONLY)) != -1)
+  if (_detect_linux_dev_kmsg())
     {
-      if ((lseek (fd, 0, SEEK_END) != -1) && _is_fd_pollable(fd))
-        {
-          kmsg = "/dev/kmsg";
-          format = "linux-kmsg";
-        }
-      close (fd);
+      kmsg = "/dev/kmsg";
+      format = "linux-kmsg";
     }
-
-  if (access(kmsg, R_OK) == -1)
+  else if (_detect_linux_proc_kmsg())
     {
-      msg_warning("system(): The kernel message buffer is not readable, "
-                  "please check permissions if this is unintentional.",
-                  evt_tag_str("device", kmsg),
-                  evt_tag_errno("error", errno));
+      kmsg = "/proc/kmsg";
+      format = NULL;
     }
   else
-    system_sysblock_add_file(sysblock, kmsg, -1,
-                             "kernel", "kernel", format, TRUE);
-}
-
-static gboolean
-_is_running_in_linux_container(void)
-{
-  FILE *f;
-  char line[2048];
-  gboolean container = FALSE;
-
-  f = fopen("/proc/1/cgroup", "r");
-  if (!f)
-    return FALSE;
-
-  while (fgets(line, sizeof(line), f) != NULL)
     {
-      if (line[strlen(line) - 2] != '/')
-        {
-          container = TRUE;
-          break;
-        }
+      msg_notice("system(): Neither of the Linux kernel log devices was detected, continuing without polling either /proc/kmsg or /dev/kmsg");
     }
 
-  fclose (f);
-
-  return container;
+  if (kmsg)
+    {
+      msg_debug("system(): Enabling Linux kernel log device",
+                evt_tag_str("device", kmsg),
+                evt_tag_str("format", format));
+      system_sysblock_add_file(sysblock, kmsg, -1,
+                               "kernel", "kernel", format, TRUE);
+    }
 }
 
 static void
@@ -249,20 +259,19 @@ system_sysblock_add_linux(GString *sysblock)
   else
     {
       system_sysblock_add_unix_dgram(sysblock, "/dev/log", NULL, "8192");
-      if (!_is_running_in_linux_container())
-        system_sysblock_add_linux_kmsg(sysblock);
+      system_sysblock_add_linux_kmsg(sysblock);
     }
 }
 
 static gboolean
-system_generate_system_transports(GString *sysblock)
+system_generate_system_transports(GString *sysblock, CfgArgs *args)
 {
   struct utsname u;
 
   if (uname(&u) < 0)
     {
       msg_error("system(): Cannot get information about the running kernel",
-                evt_tag_errno("error", errno));
+                evt_tag_error("error"));
       return FALSE;
     }
 
@@ -304,6 +313,10 @@ system_generate_system_transports(GString *sysblock)
     {
       system_sysblock_add_unix_dgram(sysblock, "/dev/log", NULL, NULL);
     }
+  else if (strcmp(u.sysname, "OpenBSD") == 0)
+    {
+      g_string_append(sysblock, "openbsd();");
+    }
   else
     {
       msg_error("system(): Error detecting platform, unable to define the system() source. "
@@ -316,82 +329,91 @@ system_generate_system_transports(GString *sysblock)
   return TRUE;
 }
 
-static gboolean
-_is_json_parser_available(GlobalConfig *cfg)
-{
-  return plugin_find(cfg, LL_CONTEXT_PARSER, "json-parser") != NULL;
-}
-
 static void
-system_generate_cim_parser(GlobalConfig *cfg, GString *sysblock)
+system_generate_app_parser(GlobalConfig *cfg, GString *sysblock, CfgArgs *args)
 {
-  if (cfg_is_config_version_older(cfg, 0x0306))
-    {
-      msg_warning_once("WARNING: Starting with " VERSION_3_6 ", the system() source performs JSON parsing of messages starting with the '@cim:' prefix. No additional action is needed");
-      return;
-    }
+  gchar *varargs = cfg_args_format_varargs(args, NULL);
 
-  if (!_is_json_parser_available(cfg))
-    {
-      msg_debug("system(): json-parser() is missing, skipping the automatic JSON parsing of messages submitted via syslog(3), Please install the json module");
-      return;
-    }
-
-  g_string_append(sysblock,
-                  "channel {\n"
-                  "  channel {\n"
-                  "    parser {\n"
-                  "      json-parser(prefix('.cim.') marker('@cim:'));\n"
-                  "    };\n"
-                  "    flags(final);\n"
-                  "  };\n"
-                  "  channel { };\n"
-                  "};\n");
+  g_string_append_printf(sysblock,
+                         "channel {\n"
+                         "  channel {\n"
+                         "    parser {\n"
+                         "      app-parser(topic(system-unix) %s);\n"
+                         "      app-parser(topic(syslog) %s);\n"
+                         "    };\n"
+                         "    flags(final);\n"
+                         "  };\n"
+                         "  channel { flags(final); };\n"
+                         "};\n",
+                         varargs, varargs);
+  g_free(varargs);
 }
 
 static gboolean
-system_generate_system(CfgLexer *lexer, gint type, const gchar *name,
-                       CfgArgs *args, gpointer user_data)
+system_source_generate(CfgBlockGenerator *self, GlobalConfig *cfg, CfgArgs *args, GString *sysblock,
+                       const gchar *reference)
 {
-  gchar buf[256];
-  GString *sysblock;
   gboolean result = FALSE;
-  GlobalConfig *cfg = (GlobalConfig *) user_data;
 
-  g_snprintf(buf, sizeof(buf), "source confgen system");
+  /* NOTE: we used to have an exclude-kmsg() option that was removed, still
+   * we need to ignore it */
 
-  sysblock = g_string_sized_new(1024);
+  if (args)
+    cfg_args_remove(args, "exclude-kmsg");
 
   g_string_append(sysblock,
                   "channel {\n"
                   "    source {\n");
 
-  if (!system_generate_system_transports(sysblock))
+  if (!system_generate_system_transports(sysblock, args))
     {
       goto exit;
     }
 
   g_string_append(sysblock, "    }; # source\n");
 
-  system_generate_cim_parser(cfg, sysblock);
+  system_generate_app_parser(cfg, sysblock, args);
 
   g_string_append(sysblock, "}; # channel\n");
-  result = cfg_lexer_include_buffer(lexer, buf, sysblock->str, sysblock->len);
- exit:
-  g_string_free(sysblock, TRUE);
+  result = TRUE;
+exit:
   return result;
 }
 
-gboolean
-system_source_module_init(GlobalConfig *cfg, CfgArgs *args)
+
+CfgBlockGenerator *
+system_source_generator_new(gint context, const gchar *name)
 {
-  cfg_lexer_register_block_generator(cfg->lexer,
-                                     cfg_lexer_lookup_context_type_by_name("source"),
-                                     "system", system_generate_system,
-                                     cfg, NULL);
+  CfgBlockGenerator *self = g_new0(CfgBlockGenerator, 1);
+
+  cfg_block_generator_init_instance(self, context, name);
+  self->generate = system_source_generate;
+  return self;
+}
+
+gpointer
+system_source_construct(Plugin *p)
+{
+  return system_source_generator_new(p->type, p->name);
+}
+
+Plugin system_plugins[] =
+{
+  {
+    .type = LL_CONTEXT_SOURCE | LL_CONTEXT_FLAG_GENERATOR,
+    .name = "system",
+    .construct = system_source_construct
+  }
+};
+
+gboolean
+system_source_module_init(PluginContext *context, CfgArgs *args)
+{
+  plugin_register(context, system_plugins, 1);
 
   return TRUE;
 }
+
 
 const ModuleInfo module_info =
 {
@@ -399,6 +421,6 @@ const ModuleInfo module_info =
   .version = SYSLOG_NG_VERSION,
   .description = "The system-source module provides support for determining the system log sources at run time.",
   .core_revision = SYSLOG_NG_SOURCE_REVISION,
-  .plugins = NULL,
-  .plugins_len = 0,
+  .plugins = system_plugins,
+  .plugins_len = G_N_ELEMENTS(system_plugins),
 };

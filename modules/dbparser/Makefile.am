@@ -21,6 +21,11 @@ modules_dbparser_libsyslog_ng_patterndb_la_SOURCES	=	\
 	modules/dbparser/pdb-example.h				\
 	modules/dbparser/pdb-ruleset.c				\
 	modules/dbparser/pdb-ruleset.h				\
+	modules/dbparser/pdb-context.c				\
+	modules/dbparser/pdb-context.h				\
+	modules/dbparser/pdb-ratelimit.c			\
+	modules/dbparser/pdb-ratelimit.h			\
+	modules/dbparser/pdb-lookup-params.h			\
 	modules/dbparser/correllation.c				\
 	modules/dbparser/correllation.h				\
 	modules/dbparser/correllation-key.c			\
@@ -36,14 +41,8 @@ modules_dbparser_libsyslog_ng_patterndb_la_SOURCES	=	\
 	modules/dbparser/patternize.c				\
 	modules/dbparser/patternize.h
 
-# The radix tree uses unsigned char internally but passes these values to
-# string.h functions, which trigger a lot of harmless warnings.  Of course
-# these could be fixed by adding a lot of casts to the code, but I
-# considered these to be less readable, than simply adding -Wno-pointer-sign
-# warning option.
-#
 modules_dbparser_libsyslog_ng_patterndb_la_CFLAGS	=	\
-	$(AM_CFLAGS) -fPIC @CFLAGS_NOWARN_POINTER_SIGN@
+	$(AM_CFLAGS) -fPIC
 modules_dbparser_libsyslog_ng_patterndb_la_LIBADD	=	\
 	$(MODULE_DEPS_LIBS)
 modules_dbparser_libsyslog_ng_patterndb_la_DEPENDENCIES	=	\
@@ -65,8 +64,7 @@ modules_dbparser_libdbparser_la_SOURCES			=	\
 modules_dbparser_libdbparser_la_CPPFLAGS		=	\
 	$(AM_CPPFLAGS)						\
 	-I$(top_srcdir)/modules/dbparser			\
-	-I$(top_builddir)/modules/dbparser			\
-	@CFLAGS_NOWARN_POINTER_SIGN@
+	-I$(top_builddir)/modules/dbparser
 modules_dbparser_libdbparser_la_LIBADD			=	\
 	$(MODULE_DEPS_LIBS)
 modules_dbparser_libdbparser_la_LDFLAGS			=	\
@@ -79,7 +77,8 @@ BUILT_SOURCES						+=	\
 	modules/dbparser/dbparser-grammar.c			\
 	modules/dbparser/dbparser-grammar.h
 EXTRA_DIST						+=	\
-	modules/dbparser/dbparser-grammar.ym
+	modules/dbparser/dbparser-grammar.ym	\
+	modules/dbparser/CMakeLists.txt
 
 modules/dbparser modules/dbparser/ mod-dbparser: modules/dbparser/libdbparser.la \
 						 modules/dbparser/pdbtool/pdbtool

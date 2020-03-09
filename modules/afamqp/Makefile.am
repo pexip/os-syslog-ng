@@ -1,15 +1,3 @@
-DIST_SUBDIRS				+= modules/afamqp/rabbitmq-c
-
-if LIBRABBITMQ_INTERNAL
-
-CLEAN_SUBDIRS 				+= @LIBRABBITMQ_SUBDIRS@
-lr_EXTRA_DEPS = modules/afamqp/rabbitmq-c/librabbitmq/librabbitmq.la
-
-$(lr_EXTRA_DEPS):
-	${MAKE} -C modules/afamqp/rabbitmq-c
-
-endif
-
 if ENABLE_AMQP
 module_LTLIBRARIES			+= modules/afamqp/libafamqp.la
 
@@ -23,7 +11,8 @@ modules_afamqp_libafamqp_la_SOURCES	= 	\
 	modules/afamqp/afamqp.c			\
 	modules/afamqp/afamqp.h			\
 	modules/afamqp/afamqp-parser.c		\
-	modules/afamqp/afamqp-parser.h
+	modules/afamqp/afamqp-parser.h          \
+	modules/afamqp/afamqp-plugin.c
 modules_afamqp_libafamqp_la_LIBADD	= 	\
 	$(MODULE_DEPS_LIBS) $(LIBRABBITMQ_LIBS)
 modules_afamqp_libafamqp_la_LDFLAGS	=	\
@@ -45,6 +34,6 @@ BUILT_SOURCES				+=	\
 
 EXTRA_DIST				+=	\
 		modules/afamqp/afamqp-grammar.ym	\
-		modules/afamqp/rabbitmq-c/configure.gnu
+		modules/afamqp/CMakeLists.txt
 
 .PHONY: modules/afamqp/ mod-afamqp mod-amqp

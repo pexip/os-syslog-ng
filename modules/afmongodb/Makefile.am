@@ -1,12 +1,3 @@
-DIST_SUBDIRS 					+= @LIBMONGO_SUBDIRS@
-
-if LIBMONGO_INTERNAL
-CLEAN_SUBDIRS					+= @LIBMONGO_SUBDIRS@
-lmc_EXTRA_DEPS					= @LIBMONGO_SUBDIRS@/libmongoc-1.0.la
-
-$(lmc_EXTRA_DEPS):
-	${MAKE} -C modules/afmongodb/mongo-c-driver
-endif
 
 if ENABLE_MONGODB
 
@@ -32,7 +23,7 @@ modules_afmongodb_libafmongodb_la_SOURCES	+=	\
 	modules/afmongodb/afmongodb-legacy-uri.h			\
 	modules/afmongodb/afmongodb-legacy-grammar.c			\
 	modules/afmongodb/afmongodb-legacy-grammar.h			\
-	modules/afmongodb/afmongodb-legacy-private.h				\
+	modules/afmongodb/afmongodb-legacy-private.h			\
 	modules/afmongodb/host-list.c				\
 	modules/afmongodb/host-list.h
 endif
@@ -58,7 +49,6 @@ BUILT_SOURCES					+=	\
 	modules/afmongodb/afmongodb-grammar.h
 
 EXTRA_DIST					+=	\
-	modules/afmongodb/afmongodb-grammar.ym		\
-	modules/afmongodb/mongo-c-driver/configure.gnu
+	modules/afmongodb/afmongodb-grammar.ym
 
 .PHONY: modules/afmongodb/ mod-afmongodb mod-mongodb

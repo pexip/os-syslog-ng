@@ -73,7 +73,7 @@ modules_java_libmod_java_la_CFLAGS = \
     -I$(top_srcdir)/modules/java    \
     -I$(top_builddir)/modules/java	\
     -I$(top_srcdir)/modules/java/native \
-    -I$(top_builddir)/modules/java/native 
+    -I$(top_builddir)/modules/java/native
 
 modules_java_libmod_java_la_SOURCES = \
     modules/java/native/java-grammar.y \
@@ -86,6 +86,8 @@ modules_java_libmod_java_la_SOURCES = \
     modules/java/native/java_machine.c \
     modules/java/native/java_machine.h \
     modules/java/native/java-destination.h \
+    modules/java/native/java-config.c \
+    modules/java/native/java-config.h \
     modules/java/proxies/java-destination-proxy.c \
     modules/java/proxies/java-destination-proxy.h \
     modules/java/proxies/java-logmsg-proxy.c \
@@ -141,6 +143,8 @@ BUILT_SOURCES += \
 
 EXTRA_DIST += \
     modules/java/native/java-grammar.ym \
+    modules/java/CMakeLists.txt	\
+    modules/java/tools/syslog-ng.conf.example	\
     $(JAVA_FILES)
 
 if ENABLE_JAVA

@@ -24,8 +24,44 @@
 #ifndef SNG_RIEMANN_H_INCLUDED
 #define SNG_RIEMANN_H_INCLUDED
 
-#include "driver.h"
+#include "logthrdestdrv.h"
 #include "value-pairs/value-pairs.h"
+
+#include <riemann/riemann-client.h>
+
+typedef struct
+{
+  LogThreadedDestDriver super;
+
+  gchar *server;
+  gint port;
+  riemann_client_type_t type;
+  guint timeout;
+
+  struct
+  {
+    LogTemplate *host;
+    LogTemplate *service;
+    LogTemplate *event_time;
+    gint event_time_unit;
+    LogTemplate *state;
+    LogTemplate *description;
+    LogTemplate *metric;
+    LogTemplate *ttl;
+    GList *tags;
+    ValuePairs *attributes;
+  } fields;
+  LogTemplateOptions template_options;
+
+  struct
+  {
+    gchar *cacert;
+    gchar *cert;
+    gchar *key;
+  } tls;
+
+} RiemannDestDriver;
+
 
 LogDriver *riemann_dd_new(GlobalConfig *cfg);
 
@@ -35,6 +71,7 @@ LogTemplateOptions *riemann_dd_get_template_options(LogDriver *d);
 
 void riemann_dd_set_field_host(LogDriver *d, LogTemplate *value);
 void riemann_dd_set_field_service(LogDriver *d, LogTemplate *value);
+void riemann_dd_set_field_event_time(LogDriver *d, LogTemplate *value);
 void riemann_dd_set_field_state(LogDriver *d, LogTemplate *value);
 void riemann_dd_set_field_description(LogDriver *d, LogTemplate *value);
 void riemann_dd_set_field_metric(LogDriver *d, LogTemplate *value);
@@ -45,7 +82,7 @@ gboolean riemann_dd_set_connection_type(LogDriver *d, const gchar *type);
 void riemann_dd_set_tls_cacert(LogDriver *d, const gchar *path);
 void riemann_dd_set_tls_cert(LogDriver *d, const gchar *path);
 void riemann_dd_set_tls_key(LogDriver *d, const gchar *path);
-void riemann_dd_set_flush_lines(LogDriver *d, gint lines);
 void riemann_dd_set_timeout(LogDriver *d, guint timeout);
+void riemann_dd_set_event_time_unit(LogDriver *d, gint unit);
 
 #endif

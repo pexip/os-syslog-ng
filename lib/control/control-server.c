@@ -24,10 +24,8 @@
 #include "control-server.h"
 #include "messages.h"
 #include "str-utils.h"
+#include "secret-storage/secret-storage.h"
 
-#ifndef CONTROL_UNITTEST
-#include "control-server-unix.c"
-#endif
 #include <string.h>
 #include <errno.h>
 
@@ -79,7 +77,7 @@ control_connection_io_output(gpointer s)
       if (errno != EAGAIN)
         {
           msg_error("Error writing control channel",
-                    evt_tag_errno("error", errno));
+                    evt_tag_error("error"));
           control_connection_stop_watches(self);
           control_connection_free(self);
           return;
@@ -122,7 +120,7 @@ control_connection_io_input(void *s)
       if (errno != EAGAIN)
         {
           msg_error("Error reading command on control channel, closing control channel",
-                    evt_tag_errno("error", errno));
+                    evt_tag_error("error"));
           goto destroy_connection;
         }
       /* EAGAIN, should try again when data comes */
@@ -147,6 +145,7 @@ control_connection_io_input(void *s)
       command = g_string_sized_new(128);
       /* command doesn't contain NL */
       g_string_assign_len(command, self->input_buffer->str, nl - self->input_buffer->str);
+      secret_storage_wipe(self->input_buffer->str, nl - self->input_buffer->str);
       /* strip NL */
       /*g_string_erase(self->input_buffer, 0, command->len + 1);*/
       g_string_truncate(self->input_buffer, 0);
@@ -158,15 +157,8 @@ control_connection_io_input(void *s)
       return;
     }
 
-  for (iter = self->server->control_commands; iter != NULL; iter = iter->next)
-    {
-      if (strncmp(((ControlCommand*)iter->data)->command_name, command->str, strlen(((ControlCommand*)iter->data)->command_name)) == 0)
-        {
-          reply = ((ControlCommand*)iter->data)->func(command);
-          control_connection_send_reply(self, reply);
-          break;
-        }
-    }
+  iter = g_list_find_custom(self->server->control_commands, command->str,
+                            (GCompareFunc)control_command_start_with_command);
   if (iter == NULL)
     {
       msg_error("Unknown command read on control channel, closing control channel",
@@ -174,10 +166,16 @@ control_connection_io_input(void *s)
       g_string_free(command, TRUE);
       goto destroy_connection;
     }
+  ControlCommand *cmd_desc = (ControlCommand *) iter->data;
+
+  reply = cmd_desc->func(command, cmd_desc->user_data);
+  control_connection_send_reply(self, reply);
+
   control_connection_update_watches(self);
+  secret_storage_wipe(command->str, command->len);
   g_string_free(command, TRUE);
   return;
- destroy_connection:
+destroy_connection:
   control_connection_stop_watches(self);
   control_connection_free(self);
 }
@@ -202,4 +200,25 @@ control_server_free(ControlServer *self)
     }
   g_free(self->control_socket_name);
   g_free(self);
+}
+
+void
+control_connection_start_watches(ControlConnection *self)
+{
+  if (self->events.start_watches)
+    self->events.start_watches(self);
+}
+
+void
+control_connection_update_watches(ControlConnection *self)
+{
+  if (self->events.update_watches)
+    self->events.update_watches(self);
+}
+
+void
+control_connection_stop_watches(ControlConnection *self)
+{
+  if (self->events.stop_watches)
+    self->events.stop_watches(self);
 }

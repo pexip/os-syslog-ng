@@ -21,7 +21,7 @@
  * COPYING for details.
  *
  */
-  
+
 #include "syslog-ng.h"
 #include "cfg.h"
 #include "messages.h"
@@ -59,24 +59,31 @@
 #include <iv.h>
 #include <iv_signal.h>
 
-static gchar *installer_version = NULL;
 static gboolean display_version = FALSE;
 static gboolean display_module_registry = FALSE;
 static gboolean dummy = FALSE;
+
+static MainLoopOptions main_loop_options;
 
 #ifdef YYDEBUG
 extern int cfg_parser_debug;
 #endif
 
-static GOptionEntry syslogng_options[] = 
+static GOptionEntry syslogng_options[] =
 {
-  { "version",           'V',         0, G_OPTION_ARG_NONE, &display_version, "Display version number (" SYSLOG_NG_PACKAGE_NAME " " SYSLOG_NG_VERSION ")", NULL },
+  { "version",           'V',         0, G_OPTION_ARG_NONE, &display_version, "Display version number (" SYSLOG_NG_PACKAGE_NAME " " SYSLOG_NG_COMBINED_VERSION ")", NULL },
   { "module-path",         0,         0, G_OPTION_ARG_STRING, &resolvedConfigurablePaths.initial_module_path, "Set the list of colon separated directories to search for modules, default=" SYSLOG_NG_MODULE_PATH, "<path>" },
   { "module-registry",     0,         0, G_OPTION_ARG_NONE, &display_module_registry, "Display module information", NULL },
   { "seed",              'S',         0, G_OPTION_ARG_NONE, &dummy, "Does nothing, the need to seed the random generator is autodetected", NULL},
 #ifdef YYDEBUG
   { "yydebug",           'y',         0, G_OPTION_ARG_NONE, &cfg_parser_debug, "Enable configuration parser debugging", NULL },
 #endif
+  { "cfgfile",           'f',         0, G_OPTION_ARG_STRING, &resolvedConfigurablePaths.cfgfilename, "Set config file name, default=" PATH_SYSLOG_NG_CONF, "<config>" },
+  { "persist-file",      'R',         0, G_OPTION_ARG_STRING, &resolvedConfigurablePaths.persist_file, "Set the name of the persistent configuration file, default=" PATH_PERSIST_CONFIG, "<fname>" },
+  { "preprocess-into",     0,         0, G_OPTION_ARG_STRING, &main_loop_options.preprocess_into, "Write the preprocessed configuration file to the file specified and quit", "output" },
+  { "syntax-only",       's',         0, G_OPTION_ARG_NONE, &main_loop_options.syntax_only, "Only read and parse config file", NULL},
+  { "control",           'c',         0, G_OPTION_ARG_STRING, &resolvedConfigurablePaths.ctlfilename, "Set syslog-ng control socket, default=" PATH_CONTROL_SOCKET, "<ctlpath>" },
+  { "interactive",       'i',         0, G_OPTION_ARG_NONE, &main_loop_options.interactive_mode, "Enable interactive mode" },
   { NULL },
 };
 
@@ -107,7 +114,7 @@ get_installer_version(gchar **inst_version)
           gchar *pos = strchr(line, '=');
           if (pos)
             {
-              *inst_version = strdup(pos+1);
+              *inst_version = g_strdup(pos+1);
               result = TRUE;
               break;
             }
@@ -123,21 +130,25 @@ get_installer_version(gchar **inst_version)
 void
 version(void)
 {
+  gchar *installer_version;
+
   if (!get_installer_version(&installer_version) || installer_version == NULL)
     {
-      installer_version = SYSLOG_NG_VERSION;
+      installer_version = g_strdup(SYSLOG_NG_VERSION);
     }
-  printf(SYSLOG_NG_PACKAGE_NAME " " SYSLOG_NG_VERSION "\n"
+  printf(SYSLOG_NG_PACKAGE_NAME " " SYSLOG_NG_COMBINED_VERSION "\n"
+         "Config version: " VERSION_CURRENT_VER_ONLY "\n"
          "Installer-Version: %s\n"
          "Revision: " SYSLOG_NG_SOURCE_REVISION "\n",
          installer_version);
 
-#if WITH_COMPILE_DATE
+#if SYSLOG_NG_WITH_COMPILE_DATE
   printf("Compile-Date: " __DATE__ " " __TIME__ "\n");
 #endif
 
   printf("Module-Directory: %s\n", get_installation_path_for(SYSLOG_NG_PATH_MODULEDIR));
   printf("Module-Path: %s\n", resolvedConfigurablePaths.initial_module_path);
+  printf("Include-Path: %s\n", get_installation_path_for(SYSLOG_NG_PATH_CONFIG_INCLUDEDIR));
   printf("Available-Modules: ");
   plugin_list_modules(stdout, FALSE);
 
@@ -147,15 +158,18 @@ version(void)
          "Enable-IPv6: %s\n"
          "Enable-Spoof-Source: %s\n"
          "Enable-TCP-Wrapper: %s\n"
-         "Enable-Linux-Caps: %s\n",
+         "Enable-Linux-Caps: %s\n"
+         "Enable-Systemd: %s\n",
          ON_OFF_STR(SYSLOG_NG_ENABLE_DEBUG),
          ON_OFF_STR(SYSLOG_NG_ENABLE_GPROF),
          ON_OFF_STR(SYSLOG_NG_ENABLE_MEMTRACE),
          ON_OFF_STR(SYSLOG_NG_ENABLE_IPV6),
          ON_OFF_STR(SYSLOG_NG_ENABLE_SPOOF_SOURCE),
          ON_OFF_STR(SYSLOG_NG_ENABLE_TCP_WRAPPER),
-         ON_OFF_STR(SYSLOG_NG_ENABLE_LINUX_CAPS));
+         ON_OFF_STR(SYSLOG_NG_ENABLE_LINUX_CAPS),
+         ON_OFF_STR(SYSLOG_NG_ENABLE_SYSTEMD));
 
+  g_free(installer_version);
 }
 
 #if SYSLOG_NG_ENABLE_LINUX_CAPS
@@ -167,6 +181,9 @@ setup_caps (void)
 {
   static gchar *capsstr_syslog = BASE_CAPS "cap_syslog=ep";
   static gchar *capsstr_sys_admin = BASE_CAPS "cap_sys_admin=ep";
+
+  if (!g_process_is_cap_enabled())
+    return;
 
   /* Set up the minimal privilege we'll need
    *
@@ -185,18 +202,18 @@ setup_caps (void)
 
 #endif
 
-int 
+int
 main(int argc, char *argv[])
 {
   gint rc;
   GOptionContext *ctx;
   GError *error = NULL;
 
+  MainLoop *main_loop = main_loop_get_instance();
+
   z_mem_trace_init("syslog-ng.trace");
 
   g_process_set_argv_space(argc, (gchar **) argv);
-
-  setup_caps();
 
   resolved_configurable_paths_init(&resolvedConfigurablePaths);
 
@@ -231,6 +248,8 @@ main(int argc, char *argv[])
       return 0;
     }
 
+  setup_caps();
+
   if(startup_debug_flag && debug_flag)
     {
       startup_debug_flag = FALSE;
@@ -246,20 +265,23 @@ main(int argc, char *argv[])
       log_stderr = TRUE;
     }
 
-  if (syntax_only || debug_flag)
+  gboolean exit_before_main_loop_run = main_loop_options.syntax_only || main_loop_options.preprocess_into;
+  if (debug_flag || exit_before_main_loop_run)
     {
       g_process_set_mode(G_PM_FOREGROUND);
     }
   g_process_set_name("syslog-ng");
-  
+
   /* in this case we switch users early while retaining a limited set of
    * credentials in order to initialize/reinitialize the configuration.
    */
   g_process_start();
   app_startup();
-  main_loop_init();
-  rc = main_loop_read_and_init_config();
-  
+  main_loop_options.server_mode = ((SYSLOG_NG_ENABLE_FORCED_SERVER_MODE) == 1 ? TRUE : FALSE);
+  main_loop_init(main_loop, &main_loop_options);
+  rc = main_loop_read_and_init_config(main_loop);
+  app_finish_app_startup_after_cfg_init();
+
   if (rc)
     {
       g_process_startup_failed(rc, TRUE);
@@ -267,7 +289,7 @@ main(int argc, char *argv[])
     }
   else
     {
-      if (syntax_only)
+      if (exit_before_main_loop_run)
         g_process_startup_failed(0, TRUE);
       else
         g_process_startup_ok();
@@ -285,13 +307,13 @@ main(int argc, char *argv[])
     }
 
   /* from now on internal messages are written to the system log as well */
-  
-  main_loop_run();
-  main_loop_deinit();
+
+  main_loop_run(main_loop);
+  main_loop_deinit(main_loop);
 
   app_shutdown();
   z_mem_trace_dump();
   g_process_finish();
+  reloc_deinit();
   return rc;
 }
-

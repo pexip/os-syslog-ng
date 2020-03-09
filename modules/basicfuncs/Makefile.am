@@ -14,12 +14,17 @@ modules_basicfuncs_libbasicfuncs_la_DEPENDENCIES=	\
 	$(MODULE_DEPS_LIBS)
 
 EXTRA_DIST					+=	\
-	modules/basicfuncs/cond-funcs.c 		\
-	modules/basicfuncs/numeric-funcs.c 		\
+	modules/basicfuncs/urlencode.c			\
+	modules/basicfuncs/cond-funcs.c		\
+	modules/basicfuncs/context-funcs.c		\
+	modules/basicfuncs/numeric-funcs.c		\
 	modules/basicfuncs/str-funcs.c			\
+	modules/basicfuncs/fname-funcs.c		\
 	modules/basicfuncs/ip-funcs.c			\
 	modules/basicfuncs/misc-funcs.c			\
-	modules/basicfuncs/tf-template.c
+	modules/basicfuncs/list-funcs.c			\
+	modules/basicfuncs/tf-template.c		\
+	modules/basicfuncs/CMakeLists.txt
 
 modules/basicfuncs modules/basicfuncs/ mod-basicfuncs: modules/basicfuncs/libbasicfuncs.la
 .PHONY: modules/basicfuncs/ mod-basicfuncs

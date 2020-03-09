@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2012 Balabit
+ * Copyright (c) 2002-2016 Balabit
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -91,6 +91,9 @@
  * should reference the syslog-ng version number through these macros, in order
  * to make it relatively simple to explain PE/OSE version numbers to users. */
 
+#define PRODUCT_NAME "syslog-ng-ose"
+#define PRODUCT_CONTACT "https://lists.balabit.hu/mailman/listinfo/syslog-ng"
+
 #define VERSION_3_0 "syslog-ng 3.0"
 #define VERSION_3_1 "syslog-ng 3.1"
 #define VERSION_3_2 "syslog-ng 3.2"
@@ -100,12 +103,45 @@
 #define VERSION_3_6 "syslog-ng 3.6"
 #define VERSION_3_7 "syslog-ng 3.7"
 #define VERSION_3_8 "syslog-ng 3.8"
+#define VERSION_3_9 "syslog-ng 3.9"
+#define VERSION_3_10 "syslog-ng 3.10"
+#define VERSION_3_11 "syslog-ng 3.11"
+#define VERSION_3_12 "syslog-ng 3.12"
+#define VERSION_3_13 "syslog-ng 3.13"
+#define VERSION_3_14 "syslog-ng 3.14"
+#define VERSION_3_15 "syslog-ng 3.15"
+#define VERSION_3_16 "syslog-ng 3.16"
+#define VERSION_3_17 "syslog-ng 3.17"
+#define VERSION_3_18 "syslog-ng 3.18"
+#define VERSION_3_19 "syslog-ng 3.19"
+
+#define VERSION_VALUE_3_0  0x0300
+#define VERSION_VALUE_3_1  0x0301
+#define VERSION_VALUE_3_2  0x0302
+#define VERSION_VALUE_3_3  0x0303
+#define VERSION_VALUE_3_4  0x0304
+#define VERSION_VALUE_3_5  0x0305
+#define VERSION_VALUE_3_6  0x0306
+#define VERSION_VALUE_3_7  0x0307
+#define VERSION_VALUE_3_8  0x0308
+#define VERSION_VALUE_3_9  0x0309
+#define VERSION_VALUE_3_10 0x030a
+#define VERSION_VALUE_3_11 0x030b
+#define VERSION_VALUE_3_12 0x030c
+#define VERSION_VALUE_3_13 0x030d
+#define VERSION_VALUE_3_14 0x030e
+#define VERSION_VALUE_3_15 0x030f
+#define VERSION_VALUE_3_16 0x0310
+#define VERSION_VALUE_3_17 0x0311
+#define VERSION_VALUE_3_18 0x0312
+#define VERSION_VALUE_3_19 0x0313
 
 /* config version code, in the same format as GlobalConfig->version */
-#define VERSION_VALUE   0x0308
-#define VERSION_CURRENT VERSION_3_8
-#define VERSION_CURRENT_VER_ONLY "3.8"
+#define VERSION_VALUE   0x0313
+#define VERSION_CURRENT VERSION_3_19
+#define VERSION_CURRENT_VER_ONLY "3.19"
 
 #define version_convert_from_user(v)  (v)
 
+#include "pe-versioning.h"
 #endif

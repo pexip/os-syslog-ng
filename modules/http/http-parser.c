@@ -28,15 +28,35 @@ extern int http_debug;
 
 int http_parse(CfgLexer *lexer, LogDriver **instance, gpointer arg);
 
-static CfgLexerKeyword http_keywords[] = {
-  { "http",         KW_HTTP },
-  { "user",         KW_USER },
-  { "password",     KW_PASSWORD },
-  { "user_agent",   KW_USER_AGENT },
-  { "url",          KW_URL },
-  { "headers",      KW_HEADERS },
-  { "method",       KW_METHOD },
-  { "body",         KW_BODY },
+static CfgLexerKeyword http_keywords[] =
+{
+  { "http",             KW_HTTP },
+  { "user",             KW_USER },
+  { "password",         KW_PASSWORD },
+  { "user_agent",       KW_USER_AGENT },
+  { "url",              KW_URL },
+  { "headers",          KW_HEADERS },
+  { "method",           KW_METHOD },
+  { "body",             KW_BODY },
+  { "ca_dir",           KW_CA_DIR },
+  { "ca_file",          KW_CA_FILE },
+  { "cert_file",        KW_CERT_FILE },
+  { "key_file",         KW_KEY_FILE },
+  { "cipher_suite",     KW_CIPHER_SUITE },
+  { "use_system_cert_store", KW_USE_SYSTEM_CERT_STORE },
+  { "ssl_version",      KW_SSL_VERSION },
+  { "peer_verify",      KW_PEER_VERIFY },
+  { "accept_redirects", KW_ACCEPT_REDIRECTS },
+  { "timeout",          KW_TIMEOUT },
+  { "tls",              KW_TLS },
+  { "flush_bytes",      KW_BATCH_BYTES, KWS_OBSOLETE, "The flush-bytes option is deprecated. Use batch-bytes instead." },
+  { "batch_bytes",      KW_BATCH_BYTES },
+  { "flush_lines",      KW_BATCH_LINES, KWS_OBSOLETE, "The flush-lines option is deprecated. Use batch-lines instead."},
+  { "flush_timeout",    KW_BATCH_TIMEOUT, KWS_OBSOLETE, "The flush-timeout option is deprecated. Use batch-timeout instead."},
+  { "body_prefix",      KW_BODY_PREFIX },
+  { "body_suffix",      KW_BODY_SUFFIX },
+  { "delimiter",        KW_DELIMITER },
+  { "workers",          KW_WORKERS },
   { NULL }
 };
 

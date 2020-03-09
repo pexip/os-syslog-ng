@@ -25,6 +25,7 @@
 
 #include "syslog-ng.h"
 #include "cfg-lexer.h"
+#include "cfg-lexer-subst.h"
 #include "cfg-grammar.h"
 #include "messages.h"
 #include "parse-number.h"
@@ -40,7 +41,7 @@ yy_input_run_backtick_substitution(CfgLexer *self, gchar *buf, gsize buf_size)
   GError *error = NULL;
   YYLTYPE *cur_lloc = &self->include_stack[self->include_depth].lloc;
 
-  res = cfg_lexer_subst_args(self->globals, NULL, NULL, buf, -1, &len, &error);
+  res = cfg_lexer_subst_args_in_input(self->cfg->globals, NULL, NULL, buf, -1, &len, &error);
   if (!res)
     {
       msg_error("Error performing backtick substitution in configuration file",
@@ -116,27 +117,75 @@ yy_input_run_backtick_substitution(CfgLexer *self, gchar *buf, gsize buf_size)
       }                                                                 \
   } while (0);                                                          \
   break;
-  
+
 #define YY_FATAL_ERROR(msg)						\
   do {									\
     struct yyguts_t * __yyg = (struct yyguts_t*) yyscanner;		\
                                                                         \
     msg_error("Fatal error in configuration lexer, giving up",		\
-              evt_tag_str("error", msg),				\
-              NULL);							\
+              evt_tag_str("error", msg));							\
     longjmp(__yyg->yyextra_r->fatal_error, 1);				\
   } while(0)
 
+#define _process_commented_line(scanner,content,cond) \
+  do {                                                \
+    int ch;                                           \
+                                                      \
+    ch = input(scanner);                              \
+    while (ch != '\n' && ch != EOF && ch != 0)        \
+      {                                               \
+        if (cond)                                     \
+          g_string_append_c(content, ch);             \
+        ch = input(scanner);                          \
+      }                                               \
+    if (ch == '\n')                                   \
+      {                                               \
+        unput(ch);                                    \
+      }                                               \
+  } while (0)
+
 
 static void
-_cfg_lex_new_line(CfgLexer *lexer)
+_cfg_lex_move_token_location_to_new_line(CfgLexer *lexer)
 {
-  lexer->include_stack[lexer->include_depth].lloc.first_line++;
-  lexer->include_stack[lexer->include_depth].lloc.last_line++;
-  lexer->include_stack[lexer->include_depth].lloc.first_column = 1;
-  lexer->include_stack[lexer->include_depth].lloc.last_column = 1;
+  CfgIncludeLevel *level = &lexer->include_stack[lexer->include_depth];
+
+  /* if the last token span multiple lines (e.g.  block references), it
+   * might happen that last_line != first_line, in that case, initialize the
+   * first_line of the token to the subsequent line after last_line */
+
+  level->lloc.first_line = level->lloc.last_line + 1;
+  level->lloc.last_line = level->lloc.first_line;
+  level->lloc.first_column = 1;
+  level->lloc.last_column = 1;
 }
 
+static void
+_cfg_lex_extend_token_location_to_next_line(CfgLexer *lexer)
+{
+  CfgIncludeLevel *level = &lexer->include_stack[lexer->include_depth];
+
+  /* this function is used when encountering an NL character within a
+   * multi-line string literal.
+   *
+   * Example:
+   * |    "this is the start of the literal\
+   * |    and this is the end"
+   *
+   *
+   * In this case the string contains a escaped NL character, causing the
+   * literal to span two distinct lines in the source file, which would be
+   * dropped from the parsed string.
+   *
+   * In this case, we need to move yylloc to point from the end of the
+   * current line to the beginning of the next line.  This way, by the time
+   * we return the entire token, yylloc would be spanning the
+   * starting-ending lines of the string literal as needed.
+   * */
+
+  level->lloc.last_line++;
+  level->lloc.last_column = 1;
+}
 %}
 
 %option bison-bridge bison-locations reentrant
@@ -153,7 +202,7 @@ xdigit	[0-9a-fA-F]
 odigit  [0-7]
 alpha		[a-zA-Z]
 alphanum	[a-zA-Z0-9]
-word	[^ \#'"\(\)\{\}\\;\r\n\t,|\.@:]
+word	[^ \#'"\(\)\{\}\[\]\\;\r\n\t,|\.@:]
 
 /* block related states must be last, as we use this fact in YY_INPUT */
 %x string
@@ -165,26 +214,16 @@ word	[^ \#'"\(\)\{\}\\;\r\n\t,|\.@:]
 %%
 
 \#                         {
-                             int ch;
-
-                             ch = input(yyscanner);
-                             while (ch != '\n' && ch != EOF)
-                               {
-                                 if (yyextra->token_text)
-                                   g_string_append_c(yyextra->token_text, ch);
-                                 ch = input(yyscanner);
-                               }
-                             if (ch == '\n')
-                               {
-                                 unput(ch);
-                               }
+                             _process_commented_line(yyscanner,yyextra->token_text,yyextra->token_text);
                            }
 ^@                         {
                              return LL_PRAGMA;
                            }
-<*>\r?\n                   {
+
+<*>\\\r?\n                 { _cfg_lex_extend_token_location_to_next_line(yyextra); }
+\r?\n                      {
                              *yylloc = yyextra->include_stack[yyextra->include_depth].lloc;
-                             _cfg_lex_new_line(yyextra);
+                             _cfg_lex_move_token_location_to_new_line(yyextra);
                              if (yyextra->tokenize_eol)
                                return LL_EOL;
                              else
@@ -192,9 +231,22 @@ word	[^ \#'"\(\)\{\}\\;\r\n\t,|\.@:]
                            }
 {white}+		   ;
 \.\.                       { return LL_DOTDOT; }
+\.\.\.                     { return LL_DOTDOTDOT; }
 (-|\+)?{digit}+\.{digit}+  { yylval->fnum = strtod(yytext, NULL); return LL_FLOAT; }
-0x{xdigit}+ 		   { yylval->num = strtoll(yytext + 2, NULL, 16); return LL_NUMBER; }
-0{odigit}+		   { yylval->num = strtoll(yytext + 1, NULL, 8); return LL_NUMBER; }
+0x{xdigit}+ 		   {
+                             if (!parse_number_with_suffix(yytext, &yylval->num))
+                               {
+                                 return LL_ERROR;
+                               }
+                             return LL_NUMBER;
+                           }
+0{odigit}+		   {
+                             if (!parse_number_with_suffix(yytext, &yylval->num))
+                               {
+                                 return LL_ERROR;
+                               }
+                             return LL_NUMBER;
+                           }
 (-|\+)?{digit}+(M|m|G|g|k|K)?(i|I)?(b|B)? {
                              if (!parse_number_with_suffix(yytext, &yylval->num))
                                {
@@ -208,6 +260,8 @@ word	[^ \#'"\(\)\{\}\\;\r\n\t,|\.@:]
 \;			   |
 \{			   |
 \}			   |
+\[			   |
+\]			   |
 \:			   |
 \|			   { return yytext[0]; }
 \,			   ;
@@ -233,18 +287,51 @@ word	[^ \#'"\(\)\{\}\\;\r\n\t,|\.@:]
 			     yylval->cptr = strdup(yyextra->string_buffer->str);
 			     return LL_STRING;
 		           }
-<string>[^"\\]+		   { g_string_append(yyextra->string_buffer, yytext); }
-<qstring>[^']+		   { g_string_append(yyextra->string_buffer, yytext); }
+<string>[^"\\\r\n]+	   { g_string_append(yyextra->string_buffer, yytext); }
+<qstring>[^'\r\n]+	   { g_string_append(yyextra->string_buffer, yytext); }
 <qstring>\'		   {
 			     yy_pop_state(yyscanner);
 			     yylval->cptr = strdup(yyextra->string_buffer->str);
 			     return LL_STRING;
 			   }
 
+    /* the rule below will only be applied to embedded newlines within
+     * string/qstring.  There's a difference how we handle backslash quotation
+     * of newline though.
+     *
+     * If a \\\n sequence is in a <string> (e.g. quoted newline)
+     *   - the backslash is explicitly not allowed in the greedy rule that eats string characters
+     *   - thus <*>\\\r?\n rule gets applied, at the top of the file, removing the newline
+     *   - location tracking is preserved
+     *
+     * If a \n sequence is in a <string> (e.g. embedded newline)
+     *   - the newline character is processed by the rule below, thus it is
+     *     included as a literal newline
+     *
+     * If a \\\n sequence is in a <qstring> (e.g. quotation is not supported)
+     *   - the backslash is eaten by the greedy rule for qstring
+     *   - <*>\\\r?\n is not matching as the backslash is not there
+     *   - the rule below gets matched and the newline is included in the string
+     *
+     * If a \n sequence is in a <qstring> (e.g. embedded newline)
+     *   - the rule below gets matched and the newline is included in the string
+     */
 
-     /* rules to parse a block as a LL_BLOCK token */
+<string,qstring>\r?\n	   {
+                             g_string_append(yyextra->string_buffer, yytext);
+                             _cfg_lex_extend_token_location_to_next_line(yyextra);
+                           }
+
+
+    /* rules to parse a block as a LL_BLOCK token */
 <block>{white}+            ;
-<block>[^{( \t]+           { return LL_ERROR; }
+<block>[^{( \t\r\n]+       { YY_FATAL_ERROR("Expected opening bracket as block boundary, e.g. opening brace or parenthesis"); return LL_ERROR; }
+<block>\r?\n		   { _cfg_lex_move_token_location_to_new_line(yyextra); };
+<block>\({white}*\)        { yy_pop_state(yyscanner); yylval->cptr = NULL; return LL_BLOCK; }
+<block>\({white}*\"\"{white}*\) { yy_pop_state(yyscanner); yylval->cptr = g_strdup(""); return LL_BLOCK; }
+<block>\({white}*\'\'{white}*\) { yy_pop_state(yyscanner); yylval->cptr = g_strdup(""); return LL_BLOCK; }
+
+    /* start character of the block */
 <block>[{(]                {
                              if (yytext[0] != yyextra->block_boundary[0])
                                REJECT;
@@ -252,6 +339,10 @@ word	[^ \#'"\(\)\{\}\\;\r\n\t,|\.@:]
                              yyextra->brace_count = 1;
                              yy_push_state(block_content, yyscanner);
                            }
+
+    /* block_content, handle embedded string/qstring/comments properly, count
+     * braces so we only end the block if they are pairing up, unless they are
+     * in a string/qstring/comment. */
 
 <block_content>\"          {
                              g_string_append_c(yyextra->string_buffer, yytext[0]);
@@ -263,21 +354,10 @@ word	[^ \#'"\(\)\{\}\\;\r\n\t,|\.@:]
                              yy_push_state(block_qstring, yyscanner);
                            }
 
-<block_string>[^"]+        { g_string_append(yyextra->string_buffer, yytext); }
-<block_string>\\\"         { g_string_append(yyextra->string_buffer, yytext); }
-<block_string>\"           {
+<block_content>\#          {
                              g_string_append_c(yyextra->string_buffer, yytext[0]);
-                             yy_pop_state(yyscanner);
+                             _process_commented_line(yyscanner, yyextra->string_buffer, TRUE);
                            }
-
-<block_qstring>\'          {
-                             g_string_append_c(yyextra->string_buffer, yytext[0]);
-                             yy_pop_state(yyscanner);
-                           }
-<block_qstring>[^']+       {
-                             g_string_append(yyextra->string_buffer, yytext);
-                           }
-
 
 <block_content>[{(]        {
                              g_string_append_c(yyextra->string_buffer, yytext[0]);
@@ -301,13 +381,43 @@ word	[^ \#'"\(\)\{\}\\;\r\n\t,|\.@:]
 
                            }
 
-<block_content>[^{}()\"\'\n\r]+   { g_string_append(yyextra->string_buffer, yytext); }
+<block_content>[^{}()\"\'\n\r#]+   { g_string_append(yyextra->string_buffer, yytext); }
+
+<block_string>[^"\r\n]+    { g_string_append(yyextra->string_buffer, yytext); }
+<block_string>\\\"         { g_string_append(yyextra->string_buffer, yytext); }
+<block_string>\"           {
+                             g_string_append_c(yyextra->string_buffer, yytext[0]);
+                             yy_pop_state(yyscanner);
+                           }
+
+<block_qstring>\'          {
+                             g_string_append_c(yyextra->string_buffer, yytext[0]);
+                             yy_pop_state(yyscanner);
+                           }
+<block_qstring>[^'\r\n]+   {
+                             g_string_append(yyextra->string_buffer, yytext);
+                           }
+
+    /* The newlines embedded in block_string/block_qstring/block_content is
+     * literally coped into the block token, even if there's backslash as the
+     * last character.  Basically we behave just as if the entire block was a
+     * qstring.
+     */
+<block_string,block_qstring,block_content>\r?\n    {
+                             g_string_append(yyextra->string_buffer, yytext);
+                             _cfg_lex_extend_token_location_to_next_line(yyextra);
+                           }
 
 <INITIAL><<EOF>>           {
                              if (!cfg_lexer_start_next_include(yyextra))
                                {
-                                 *yylloc = yyextra->include_stack[0].lloc;
-                                 yyterminate();
+                                 if (yyextra->include_depth == 0)
+                                   {
+                                     *yylloc = yyextra->include_stack[0].lloc;
+                                     yyterminate();
+                                   }
+                                 else
+                                    return LL_ERROR;
                                }
                            }
 
@@ -329,7 +439,7 @@ cfg_lexer_unput_string(CfgLexer *self, const char *str)
 }
 
 void
-cfg_lexer_start_block_state(CfgLexer *self, gchar block_boundary[2])
+cfg_lexer_start_block_state(CfgLexer *self, const gchar block_boundary[2])
 {
   memcpy(&self->block_boundary, block_boundary, sizeof(self->block_boundary));
   yy_push_state(block, self->state);

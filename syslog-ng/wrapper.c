@@ -29,7 +29,7 @@
 #include <string.h>
 #include <errno.h>
 
-int 
+int
 main(int argc, char *argv[])
 {
 #ifdef ENV_LD_LIBRARY_PATH
@@ -38,16 +38,17 @@ main(int argc, char *argv[])
     gchar ldlibpath[512];
 #if _AIX
     const gchar *ldlibpath_name = "LIBPATH";
-#else    
+#else
     const gchar *ldlibpath_name = "LD_LIBRARY_PATH";
 #endif
 
     cur_ldlibpath = getenv(ldlibpath_name);
-    snprintf(ldlibpath, sizeof(ldlibpath), "%s=%s%s%s", ldlibpath_name, ENV_LD_LIBRARY_PATH, cur_ldlibpath ? ":" : "", cur_ldlibpath ? cur_ldlibpath : "");
-    putenv(ldlibpath);
+    snprintf(ldlibpath, sizeof(ldlibpath), "%s%s%s", ENV_LD_LIBRARY_PATH, cur_ldlibpath ? ":" : "", cur_ldlibpath ? cur_ldlibpath : "");
+    setenv(ldlibpath_name, ldlibpath, TRUE);
   }
 #endif
   execv(PATH_SYSLOGNG, argv);
-  fprintf(stderr, "Unable to execute main syslog-ng binary from env-wrapper, path=%s, error=%s\n", PATH_SYSLOGNG, strerror(errno));
+  fprintf(stderr, "Unable to execute main syslog-ng binary from env-wrapper, path=%s, error=%s\n", PATH_SYSLOGNG,
+          strerror(errno));
   return 127;
 }

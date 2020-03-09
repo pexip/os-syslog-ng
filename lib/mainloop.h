@@ -27,10 +27,21 @@
 #include "syslog-ng.h"
 #include "thread-utils.h"
 
+extern volatile gint main_loop_workers_running;
 
-extern gboolean syntax_only;
-extern gboolean __main_loop_is_terminating;
+typedef struct _MainLoop MainLoop;
+
+typedef struct _MainLoopOptions
+{
+  gchar *preprocess_into;
+  gboolean syntax_only;
+  gboolean interactive_mode;
+  gboolean server_mode;
+} MainLoopOptions;
+
 extern ThreadId main_thread_handle;
+extern GCond *thread_halt_cond;
+extern GStaticMutex workers_running_lock;
 
 typedef gpointer (*MainLoopTaskFunc)(gpointer user_data);
 
@@ -48,24 +59,26 @@ main_loop_is_main_thread(void)
   return threads_equal(main_thread_handle, get_thread_id());
 }
 
-static inline gboolean
-main_loop_is_terminating(void)
-{
-  return __main_loop_is_terminating;
-}
+void main_loop_reload_config(MainLoop *self);
+void main_loop_verify_config(GString *result, MainLoop *self);
+void main_loop_exit(MainLoop *self);
 
-void main_loop_reload_config(void);
-void main_loop_exit(void);
+int main_loop_read_and_init_config(MainLoop *self);
+void main_loop_run(MainLoop *self);
 
-int main_loop_read_and_init_config(void);
-void main_loop_run(void);
-
-void main_loop_init(void);
-void main_loop_deinit(void);
+MainLoop *main_loop_get_instance(void);
+GlobalConfig *main_loop_get_current_config(MainLoop *self);
+void main_loop_init(MainLoop *self, MainLoopOptions *options);
+void main_loop_deinit(MainLoop *self);
 
 void main_loop_add_options(GOptionContext *ctx);
+gboolean main_loop_is_server_mode(MainLoop *self);
+void main_loop_set_server_mode(MainLoop *self, gboolean server_mode);
 
 gboolean main_loop_initialize_state(GlobalConfig *cfg, const gchar *persist_filename);
+
+void main_loop_thread_resource_init(void);
+void main_loop_thread_resource_deinit(void);
 
 
 #endif

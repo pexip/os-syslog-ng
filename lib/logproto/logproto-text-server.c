@@ -51,7 +51,8 @@ log_proto_get_char_size_for_fixed_encoding(const gchar *encoding)
   {
     const gchar *prefix;
     gint scale;
-  } fixed_encodings[] = {
+  } fixed_encodings[] =
+  {
     { "ascii", 1 },
     { "us-ascii", 1 },
     { "iso-8859", 1 },
@@ -71,51 +72,42 @@ log_proto_get_char_size_for_fixed_encoding(const gchar *encoding)
   gint i;
 
   for (i = 0; fixed_encodings[i].prefix; i++)
-   {
-     if (strncasecmp(encoding, fixed_encodings[i].prefix, strlen(fixed_encodings[i].prefix)) == 0)
-       {
-         scale = fixed_encodings[i].scale;
-         break;
-       }
-   }
+    {
+      if (strncasecmp(encoding, fixed_encodings[i].prefix, strlen(fixed_encodings[i].prefix)) == 0)
+        {
+          scale = fixed_encodings[i].scale;
+          break;
+        }
+    }
   return scale;
 }
 
 
-/**
- * This function is called in cases when several files are continously
- * polled for changes.  Whenever the caller would like to switch to another
- * file, it will call this function to check whether it should be allowed to do so.
- *
- * This function returns true if the current state of this LogProtoServer would
- * allow preemption, e.g.  the contents of the current buffer can be
- * discarded.
- **/
-static gboolean
-log_proto_text_server_is_preemptable(LogProtoServer *s)
-{
-  LogProtoTextServer *self = (LogProtoTextServer *) s;
-  gboolean preemptable;
-
-  preemptable = (self->cached_eol_pos == 0);
-  return preemptable;
-}
-
-static gboolean
-log_proto_text_server_prepare(LogProtoServer *s, GIOCondition *cond)
+static LogProtoPrepareAction
+log_proto_text_server_prepare(LogProtoServer *s, GIOCondition *cond, gint *timeout)
 {
   LogProtoTextServer *self = (LogProtoTextServer *) s;
   gboolean avail;
 
-  if (log_proto_buffered_server_prepare(s, cond))
-    {
-      return TRUE;
-    }
+  LogProtoPrepareAction action = log_proto_buffered_server_prepare(s, cond, timeout);
+  if (action != LPPA_POLL_IO)
+    return action;
 
   avail = (self->cached_eol_pos != 0);
-  return avail;
+  return avail ? LPPA_FORCE_SCHEDULE_FETCH : LPPA_POLL_IO;
 }
 
+static void
+log_proto_text_server_maybe_realloc_reverse_buffer(LogProtoTextServer *self, gsize buffer_length)
+{
+  if (self->reverse_buffer_len >= buffer_length)
+    return;
+
+  /* we free and malloc, since we never need the data still in reverse buffer */
+  g_free(self->reverse_buffer);
+  self->reverse_buffer_len = buffer_length;
+  self->reverse_buffer = g_malloc(buffer_length);
+}
 
 /*
  * returns the number of bytes that represent the UTF8 encoding buffer
@@ -152,13 +144,9 @@ log_proto_text_server_get_raw_size_of_buffer(LogProtoTextServer *self, const guc
   if (self->convert_scale)
     return g_utf8_strlen((gchar *) buffer, buffer_len) * self->convert_scale;
 
-  if (self->reverse_buffer_len < buffer_len * 6)
-    {
-      /* we free and malloc, since we never need the data still in reverse buffer */
-      g_free(self->reverse_buffer);
-      self->reverse_buffer_len = buffer_len * 6;
-      self->reverse_buffer = g_malloc(buffer_len * 6);
-    }
+
+  /* Multiplied by 6, because 1 character can be maximum 6 bytes in UTF-8 encoding */
+  log_proto_text_server_maybe_realloc_reverse_buffer(self, buffer_len * 6);
 
   avail_out = self->reverse_buffer_len;
   out = self->reverse_buffer;
@@ -182,13 +170,15 @@ log_proto_text_server_get_raw_size_of_buffer(LogProtoTextServer *self, const guc
 }
 
 static gint
-log_proto_text_server_accumulate_line_method(LogProtoTextServer *self, const guchar *msg, gsize msg_len, gssize consumed_len)
+log_proto_text_server_accumulate_line_method(LogProtoTextServer *self, const guchar *msg, gsize msg_len,
+                                             gssize consumed_len)
 {
   return LPT_CONSUME_LINE | LPT_EXTRACTED;
 }
 
 static void
-log_proto_text_server_split_buffer(LogProtoTextServer *self, LogProtoBufferedServerState *state, const guchar *buffer_start, gsize buffer_bytes)
+log_proto_text_server_split_buffer(LogProtoTextServer *self, LogProtoBufferedServerState *state,
+                                   const guchar *buffer_start, gsize buffer_bytes)
 {
   gsize raw_split_size;
 
@@ -224,7 +214,8 @@ log_proto_text_server_split_buffer(LogProtoTextServer *self, LogProtoBufferedSer
 }
 
 static gboolean
-log_proto_text_server_try_extract(LogProtoTextServer *self, LogProtoBufferedServerState *state, const guchar *buffer_start, gsize buffer_bytes, const guchar *eol, const guchar **msg, gsize *msg_len)
+log_proto_text_server_try_extract(LogProtoTextServer *self, LogProtoBufferedServerState *state,
+                                  const guchar *buffer_start, gsize buffer_bytes, const guchar *eol, const guchar **msg, gsize *msg_len)
 {
   gint verdict;
   guint32 next_line_pos;
@@ -297,7 +288,8 @@ log_proto_text_server_try_extract(LogProtoTextServer *self, LogProtoBufferedServ
 }
 
 static gboolean
-log_proto_text_server_extract(LogProtoTextServer *self, LogProtoBufferedServerState *state, const guchar *buffer_start, gsize buffer_bytes, const guchar *eol, const guchar **msg, gsize *msg_len)
+log_proto_text_server_extract(LogProtoTextServer *self, LogProtoBufferedServerState *state, const guchar *buffer_start,
+                              gsize buffer_bytes, const guchar *eol, const guchar **msg, gsize *msg_len)
 {
   do
     {
@@ -325,7 +317,8 @@ log_proto_text_server_remove_trailing_newline(const guchar **msg, gsize *msg_len
 
 
 static inline void
-log_proto_text_server_yield_whole_buffer_as_message(LogProtoTextServer *self, LogProtoBufferedServerState *state, const guchar *buffer_start, gsize buffer_bytes, const guchar **msg, gsize *msg_len)
+log_proto_text_server_yield_whole_buffer_as_message(LogProtoTextServer *self, LogProtoBufferedServerState *state,
+                                                    const guchar *buffer_start, gsize buffer_bytes, const guchar **msg, gsize *msg_len)
 {
   /* no EOL, our buffer is full, no way to move forward, return
    * everything we have in our buffer. */
@@ -337,7 +330,8 @@ log_proto_text_server_yield_whole_buffer_as_message(LogProtoTextServer *self, Lo
 }
 
 static inline const guchar *
-log_proto_text_server_locate_next_eol(LogProtoTextServer *self, LogProtoBufferedServerState *state, const guchar *buffer_start, gsize buffer_bytes)
+log_proto_text_server_locate_next_eol(LogProtoTextServer *self, LogProtoBufferedServerState *state,
+                                      const guchar *buffer_start, gsize buffer_bytes)
 {
   const guchar *eol;
 
@@ -356,6 +350,12 @@ log_proto_text_server_locate_next_eol(LogProtoTextServer *self, LogProtoBuffered
   return eol;
 }
 
+static gboolean
+log_proto_text_server_message_size_too_large(LogProtoTextServer *self, gsize buffer_bytes)
+{
+  return buffer_bytes >= self->super.super.options->max_msg_size;
+}
+
 /**
  * log_proto_text_server_fetch_from_buffer:
  * @self: LogReader instance
@@ -366,42 +366,48 @@ log_proto_text_server_locate_next_eol(LogProtoTextServer *self, LogProtoBuffered
  * Returns TRUE if a message was found in the buffer, FALSE if we need to read again.
  **/
 static gboolean
-log_proto_text_server_fetch_from_buffer(LogProtoBufferedServer *s, const guchar *buffer_start, gsize buffer_bytes, const guchar **msg, gsize *msg_len)
+log_proto_text_server_fetch_from_buffer(LogProtoBufferedServer *s, const guchar *buffer_start, gsize buffer_bytes,
+                                        const guchar **msg, gsize *msg_len)
 {
   LogProtoTextServer *self = (LogProtoTextServer *) s;
-  const guchar *eol;
   LogProtoBufferedServerState *state = log_proto_buffered_server_get_state(&self->super);
   gboolean result = FALSE;
 
-  eol = log_proto_text_server_locate_next_eol(self, state, buffer_start, buffer_bytes);
+  const guchar *eol = log_proto_text_server_locate_next_eol(self, state, buffer_start, buffer_bytes);
 
-  if (!eol &&
-      ((buffer_bytes == state->buffer_size) ||
-       log_proto_buffered_server_is_input_closed(&self->super)))
+  if (!eol)
     {
-      log_proto_text_server_yield_whole_buffer_as_message(self, state, buffer_start, buffer_bytes, msg, msg_len);
-      goto success;
+      if (log_proto_text_server_message_size_too_large(self, buffer_bytes)
+          || log_proto_buffered_server_is_input_closed(&self->super))
+        {
+          log_proto_text_server_yield_whole_buffer_as_message(self, state, buffer_start, buffer_bytes, msg, msg_len);
+        }
+      else
+        {
+          log_proto_text_server_split_buffer(self, state, buffer_start, buffer_bytes);
+          goto exit;
+        }
     }
-  else if (!eol)
+  else if (!log_proto_text_server_extract(self, state, buffer_start, buffer_bytes, eol, msg, msg_len))
     {
-      log_proto_text_server_split_buffer(self, state, buffer_start, buffer_bytes);
-      goto exit;
-    }
-  else
-    {
-      if (!log_proto_text_server_extract(self, state, buffer_start, buffer_bytes, eol, msg, msg_len))
-        goto exit;
+      if (log_proto_text_server_message_size_too_large(self, buffer_bytes))
+        {
+          log_proto_text_server_yield_whole_buffer_as_message(self, state, buffer_start, buffer_bytes, msg, msg_len);
+        }
+      else
+        {
+          log_proto_text_server_split_buffer(self, state, buffer_start, buffer_bytes);
+          goto exit;
+        }
     }
 
- success:
   log_proto_text_server_remove_trailing_newline(msg, msg_len);
   result = TRUE;
 
- exit:
+exit:
   log_proto_buffered_server_put_state(&self->super);
   return result;
 }
-
 
 static void
 log_proto_text_server_free(LogProtoServer *s)
@@ -418,7 +424,6 @@ void
 log_proto_text_server_init(LogProtoTextServer *self, LogTransport *transport, const LogProtoServerOptions *options)
 {
   log_proto_buffered_server_init(&self->super, transport, options);
-  self->super.super.is_preemptable = log_proto_text_server_is_preemptable;
   self->super.super.prepare = log_proto_text_server_prepare;
   self->super.super.free_fn = log_proto_text_server_free;
   self->super.fetch_from_buffer = log_proto_text_server_fetch_from_buffer;
@@ -426,7 +431,6 @@ log_proto_text_server_init(LogProtoTextServer *self, LogTransport *transport, co
   self->super.stream_based = TRUE;
   self->reverse_convert = (GIConv) -1;
   self->consumed_len = -1;
-  self->super.pos_tracking = TRUE;
 }
 
 LogProtoServer *

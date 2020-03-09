@@ -28,6 +28,7 @@
 #include "logqueue.h"
 #include "driver.h"
 #include "str-utils.h"
+#include "java-config.h"
 
 #include <stdio.h>
 
@@ -41,8 +42,7 @@ Java_org_syslog_1ng_LogDestination_getOption(JNIEnv *env, jobject obj, jlong s, 
     {
       return NULL;
     }
-  gchar *normalized_key = g_strdup(key_str);
-  normalized_key = __normalize_key(normalized_key);
+  gchar *normalized_key = __normalize_key(key_str);
   value = g_hash_table_lookup(self->options, normalized_key);
   (*env)->ReleaseStringUTFChars(env, key, key_str);  // release resources
   g_free(normalized_key);
@@ -64,6 +64,13 @@ Java_org_syslog_1ng_LogDestination_getTemplateOptionsHandle(JNIEnv *env, jobject
   return (jlong)(&self->template_options);
 }
 
+JNIEXPORT jint JNICALL
+Java_org_syslog_1ng_LogDestination_getSeqNum(JNIEnv *env, jobject obj, jlong handle)
+{
+  JavaDestDriver *self = (JavaDestDriver *)handle;
+  return (jint)(self->super.worker.instance.seq_num);
+}
+
 JNIEXPORT jlong JNICALL
 Java_org_syslog_1ng_LogPipe_getConfigHandle(JNIEnv *env, jobject obj, jlong handle)
 {
@@ -74,9 +81,8 @@ Java_org_syslog_1ng_LogPipe_getConfigHandle(JNIEnv *env, jobject obj, jlong hand
 void java_dd_set_option(LogDriver *s, const gchar *key, const gchar *value)
 {
   JavaDestDriver *self = (JavaDestDriver *)s;
-  gchar *normalized_key = g_strdup(key);
-  normalized_key = __normalize_key(normalized_key);
-  g_hash_table_insert(self->options, g_strdup(normalized_key), g_strdup(value));
+  gchar *normalized_key = __normalize_key(key);
+  g_hash_table_insert(self->options, normalized_key, g_strdup(value));
 }
 
 
@@ -110,7 +116,7 @@ java_dd_init(LogPipe *s)
   GlobalConfig *cfg = log_pipe_get_config(s);
   GError *error = NULL;
 
-  if (!log_dest_driver_init_method(s))
+  if (!log_threaded_dest_driver_init_method(s))
     return FALSE;
 
   log_template_options_init(&self->template_options, cfg);
@@ -123,14 +129,16 @@ java_dd_init(LogPipe *s)
       return FALSE;
     }
 
-  self->proxy = java_destination_proxy_new(self->class_name, self->class_path->str, self, self->template);
+  const gchar *jvm_options = java_config_get_jvm_options(cfg);
+  self->proxy = java_destination_proxy_new(self->class_name, self->class_path->str, self, self->template,
+                                           &self->super.worker.instance.seq_num, jvm_options);
   if (!self->proxy)
     return FALSE;
 
   if (!java_destination_proxy_init(self->proxy))
     return FALSE;
 
-  return log_threaded_dest_driver_start(s);
+  return log_threaded_dest_driver_start_workers(&self->super);
 }
 
 gboolean
@@ -148,7 +156,7 @@ java_dd_send_to_object(JavaDestDriver *self, LogMessage *msg)
 }
 
 gboolean
-java_dd_open(LogThrDestDriver *s)
+java_dd_open(LogThreadedDestDriver *s)
 {
   JavaDestDriver *self = (JavaDestDriver *)s;
   if (!java_destination_proxy_is_opened(self->proxy))
@@ -159,7 +167,7 @@ java_dd_open(LogThrDestDriver *s)
 }
 
 void
-java_dd_close(LogThrDestDriver *s)
+java_dd_close(LogThreadedDestDriver *s)
 {
   JavaDestDriver *self = (JavaDestDriver *)s;
   if (java_destination_proxy_is_opened(self->proxy))
@@ -169,7 +177,7 @@ java_dd_close(LogThrDestDriver *s)
 }
 
 static worker_insert_result_t
-java_worker_insert(LogThrDestDriver *s, LogMessage *msg)
+java_worker_insert(LogThreadedDestDriver *s, LogMessage *msg)
 {
   JavaDestDriver *self = (JavaDestDriver *)s;
 
@@ -182,15 +190,20 @@ java_worker_insert(LogThrDestDriver *s, LogMessage *msg)
   return sent ? WORKER_INSERT_RESULT_SUCCESS : WORKER_INSERT_RESULT_ERROR;
 }
 
-static void
-java_worker_message_queue_empty(LogThrDestDriver *d)
+static worker_insert_result_t
+java_worker_flush(LogThreadedDestDriver *d)
 {
   JavaDestDriver *self = (JavaDestDriver *)d;
   java_destination_proxy_on_message_queue_empty(self->proxy);
+
+  /* FIXME: the java API as we published does not yet support returning a
+   * status from this call, so return success */
+
+  return WORKER_INSERT_RESULT_SUCCESS;
 }
 
 static void
-java_worker_thread_deinit(LogThrDestDriver *d)
+java_worker_thread_deinit(LogThreadedDestDriver *d)
 {
   java_dd_close(d);
   java_machine_detach_thread();
@@ -211,8 +224,8 @@ java_dd_format_persist_name(const LogPipe *s)
   return persist_name;
 }
 
-static gchar *
-java_dd_format_stats_instance(LogThrDestDriver *d)
+static const gchar *
+java_dd_format_stats_instance(LogThreadedDestDriver *d)
 {
   JavaDestDriver *self = (JavaDestDriver *)d;
   static gchar persist_name[1024];
@@ -240,13 +253,9 @@ java_dd_free(LogPipe *s)
 
   log_template_options_destroy(&self->template_options);
   g_string_free(self->class_path, TRUE);
-}
+  g_free(self->template_string);
 
-static void
-__retry_over_message(LogThrDestDriver *s, LogMessage *msg)
-{
-  msg_error("Multiple failures while inserting this record to the java destination, message dropped",
-            evt_tag_int("number_of_retries", s->retries.max));
+  log_threaded_dest_driver_free(s);
 }
 
 LogTemplateOptions *
@@ -269,21 +278,19 @@ java_dd_new(GlobalConfig *cfg)
   self->super.super.super.super.generate_persist_name = java_dd_format_persist_name;
 
   self->super.worker.thread_deinit = java_worker_thread_deinit;
-  self->super.worker.insert = java_worker_insert;
   self->super.worker.connect = java_dd_open;
   self->super.worker.disconnect = java_dd_close;
-  self->super.worker.worker_message_queue_empty = java_worker_message_queue_empty;
+  self->super.worker.insert = java_worker_insert;
+  self->super.worker.flush = java_worker_flush;
 
-  self->super.format.stats_instance = java_dd_format_stats_instance;
-  self->super.messages.retry_over = __retry_over_message;
+  self->super.format_stats_instance = java_dd_format_stats_instance;
   self->super.stats_source = SCS_JAVA;
 
-  self->template = log_template_new(cfg, "java_dd_template");
+  self->template = log_template_new(cfg, NULL);
   self->class_path = g_string_new(".");
 
   java_dd_set_template_string(&self->super.super.super, "$ISODATE $HOST $MSGHDR$MSG\n");
 
-  self->formatted_message = g_string_sized_new(1024);
   self->options = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 
   log_template_options_defaults(&self->template_options);

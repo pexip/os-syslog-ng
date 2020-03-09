@@ -24,6 +24,7 @@
 #include "csv-scanner.h"
 #include "str-utils.h"
 #include "string-list.h"
+#include "scratch-buffers.h"
 
 #include <string.h>
 
@@ -65,7 +66,8 @@ csv_scanner_options_set_string_delimiters(CSVScannerOptions *options, GList *str
 }
 
 void
-csv_scanner_options_set_quotes_start_and_end(CSVScannerOptions *options, const gchar *quotes_start, const gchar *quotes_end)
+csv_scanner_options_set_quotes_start_and_end(CSVScannerOptions *options, const gchar *quotes_start,
+                                             const gchar *quotes_end)
 {
   g_free(options->quotes_start);
   g_free(options->quotes_end);
@@ -148,28 +150,6 @@ _skip_whitespace(const gchar **src)
 }
 
 static void
-_switch_to_next_column(CSVScanner *self)
-{
-  if (!self->current_column && self->src && self->src[0])
-    self->current_column = self->options->columns;
-  else if (self->current_column)
-    self->current_column = self->current_column->next;
-  g_string_truncate(self->current_value, 0);
-}
-
-static gboolean
-_is_last_column(CSVScanner *self)
-{
-  return self->current_column && self->current_column->next == NULL;
-}
-
-static gboolean
-_is_at_the_end_of_columns(CSVScanner *self)
-{
-  return self->current_column == NULL;
-}
-
-static void
 _parse_opening_quote_character(CSVScanner *self)
 {
   gchar *quote = _strchr_optimized_for_single_char_haystack(self->options->quotes_start, *self->src);
@@ -222,7 +202,7 @@ _parse_character_with_quotation(CSVScanner *self)
   self->src++;
 }
 
-/* searches for str in list and returns the first occurence, otherwise NULL */
+/* searches for str in list and returns the first occurrence, otherwise NULL */
 static const gboolean
 _match_string_delimiters_at_current_position(const char *input, GList *string_delimiters, int *result_length)
 {
@@ -342,23 +322,59 @@ _translate_value(CSVScanner *self)
   _translate_null_value(self);
 }
 
+static gboolean
+_is_last_column(CSVScanner *self)
+{
+  return self->current_column && self->current_column->next == NULL;
+}
+
+static gboolean
+_switch_to_next_column(CSVScanner *self)
+{
+  g_string_truncate(self->current_value, 0);
+
+  switch (self->state)
+    {
+    case CSV_STATE_INITIAL:
+      self->state = CSV_STATE_COLUMNS;
+      self->current_column = self->options->columns;
+      if (self->current_column)
+        return TRUE;
+      self->state = CSV_STATE_FINISH;
+      return FALSE;
+    case CSV_STATE_COLUMNS:
+    case CSV_STATE_GREEDY_COLUMN:
+      self->current_column = self->current_column->next;
+      if (self->current_column)
+        return TRUE;
+      self->state = CSV_STATE_FINISH;
+      return FALSE;
+    case CSV_STATE_PARTIAL_INPUT:
+    case CSV_STATE_FINISH:
+      return FALSE;
+    default:
+      break;
+    }
+  g_assert_not_reached();
+}
+
 gboolean
 csv_scanner_scan_next(CSVScanner *self)
 {
-  _switch_to_next_column(self);
-
-  if (!self->src || !self->current_column)
+  if (!_switch_to_next_column(self))
     return FALSE;
 
   if (_is_last_column(self) && (self->options->flags & CSV_SCANNER_GREEDY))
     {
       g_string_assign(self->current_value, self->src);
-      self->src = NULL;
+      self->src += self->current_value->len;
+      self->state = CSV_STATE_GREEDY_COLUMN;
       return TRUE;
     }
   else if (self->src[0] == 0)
     {
       /* no more input data and a real column, not a greedy one */
+      self->state = CSV_STATE_PARTIAL_INPUT;
       return FALSE;
     }
   else
@@ -374,43 +390,38 @@ csv_scanner_scan_next(CSVScanner *self)
 const gchar *
 csv_scanner_get_current_name(CSVScanner *self)
 {
-  return (const gchar *) self->current_column->data;
+  if (self->current_column)
+    return (const gchar *) self->current_column->data;
+  else if (self->state == CSV_STATE_INITIAL && self->options->columns)
+    return self->options->columns->data;
+  else
+    return NULL;
 }
 
 gboolean
-csv_scanner_is_scan_finished(CSVScanner *self)
+csv_scanner_is_scan_complete(CSVScanner *self)
 {
-  if ((self->options->flags & CSV_SCANNER_DROP_INVALID) &&
-      (!_is_at_the_end_of_columns(self) || (self->src && *self->src)))
-    {
-      /* there are unfilled variables, OR not all of the input was processed
-       * and "drop-invalid" flag is specified */
-      return FALSE;
-    }
-  return TRUE;
+  /* we didn't process all of the input */
+  if (self->src[0] != 0)
+    return FALSE;
+
+  return self->state == CSV_STATE_FINISH;
 }
 
 void
-csv_scanner_input(CSVScanner *self, const gchar *input)
+csv_scanner_init(CSVScanner *scanner, CSVScannerOptions *options, const gchar *input)
 {
-  self->src = input;
-  self->current_column = NULL;
+  memset(scanner, 0, sizeof(*scanner));
+  scanner->state = CSV_STATE_INITIAL;
+  scanner->src = input;
+  scanner->current_value = scratch_buffers_alloc();
+  scanner->current_column = NULL;
+  scanner->options = options;
 }
 
 void
-csv_scanner_state_init(CSVScanner *self, CSVScannerOptions *options)
+csv_scanner_deinit(CSVScanner *self)
 {
-  self->options = options;
-  self->current_column = options->columns;
-  self->src = NULL;
-  self->current_value = g_string_sized_new(128);
-  self->current_quote = 0;
-}
-
-void
-csv_scanner_state_clean(CSVScanner *self)
-{
-  g_string_free(self->current_value, TRUE);
 }
 
 const gchar *
@@ -425,7 +436,7 @@ csv_scanner_get_current_value_len(CSVScanner *self)
   return self->current_value->len;
 }
 
-gchar*
+gchar *
 csv_scanner_dup_current_value(CSVScanner *self)
 {
   return g_strndup(csv_scanner_get_current_value(self),

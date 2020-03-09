@@ -39,9 +39,9 @@ struct _ServiceManagement
 {
   ServiceManagementType type;
   void (*publish_status)(const gchar *status);
-  void (*clear_status)();
-  void (*indicate_readiness)();
-  gboolean (*is_active)();
+  void (*clear_status)(void);
+  void (*indicate_readiness)(void);
+  gboolean (*is_active)(void);
 };
 
 ServiceManagement *current_service_mgmt = NULL;
@@ -60,32 +60,32 @@ service_management_systemd_publish_status(const gchar *status)
 }
 
 static inline void
-service_management_systemd_clear_status()
+service_management_systemd_clear_status(void)
 {
   sd_notify(0, "STATUS=");
 }
 
 static inline void
-service_management_systemd_indicate_readiness()
+service_management_systemd_indicate_readiness(void)
 {
   sd_notify(0, "READY=1");
 }
 
 static gboolean
-service_management_systemd_is_active()
+service_management_systemd_is_active(void)
 {
   struct stat st;
 
   if (lstat("/run/systemd/system/", &st) < 0 || !S_ISDIR(st.st_mode))
-  {
-    msg_debug("Systemd is not detected as the running init system");
-    return FALSE;
-  }
+    {
+      msg_debug("Systemd is not detected as the running init system");
+      return FALSE;
+    }
   else
-  {
-    msg_debug("Systemd is detected as the running init system");
-    return TRUE;
-  }
+    {
+      msg_debug("Systemd is detected as the running init system");
+      return TRUE;
+    }
 }
 
 #endif
@@ -120,22 +120,23 @@ service_management_dummy_publish_status(const gchar *status)
 }
 
 static inline void
-service_management_dummy_clear_status()
+service_management_dummy_clear_status(void)
 {
 }
 
 static inline void
-service_management_dummy_indicate_readiness()
+service_management_dummy_indicate_readiness(void)
 {
 }
 
 static gboolean
-service_management_dummy_is_active()
+service_management_dummy_is_active(void)
 {
   return TRUE;
 }
 
-ServiceManagement service_managements[] = {
+ServiceManagement service_managements[] =
+{
   {
     .type = SMT_NONE,
     .publish_status = service_management_dummy_publish_status,
@@ -155,7 +156,7 @@ ServiceManagement service_managements[] = {
 };
 
 void
-service_management_init()
+service_management_init(void)
 {
   gint i = 0;
   while (i < sizeof(service_managements) / sizeof(ServiceManagement))

@@ -27,14 +27,15 @@
 #include "syslog-ng.h"
 #include "messages.h"
 #include "atomic.h"
-#include "lib/reloc.h"
+#include "reloc.h"
 #include "plugin.h"
 #include "resolved-configurable-paths.h"
+#include "apphook.h"
+#include <string.h>
 
 struct _JavaVMSingleton
 {
   GAtomicCounter ref_cnt;
-  JavaVMOption options[3];
   JNIEnv *env;
   JavaVM *jvm;
   JavaVMInitArgs vm_args;
@@ -42,28 +43,51 @@ struct _JavaVMSingleton
   ClassLoader *loader;
 };
 
-static JavaVMSingleton *g_jvm_s;
+static JavaVMSingleton *global_jvm;
+
+static JavaVMSingleton *
+_jvm_new(void)
+{
+  msg_debug("Java machine new");
+  JavaVMSingleton *jvm = g_new0(JavaVMSingleton, 1);
+  g_atomic_counter_set(&jvm->ref_cnt, 1);
+
+  jvm->class_path = g_string_new(get_installation_path_for(SYSLOG_NG_JAVA_MODULE_PATH));
+  g_string_append(jvm->class_path, "/syslog-ng-core.jar");
+
+  return jvm;
+}
+
+void
+java_machine_unref_callback(gint hook_type, gpointer user_data)
+{
+  JavaVMSingleton *jvm = (JavaVMSingleton *)user_data;
+
+  java_machine_unref(jvm);
+}
 
 JavaVMSingleton *
 java_machine_ref(void)
 {
-  if (g_jvm_s)
+  if (global_jvm)
     {
-      g_atomic_counter_inc(&g_jvm_s->ref_cnt);
+      g_atomic_counter_inc(&global_jvm->ref_cnt);
     }
   else
     {
-      g_jvm_s = g_new0(JavaVMSingleton, 1);
-      g_atomic_counter_set(&g_jvm_s->ref_cnt, 1);
+      global_jvm = _jvm_new();
 
-      g_jvm_s->class_path = g_string_new(get_installation_path_for(SYSLOG_NG_JAVA_MODULE_PATH));
-      g_string_append(g_jvm_s->class_path, "/syslog-ng-core.jar");
+      /* The application hook is going to hold a reference to the global g_jvm_s,
+       * therefore the reference counter must be incremented before that.
+       * But we are in the _ref() function, so the counter must be updated as below.  */
+      g_atomic_counter_inc(&global_jvm->ref_cnt);
+      register_application_hook(AH_SHUTDOWN, java_machine_unref_callback, global_jvm);
     }
-  return g_jvm_s;
+  return global_jvm;
 }
 
-static void inline
-__jvm_free(JavaVMSingleton *self)
+static inline void
+_jvm_free(JavaVMSingleton *self)
 {
   msg_debug("Java machine free");
   g_string_free(self->class_path, TRUE);
@@ -72,49 +96,127 @@ __jvm_free(JavaVMSingleton *self)
       JavaVM jvm = *(self->jvm);
       if (self->loader)
         {
-          JNIEnv *env;
-          class_loader_free(self->loader, java_machine_get_env(self, &env));
+          class_loader_free(self->loader, java_machine_get_env(self));
         }
       jvm->DestroyJavaVM(self->jvm);
-
     }
+
+  for (gint i = 0; i < self->vm_args.nOptions; i++)
+    g_free(self->vm_args.options[i].optionString);
+  g_free(self->vm_args.options);
+
   g_free(self);
-  g_jvm_s = NULL;
 }
 
 void
 java_machine_unref(JavaVMSingleton *self)
 {
-  g_assert(self == g_jvm_s);
+  g_assert(self == global_jvm);
+  /* The last reference is always hold by a AH_SHUTDOWN app hook, when there is no java configured.
+   * The only way to get rid of it to shutdown syslog-ng.  */
+  if (g_atomic_counter_get(&self->ref_cnt) == 2)
+    {
+      msg_warning("If you have reloaded syslog-ng, the JVM is not used anymore, but it is still running. If you want to stop JVM, stop syslog-ng and then start syslog-ng again");
+    }
   if (g_atomic_counter_dec_and_test(&self->ref_cnt))
     {
-      __jvm_free(self);
+      _jvm_free(self);
+      global_jvm = NULL;
     }
 }
 
-gboolean
-java_machine_start(JavaVMSingleton* self)
+static GArray *
+_jvm_options_array_append(GArray *jvm_options_array, char *option_string)
 {
-  g_assert(self == g_jvm_s);
+  JavaVMOption opt;
+  opt.optionString = option_string;
+  return g_array_append_val(jvm_options_array, opt);
+}
+
+static gboolean
+_is_jvm_option_predefined(const gchar *option)
+{
+  static const gchar *predefined_options[] =
+  {
+    "Djava.class.path",
+    "Djava.library.path",
+    NULL
+  };
+
+  for (gint i = 0; predefined_options[i] != NULL; i++)
+    {
+      if (!strcmp(option, predefined_options[i]))
+        {
+          msg_info("JVM option is set by syslog-ng, cannot be overridden by user-defined values.",
+                   evt_tag_str("option", option));
+          return TRUE;
+        }
+    }
+
+  return FALSE;
+}
+
+static GArray *
+_jvm_options_split(const gchar *jvm_options_str)
+{
+  GArray *jvm_options_array = g_array_new(FALSE, TRUE, sizeof(JavaVMOption));
+
+  if (!jvm_options_str)
+    return jvm_options_array;
+
+  gchar **options_str_array = g_strsplit_set(jvm_options_str, " \t", 0);
+
+  for (gint i = 0; options_str_array[i]; i++)
+    {
+      if (options_str_array[i][0] == '\0' || _is_jvm_option_predefined(options_str_array[i]))
+        {
+          g_free(options_str_array[i]);
+          continue;
+        }
+
+      jvm_options_array = _jvm_options_array_append(jvm_options_array, g_strdup(options_str_array[i]));
+    }
+  g_free(options_str_array);
+
+  return jvm_options_array;
+}
+
+static void
+_setup_jvm_options_array(JavaVMSingleton *self, const gchar *jvm_options_str)
+{
+  GArray *jvm_options_array = _jvm_options_split(jvm_options_str);
+
+  jvm_options_array = _jvm_options_array_append(jvm_options_array,
+                                                g_strdup_printf("-Djava.class.path=%s",
+                                                    self->class_path->str));
+
+  jvm_options_array = _jvm_options_array_append(jvm_options_array,
+                                                g_strdup_printf("-Djava.library.path=%s",
+                                                    resolvedConfigurablePaths.initial_module_path));
+
+  jvm_options_array = _jvm_options_array_append(jvm_options_array,
+                                                g_strdup("-Xrs"));
+
+  self->vm_args.nOptions = jvm_options_array->len;
+  self->vm_args.options = (JavaVMOption *)jvm_options_array->data;
+  g_array_free(jvm_options_array, FALSE);
+}
+
+gboolean
+java_machine_start(JavaVMSingleton *self, const gchar *jvm_options)
+{
+  g_assert(self == global_jvm);
   if (!self->jvm)
     {
       long status;
-      self->options[0].optionString = g_strdup_printf(
-          "-Djava.class.path=%s", self->class_path->str);
-
-      self->options[1].optionString = g_strdup_printf(
-          "-Djava.library.path=%s", resolvedConfigurablePaths.initial_module_path);
-
-      self->options[2].optionString = g_strdup("-Xrs");
-
+      _setup_jvm_options_array(self, jvm_options);
       self->vm_args.version = JNI_VERSION_1_6;
-      self->vm_args.nOptions = 3;
-      self->vm_args.options = self->options;
-      status = JNI_CreateJavaVM(&self->jvm, (void**) &self->env,
+      status = JNI_CreateJavaVM(&self->jvm, (void **) &self->env,
                                 &self->vm_args);
-      if (status == JNI_ERR) {
+      if (status == JNI_ERR)
+        {
           return FALSE;
-      }
+        }
     }
   return TRUE;
 }
@@ -132,9 +234,9 @@ java_machine_get_class_loader(JavaVMSingleton *self)
 }
 
 void
-java_machine_attach_thread(JavaVMSingleton* self, JNIEnv **penv)
+java_machine_attach_thread(JavaVMSingleton *self, JNIEnv **penv)
 {
-  g_assert(self == g_jvm_s);
+  g_assert(self == global_jvm);
   if ((*(self->jvm))->AttachCurrentThread(self->jvm, (void **)penv, &self->vm_args) == JNI_OK)
     {
       class_loader_init_current_thread(java_machine_get_class_loader(self), *penv);
@@ -144,23 +246,24 @@ java_machine_attach_thread(JavaVMSingleton* self, JNIEnv **penv)
 void
 java_machine_detach_thread(void)
 {
-  (*(g_jvm_s->jvm))->DetachCurrentThread(g_jvm_s->jvm);
+  (*(global_jvm->jvm))->DetachCurrentThread(global_jvm->jvm);
 }
 
 
 jclass
 java_machine_load_class(JavaVMSingleton *self, const gchar *class_name, const gchar *class_path)
 {
-  JNIEnv *env;
-  return class_loader_load_class(java_machine_get_class_loader(self), java_machine_get_env(self, &env), class_name, class_path);
+  return class_loader_load_class(java_machine_get_class_loader(self), java_machine_get_env(self), class_name,
+                                 class_path);
 }
 
 JNIEnv *
-java_machine_get_env(JavaVMSingleton *self, JNIEnv **penv)
+java_machine_get_env(JavaVMSingleton *self)
 {
-  if ((*(self->jvm))->GetEnv(self->jvm, (void **)penv, JNI_VERSION_1_6) != JNI_OK)
+  JNIEnv *penv = NULL;
+  if ((*(self->jvm))->GetEnv(self->jvm, (void **)&penv, JNI_VERSION_1_6) != JNI_OK)
     {
-      java_machine_attach_thread(self, penv);
+      java_machine_attach_thread(self, &penv);
     }
-  return *penv;
+  return penv;
 }

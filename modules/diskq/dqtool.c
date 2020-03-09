@@ -31,6 +31,7 @@
 #include "logqueue-disk-reliable.h"
 #include "logqueue-disk-non-reliable.h"
 #include "logmsg/logmsg-serialize.h"
+#include "scratch-buffers.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -44,8 +45,10 @@ gboolean verbose_flag;
 
 static GOptionEntry cat_options[] =
 {
-  { "template",  't', 0, G_OPTION_ARG_STRING, &template_string,
-    "Template to format the serialized messages", "<template>" },
+  {
+    "template",  't', 0, G_OPTION_ARG_STRING, &template_string,
+    "Template to format the serialized messages", "<template>"
+  },
   { NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL }
 };
 
@@ -80,14 +83,14 @@ open_queue(char *filename, LogQueue **lq, DiskQueueOptions *options)
     {
       options->disk_buf_size = 128;
       options->mem_buf_size = 1024 * 1024;
-      *lq = log_queue_disk_reliable_new(options);
+      *lq = log_queue_disk_reliable_new(options, NULL);
     }
   else
     {
       options->disk_buf_size = 1;
       options->mem_buf_size = 128;
       options->qout_size = 128;
-      *lq = log_queue_disk_non_reliable_new(options);
+      *lq = log_queue_disk_non_reliable_new(options, NULL);
     }
 
   if (!log_queue_disk_load_queue(*lq, filename))
@@ -137,6 +140,9 @@ dqtool_cat(int argc, char *argv[])
       if (!open_queue(argv[i], &lq, &options))
         continue;
 
+      log_queue_set_use_backlog(lq, TRUE);
+      log_queue_rewind_backlog_all(lq);
+
       while ((log_msg = log_queue_pop_head(lq, &local_options)) != NULL)
         {
           /* format log */
@@ -172,12 +178,18 @@ dqtool_info(int argc, char *argv[])
 
 static GOptionEntry dqtool_options[] =
 {
-  { "debug",     'd', 0, G_OPTION_ARG_NONE, &debug_flag,
-    "Enable debug/diagnostic messages on stderr", NULL },
-  { "verbose",   'v', 0, G_OPTION_ARG_NONE, &verbose_flag,
-    "Enable verbose messages on stderr", NULL },
-  { "version",   'V', 0, G_OPTION_ARG_NONE, &display_version,
-    "Display version number (" SYSLOG_NG_VERSION ")", NULL },
+  {
+    "debug",     'd', 0, G_OPTION_ARG_NONE, &debug_flag,
+    "Enable debug/diagnostic messages on stderr", NULL
+  },
+  {
+    "verbose",   'v', 0, G_OPTION_ARG_NONE, &verbose_flag,
+    "Enable verbose messages on stderr", NULL
+  },
+  {
+    "version",   'V', 0, G_OPTION_ARG_NONE, &display_version,
+    "Display version number (" SYSLOG_NG_VERSION ")", NULL
+  },
   { NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL }
 };
 
@@ -223,7 +235,6 @@ usage(void)
     {
       fprintf(stderr, "    %-12s %s\n", modes[mode].mode, modes[mode].description);
     }
-  exit(1);
 }
 
 void
@@ -244,6 +255,7 @@ main(int argc, char *argv[])
   if (!mode_string)
     {
       usage();
+      return 1;
     }
 
   ctx = NULL;
@@ -265,6 +277,7 @@ main(int argc, char *argv[])
     {
       fprintf(stderr, "Unknown command\n");
       usage();
+      return 1;
     }
 
   if (!g_option_context_parse(ctx, &argc, &argv, &error))
@@ -281,16 +294,23 @@ main(int argc, char *argv[])
       return 0;
     }
 
-  configuration = cfg_new(0x0307);
+  configuration = cfg_new_snippet();
+
   configuration->template_options.frac_digits = 3;
   configuration->template_options.time_zone_info[LTZ_LOCAL] = time_zone_info_new(NULL);
 
   msg_init(TRUE);
+  stats_init();
+  scratch_buffers_global_init();
+  scratch_buffers_allocator_init();
   log_template_global_init();
   log_msg_registry_init();
   log_tags_global_init();
   modes[mode].main(argc, argv);
   log_tags_global_deinit();
+  scratch_buffers_allocator_deinit();
+  scratch_buffers_global_deinit();
+  stats_destroy();
   msg_deinit();
   return 0;
 

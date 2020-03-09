@@ -1,0 +1,31 @@
+From c2010b41253bf46c6d4493233e50b5f0cf1dc478 Mon Sep 17 00:00:00 2001
+From: Andras Mitzki <andras.mitzki@balabit.com>
+Date: Thu, 10 Jan 2019 10:03:16 +0100
+Subject: [PATCH] Logger: Fix leaking file handlers
+
+Signed-off-by: Andras Mitzki <andras.mitzki@balabit.com>
+---
+ tests/pytest_framework/src/logger/logger.py | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/tests/pytest_framework/src/logger/logger.py b/tests/pytest_framework/src/logger/logger.py
+index 8a1732bef1..3b4a1e9105 100644
+--- a/tests/pytest_framework/src/logger/logger.py
++++ b/tests/pytest_framework/src/logger/logger.py
+@@ -29,12 +29,15 @@
+ class Logger(logging.Logger):
+     def __init__(self, logger_name, report_file, loglevel, use_console_handler=True, use_file_handler=True):
+         super(Logger, self).__init__(logger_name, loglevel)
+-        self.handlers = []
+         if use_console_handler:
+             self.__set_console_handler()
+         if use_file_handler:
+             self.__set_file_handler(file_path=report_file)
+ 
++    def __del__(self):
++        for open_handler in self.handlers:
++            open_handler.close()
++
+     def __set_file_handler(self, file_path=None):
+         # FileHandler can work only with string representation of file_path
+         file_handler = logging.FileHandler(str(file_path))

@@ -1,0 +1,13 @@
+# pip packages for successful run make check
+hy                      [centos, debian, ubuntu]
+nose                    [centos, debian, ubuntu]
+pep8                    [centos, debian, ubuntu]
+ply                     [centos, debian, ubuntu]
+pylint                  [centos-7, debian, ubuntu]
+
+# pip packages for pytest-framework
+colorlog                [centos, debian, ubuntu]
+mockito                 [centos, debian, ubuntu]
+pathlib2                [centos, debian, ubuntu]
+psutil                  [centos, debian, ubuntu]
+pytest                  [centos, debian, ubuntu]

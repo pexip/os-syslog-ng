@@ -40,12 +40,12 @@ m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 dnl ***************************************************************************
 dnl dependencies
 
-GLIB_MIN_VERSION="2.10.1"
-EVTLOG_MIN_VERSION="0.2.12"
+GLIB_MIN_VERSION="2.26.1"
 OPENSSL_MIN_VERSION="0.9.8"
 LIBDBI_MIN_VERSION="0.9.0"
 LIBRABBITMQ_MIN_VERSION="0.5.3"
 IVYKIS_MIN_VERSION="0.36.1"
+IVYKIS_UPDATED_VERSION="0.39"
 JSON_C_MIN_VERSION="0.9"
 PCRE_MIN_VERSION="6.1"
 LMC_MIN_VERSION="1.0.0"
@@ -56,6 +56,7 @@ LIBSYSTEMD_MIN_VERSION="209"
 JAVA_MIN_VERSION="1.7"
 GRADLE_MIN_VERSION="2.2"
 HIREDIS_MIN_VERSION="0.11.0"
+CRITERION_MIN_VERSION="2.2.1"
 
 dnl ***************************************************************************
 dnl Initial setup
@@ -85,6 +86,41 @@ if test -n "$SNAPSHOT_VERSION"; then
 	PACKAGE_VERSION=$PACKAGE_VERSION+$SNAPSHOT_VERSION
 fi
 
+dnl ***************************************************************************
+dnl script snippet to generate user friendly version strings according to the
+dnl new versioning policy. All needed code are here to allow easy moving
+dnl between projects.
+if test -z "$RELEASE_TYPE"; then
+    RELEASE_TYPE=stable
+fi
+
+if test -z "$BROCHURE_VERSION"; then
+    _MAJOR=`echo $VERSION | cut -f1 -d'.'`
+    _MINOR=`echo $VERSION | cut -f2 -d'.'`
+    case "$RELEASE_TYPE" in
+        stable) BROCHURE_VERSION="$_MAJOR";;
+        feature) BROCHURE_VERSION="$_MAJOR F$_MINOR";;
+        *) BROCHURE_VERSION="$VERSION dogfood edition. Please contact your syslog-ng release manager to fix the configure scritpt";;
+    esac
+fi
+
+if test -z "$COMBINED_VERSION"; then
+    COMBINED_VERSION="$BROCHURE_VERSION ($VERSION)"
+fi
+
+TECHNICAL_VERSION=$VERSION
+
+AC_DEFINE_UNQUOTED(RELEASE_TYPE, "$RELEASE_TYPE", [type of syslog-ng release. stable or feature])
+AC_DEFINE_UNQUOTED(BROCHURE_VERSION, "$BROCHURE_VERSION", [pretty version for users depends on the release type])
+AC_DEFINE_UNQUOTED(COMBINED_VERSION, "$COMBINED_VERSION", [normal and brochure version combined])
+AC_DEFINE_UNQUOTED(SOURCE_REVISION, "$SOURCE_REVISION", [source revision])
+AC_SUBST(RELEASE_TYPE)
+AC_SUBST(BROCHURE_VERSION)
+AC_SUBST(COMBINED_VERSION)
+AC_SUBST(TECHNICAL_VERSION)
+dnl ***************************************************************************
+
+
 if test "x$prefix" = "xNONE"; then
         prefix=$ac_default_prefix
 fi
@@ -93,11 +129,13 @@ if test "x$exec_prefix" = "xNONE"; then
 fi
 pidfiledir='${localstatedir}'
 moduledir='${exec_prefix}/lib/syslog-ng'
+loggenplugindir='${moduledir}/loggen'
 toolsdir='${datadir}/syslog-ng/tools'
 xsddir='${datadir}/syslog-ng/xsd'
 
 config_includedir='${datadir}/syslog-ng/include'
 scldir="${config_includedir}/scl"
+abs_topsrcdir=`(cd $srcdir && pwd)`
 
 AC_CONFIG_HEADERS(config.h)
 
@@ -131,6 +169,13 @@ AC_ARG_WITH(ld-library-path,
 
 AC_ARG_WITH([systemdsystemunitdir],
    AS_HELP_STRING([--with-systemdsystemunitdir=DIR], [Directory for systemd service files]))
+
+AC_ARG_WITH(package_name,
+   [  --with-package-name=package name Package name is printed out when syslog-ng started with --version],
+   PACKAGE_NAME=$with_package_name)
+
+AC_ARG_ENABLE(forced_server_mode,
+              [  --enable-forced-server-mode   Enable forced server mode.],, enable_forced_server_mode="yes")
 
 AC_ARG_ENABLE(debug,
               [  --enable-debug      Enable debugging code.],, enable_debug="no")
@@ -167,6 +212,10 @@ AC_ARG_ENABLE(sun-streams,
               [  --enable-sun-streams    Enable support for Solaris /dev/log STREAMS device.]
               ,,enable_sun_streams="auto")
 
+AC_ARG_ENABLE(openbsd-system-source,
+              [  --enable-openbsd-system-source    Enable support for OpenBSD /dev/klog device.]
+              ,,enable_openbsd_system_source="auto")
+
 AC_ARG_ENABLE(sql,
 	      [  --enable-sql            Enable support for SQL destinations. (default: auto)]
 	      ,,enable_sql="auto")
@@ -187,11 +236,6 @@ AC_ARG_ENABLE(mongodb,
 	      [  --enable-mongodb        Enable mongodb destination (default: auto)]
               ,,enable_mongodb="auto")
 
-AC_ARG_WITH(mongoc,
-              [  --with-mongoc=[system/internal/auto/no]
-                                         Link against the system supplied or the built-in mongo-c-driver library. (default: auto)]
-              ,,with_mongoc="auto")
-
 AC_ARG_ENABLE(legacy-mongodb-options,
               [  --enable-legacy-mongodb-options=[yes/no]
                                          Support libmongo-client non-URI MongoDB options. (default: yes)]
@@ -200,7 +244,7 @@ AC_ARG_ENABLE(legacy-mongodb-options,
 AC_ARG_WITH(jsonc,
               [  --with-jsonc=[system/internal/auto/no]
                                          Link against the system supplied or the built-in jsonc library or explicitly disable it. (default:auto)]
-              ,,with_jsonc="auto")
+              ,,with_jsonc="internal")
 
 AC_ARG_ENABLE(json,
              [ --enable-json=[yes/no]            Enable JSON support (default: yes)]
@@ -209,11 +253,6 @@ AC_ARG_ENABLE(json,
 AC_ARG_ENABLE(amqp,
           [  --enable-amqp        Enable amqp destination (default: auto)]
               ,,enable_amqp="auto")
-
-AC_ARG_WITH(librabbitmq-client,
-              [  --with-librabbitmq-client=[system/internal]
-                                         Link against the system supplied or the built-in librabbitmq library.]
-              ,,with_librabbitmq_client="internal")
 
 AC_ARG_ENABLE(stomp,
           [  --enable-stomp        Enable stomp destination (default: yes)]
@@ -255,6 +294,10 @@ AC_ARG_ENABLE(systemd,
 AC_ARG_ENABLE(geoip,
               [  --enable-geoip          Enable GeoIP support (default: auto)]
               ,,enable_geoip="auto")
+
+AC_ARG_ENABLE(geoip2,
+              [  --enable-geoip2          Enable GeoIP2 support (default: auto)]
+              ,,enable_geoip2="auto")
 
 AC_ARG_ENABLE(riemann,
               [  --disable-riemann       Disable riemann destination]
@@ -302,7 +345,8 @@ if test "x$enable_all_modules" != "xauto"; then
    state="$enable_all_modules"
 
    MODULES="spoof_source sun_streams sql pacct mongodb json amqp stomp \
-            redis systemd geoip riemann ipv6 smtp native python java java_modules"
+            redis systemd geoip geoip2 riemann ipv6 smtp native python java java_modules \
+            http"
    for mod in ${MODULES}; do
        modstate=$(eval echo \$enable_${mod})
        if test "x$modstate" = "xauto"; then
@@ -342,7 +386,14 @@ AM_PROG_LEX
 AC_PROG_MAKE_SET
 PKG_PROG_PKG_CONFIG
 LT_INIT([dlopen disable-static])
-AC_PATH_PROG(PYTHON, python)
+if test "x$with_python" = "xauto"; then
+  AM_PATH_PYTHON()
+else
+  AM_PATH_PYTHON([$with_python])
+fi
+if test "${PYTHON}" = ":"; then
+	AC_MSG_ERROR([Python interpreter is required])
+fi
 
 dnl ***************************************************************************
 dnl Validate yacc
@@ -387,26 +438,76 @@ if test $lex_ok = 0 ; then
 fi
 
 dnl ***************************************************************************
+dnl Set up NO_PIE_LDFLAG: -no-pie is compatible with $CC.
+
+AX_COMPILER_VENDOR
+AX_COMPILER_VERSION
+
+if test $ostype = "Darwin"; then
+  no_pie_ldflags="-Wl,-no_pie"
+else
+  if test x$ax_cv_c_compiler_vendor = "xgnu"; then
+    AX_COMPARE_VERSION($ax_cv_c_compiler_version, gt, [4.5], [no_pie_ldflags="-no-pie"], [no_pie_ldflags=""])
+  else
+    no_pie_ldflags="-no-pie"
+  fi;
+fi
+
+old_LDFLAGS="$LDFLAGS"
+LDFLAGS="$LDFLAGS $no_pie_ldflags"
+
+AC_LINK_IFELSE([AC_LANG_SOURCE([int main(void) {return 0;}])],
+	[no_pie_option_available=yes],
+	[no_pie_option_available=no])
+
+LDFLAGS="$old_LDFLAGS"
+
+if test "$no_pie_option_available" = "yes"; then
+  NO_PIE_LDFLAG="$no_pie_ldflags"
+fi
+AC_SUBST([NO_PIE_LDFLAG])
+
+dnl ***************************************************************************
 dnl Set up CFLAGS
 
-if test "x$ac_compiler_gnu" = "xyes"; then
-        CFLAGS="${CFLAGS} -Wall"
-        if test "x$enable_debug" = "xyes"; then
-                CFLAGS="${ac_cv_env_CFLAGS_value} -Wall -g"
-        fi
 
+
+dnl The rest of CFLAGS. We produce
+dnl -g/-O2/-pg/-fprofile-arcs/-ftest-coverage combinations, the rest is
+dnl supplied by Makefile.am
+
+if test "x$ac_compiler_gnu" = "xyes"; then
+	# by ignoring the existing $CFLAGS setting we can override the
+	# default supplied by autoconf (which defaults to -O2), which
+	# we don't want to use with our debugging builds.
+
+	CFLAGS_ADD=""
+        if test "x$enable_debug" = "xyes"; then
+                CFLAGS_ADD="${CFLAGS_ADD} -g"
+        else
+                CFLAGS_ADD="${CFLAGS_ADD} -O2 -g"
+        fi
         if test "x$enable_gprof" = "xyes"; then
-                CFLAGS="${CFLAGS} -pg"
+                CFLAGS_ADD="${CFLAGS_ADD} -pg"
         fi
         if test "x$enable_gcov" = "xyes"; then
-                CFLAGS="${CFLAGS} -fprofile-arcs -ftest-coverage"
+                CFLAGS_ADD="${CFLAGS_ADD} -fprofile-arcs -ftest-coverage"
         fi
 else
         enable_extra_warnings="no"
 fi
-CFLAGS="${CFLAGS} -pthread"
+CFLAGS_ADD="${CFLAGS_ADD} -pthread"
 
-AX_CFLAGS_GCC_OPTION(-Wno-pointer-sign, CFLAGS_NOWARN_POINTER_SIGN)
+dnl We are checking for the postive warning flag, as gcc handles the
+dnl -Wno-XXX version oddly, so if no other warnings are present, it is not
+dnl reported at all, causing it to be unusable for detection purposes.
+
+AX_CFLAGS_GCC_OPTION(-Winitializer-overrides,
+		     CFLAGS_INITIALIZER_OVERRIDES,
+		     CFLAGS_ADD="${CFLAGS_ADD} -Wno-initializer-overrides")
+
+dnl User supplied CFLAGS come last
+CFLAGS="${CFLAGS_ADD} ${ac_cv_env_CFLAGS_value}"
 
 AC_SYS_LARGEFILE
 
@@ -491,7 +592,7 @@ AC_LINK_IFELSE([AC_LANG_PROGRAM(
 __thread int a;
 ]],
 [a=0;])],
-[ac_cv_have_tls=yes; AC_DEFINE_UNQUOTED(HAVE_THREAD_KEYWORD, 1, "Whether Transport Layer Security is supported by the system")])
+[ac_cv_have_tls=yes; AC_DEFINE_UNQUOTED(HAVE_THREAD_KEYWORD, 1, "Whether Thread Local Storage is supported by the system")])
 
 dnl ***************************************************************************
 dnl How to do static linking?
@@ -535,6 +636,7 @@ AC_CHECK_HEADERS(strings.h	\
 AC_CHECK_HEADERS(tcpd.h)
 
 AC_CHECK_TYPES([struct ucred, struct cmsgcred], [], [], [#define _GNU_SOURCE 1
+#define _DEFAULT_SOURCE 1
 #include <sys/types.h>
 #include <sys/socket.h>])
 
@@ -544,19 +646,6 @@ dnl ***************************************************************************
 
 dnl Checks for typedefs, structures, and compiler characteristics.
 AC_STRUCT_TM
-
-AC_CACHE_CHECK(for SO_ACCEPTCONN, blb_cv_c_so_acceptconn,
-  [AC_EGREP_CPP(SO_ACCEPTCONN,
-[
-#include <sys/types.h>
-#include <socket.h>
-SO_ACCEPTCONN
-],
-  blb_cv_c_so_acceptconn=no, blb_cv_c_so_acceptconn=yes)])
-
-if test "x$blb_cv_c_so_acceptconn" = "xyes"; then
-        AC_DEFINE(HAVE_SO_ACCEPTCONN, 1, [SO_ACCEPTCONN is present])
-fi
 
 AC_CHECK_MEMBER(struct tm.tm_gmtoff,AC_DEFINE(HAVE_STRUCT_TM_TM_GMTOFF,1,[Whether you have tm_gmtoff field in struct tm]),,[
 #if TM_IN_SYS_TIME
@@ -578,7 +667,7 @@ I_CONSLOG
   blb_cv_c_i_conslog=no, blb_cv_c_i_conslog=yes)])
 
 old_CPPFLAGS=$CPPFLAGS
-CPPFLAGS=-D_GNU_SOURCE
+CPPFLAGS="-D_GNU_SOURCE -D_DEFAULT_SOURCE"
 AC_CACHE_CHECK(for O_LARGEFILE, blb_cv_c_o_largefile,
   [AC_EGREP_CPP(O_LARGEFILE,
 [
@@ -623,7 +712,6 @@ fi
 AC_CACHE_CHECK(for modern utmp,
                blb_cv_c_modern_utmp,
 [AC_TRY_COMPILE([
-#include <time.h>
 #ifdef HAVE_UTMPX_H
 #include <utmpx.h>
 #else
@@ -636,7 +724,7 @@ AC_CACHE_CHECK(for modern utmp,
 #else
         struct utmp ut;
 #endif
-        return &ut.ut_type && &ut.ut_user;
+  return sizeof(ut.ut_type) & sizeof(ut.ut_user);
 ],
 blb_cv_c_modern_utmp=yes,
 blb_cv_c_modern_utmp=no)])
@@ -670,7 +758,9 @@ AC_CHECK_FUNCS(strdup		\
 	strcasestr		\
 	memrchr			\
 	localtime_r		\
+	getprotobynumber_r	\
 	gmtime_r		\
+	strnlen			\
 	strtok_r)
 old_LIBS=$LIBS
 LIBS=$BASE_LIBS
@@ -678,9 +768,29 @@ AC_CHECK_FUNCS(clock_gettime)
 LIBS=$old_LIBS
 
 dnl ***************************************************************************
-dnl libevtlog headers/libraries
+dnl check inotify
 dnl ***************************************************************************
-PKG_CHECK_MODULES(EVTLOG, eventlog >= $EVTLOG_MIN_VERSION,,)
+AC_CHECK_FUNCS([inotify_init])
+
+dnl ***************************************************************************
+dnl check getrandom
+dnl ***************************************************************************
+AC_CHECK_FUNCS([getrandom])
+
+dnl ***************************************************************************
+dnl libevtlog headers/libraries (remove after relicensing libevtlog)
+dnl ***************************************************************************
+
+EVTLOG_LIBS="\$(top_builddir)/lib/eventlog/src/libevtlog.la"
+EVTLOG_NO_LIBTOOL_LIBS="\$(top_builddir)/lib/eventlog/src/.libs/libevtlog.so"
+EVTLOG_CFLAGS="-I\$(top_srcdir)/lib/eventlog/src -I\$(top_builddir)/lib/eventlog/src"
+
+dnl ***************************************************************************
+dnl secret storage libraries
+dnl ***************************************************************************
+
+SECRETSTORAGE_LIBS="\$(top_builddir)/lib/secret-storage/libsecret-storage.la"
+SECRETSTORAGE_NO_LIBTOOL_LIBS="\$(top_builddir)/lib/secret-storage/.libs/libsecret-storage.so"
 
 dnl ***************************************************************************
 dnl libwrap headers/libraries
@@ -779,7 +889,10 @@ CPPFLAGS="$GLIB_CFLAGS"
 old_LDFLAGS=$LDFLAGS
 LDFLAGS="$LDFLAGS $GLIB_LIBS"
 
-AC_CHECK_FUNCS(g_mapped_file_unref)
+old_LIBS=$LIBS
+LIBS="$LIBS $GLIB_LIBS"
+AC_CHECK_FUNCS(g_list_copy_deep g_queue_free_full g_list_free_full)
+LIBS=$old_LIBS
 
 AC_CACHE_CHECK(sanity checking Glib headers,
                blb_cv_glib_sane,
@@ -826,6 +939,31 @@ if test "x$enable_geoip" = "xyes" || test "x$enable_geoip" = "xauto"; then
 fi
 
 dnl ***************************************************************************
+dnl geoip2 headers/libraries
+dnl ***************************************************************************
+if test "x$enable_geoip2" = "xyes" || test "x$enable_geoip2" = "xauto"; then
+        if test "x$MAXMINDDB_LIBS" != "x"; then
+                AC_MSG_CHECKING([for MAXMINDDB])
+                AC_MSG_RESULT([yes (MAXMINDDB_LIBS set, will use that.)])
+                with_maxminddb="yes"
+        else
+                AC_MSG_CHECKING([for MAXMINDDB])
+                AC_CHECK_LIB(maxminddb, MMDB_open, MAXMINDDB_LIBS="-lmaxminddb"; with_maxminddb="yes", with_maxminddb="no")
+                AC_SUBST(MAXMINDDB_LIBS)
+        fi
+
+        if test "x$with_maxminddb" = "xno" && test "x$enable_geoip2" = "xyes"; then
+                AC_MSG_ERROR([Could not find libmaxminddb, and geoip2 support was explicitly enabled.])
+        fi
+
+        if test "x$with_maxminddb" = "xyes"; then
+                AC_CONFIG_LINKS([modules/geoip2/tests/test.mmdb:modules/geoip2/tests/test.mmdb])
+        fi
+
+        enable_geoip2="$with_maxminddb"
+fi
+
+dnl ***************************************************************************
 dnl pcre headers/libraries
 dnl ***************************************************************************
 
@@ -854,7 +992,7 @@ dnl ***************************************************************************
 #  * TLS support
 
 dnl check OpenSSL static linking
-PKG_CHECK_MODULES(OPENSSL, 
+PKG_CHECK_MODULES(OPENSSL,
                   openssl >= $OPENSSL_MIN_VERSION,,
                   AC_MSG_ERROR(Cannot find OpenSSL libraries with version >= $OPENSSL_MIN_VERSION it is a hard dependency from syslog-ng 3.7 onwards))
 
@@ -871,6 +1009,18 @@ if test -n "$OPENSSL_LIBS" -a "$linking_mode" != "dynamic"; then
 	LIBS=$old_LIBS
 fi
 
+CPPFLAGS_SAVE="$CPPFLAGS"
+CPPFLAGS="$CPPFLAGS $OPENSSL_CFLAGS"
+
+AC_CHECK_DECLS([SSL_CTX_get0_param],[], [], [[#include <openssl/ssl.h>]])
+AC_CHECK_DECLS([X509_STORE_CTX_get0_cert],[], [], [[#include <openssl/ssl.h>]])
+AC_CHECK_DECLS([X509_get_extension_flags], [], [], [[#include <openssl/x509v3.h>]])
+AC_CHECK_DECLS([EVP_MD_CTX_reset], [], [], [[#include <openssl/evp.h>]])
+AC_CHECK_DECLS([ASN1_STRING_get0_data], [], [], [[#include <openssl/asn1.h>]])
+AC_CHECK_DECLS([DH_set0_pqg], [], [], [[#include <openssl/dh.h>]])
+AC_CHECK_DECLS([BN_get_rfc3526_prime_2048], [], [], [[#include <openssl/bn.h>]])
+
+CPPFLAGS="$CPPFLAGS_SAVE"
 
 dnl
 dnl Right now, openssl is never linked statically as it is only used by the
@@ -915,28 +1065,55 @@ if test "x$enable_spoof_source" = "xauto"; then
 		LIBNET_CFLAGS=
 		AC_MSG_RESULT(no)
         fi
-elif test "x$enable_spoof_source" != "xyes"; then
+elif test "x$enable_spoof_source" = "xyes"; then
+  if test "x$LIBNET_LIBS" = "x"; then
+    AC_MSG_ERROR([Could not find libnet, and spoof source support was explicitly enabled.])
+  fi
+elif test "x$enable_spoof_source" = "xno"; then
 	LIBNET_CFLAGS=""
 	LIBNET_LIBS=""
 	enable_spoof_source=no
+else
+  AC_MSG_ERROR([Invalid value ($enable_spoof_source) for enable-spoof-source])
+fi
+
+dnl ***************************************************************************
+dnl Criterion headers/libraries
+dnl ***************************************************************************
+
+PKG_CHECK_MODULES(CRITERION, criterion >= $CRITERION_MIN_VERSION,
+  [with_criterion="system"],
+  [AC_MSG_WARN([pkg-config was not able to find Criterion >= $CRITERION_MIN_VERSION]); with_criterion="no"])
+
+if test "$with_criterion" != "no"; then
+   enable_tests=yes
+else
+  enable_tests=no
 fi
 
 dnl ***************************************************************************
 dnl ivykis headers/libraries
 dnl ***************************************************************************
 
+IVYKIS_INTERNAL_SOURCE_EXISTS="test -f $srcdir/lib/ivykis/src/iv_main_posix.c"
+
+if $IVYKIS_INTERNAL_SOURCE_EXISTS; then
+	AC_CONFIG_SUBDIRS([lib/ivykis])
+	IVYKIS_SUBDIRS=lib/ivykis
+fi
+
+
 INTERNAL_IVYKIS_CFLAGS=""
 if test "x$with_ivykis" = "xinternal"; then
-	if test -f "$srcdir/lib/ivykis/src/iv_main_posix.c"; then
-		AC_CONFIG_SUBDIRS([lib/ivykis])
-
+	if $IVYKIS_INTERNAL_SOURCE_EXISTS; then
 		# these can only be used in lib as it assumes
 		# the current directory just one below ivykis
 
 		IVYKIS_LIBS="-Wl,${WHOLE_ARCHIVE_OPT} -L\$(top_builddir)/lib/ivykis/src -livykis -Wl,${NO_WHOLE_ARCHIVE_OPT}"
-		IVYKIS_CFLAGS="-I\$(top_srcdir)/lib/ivykis/src/include -I\$(top_builddir)/lib/ivykis/src/include"
-		IVYKIS_SUBDIRS=lib/ivykis
-                INTERNAL_IVYKIS_CFLAGS="-I\${includedir}/syslog-ng/ivykis"
+		IVYKIS_CFLAGS="-isystem \$(top_srcdir)/lib/ivykis/src/include -isystem \$(top_builddir)/lib/ivykis/src/include"
+                INTERNAL_IVYKIS_CFLAGS="-isystem \${includedir}/syslog-ng/ivykis"
+
+		IVYKIS_VERSION_UPDATED="yes"
 
 		# LIBS to use when libtool is not applicable (when linking the main syslog-ng executable in mixed linking mode)
 		IVYKIS_NO_LIBTOOL_LIBS="-Wl,${WHOLE_ARCHIVE_OPT} -L\$(top_builddir)/lib/ivykis/src/.libs -livykis -Wl,${NO_WHOLE_ARCHIVE_OPT}"
@@ -946,6 +1123,7 @@ if test "x$with_ivykis" = "xinternal"; then
 else
 	with_ivykis="system"
 	PKG_CHECK_MODULES(IVYKIS, ivykis >= $IVYKIS_MIN_VERSION,,)
+	PKG_CHECK_MODULES(IVYKIS_VERSION_CHECK, ivykis >= $IVYKIS_UPDATED_VERSION, [IVYKIS_VERSION_UPDATED="yes"], [IVYKIS_VERSION_UPDATED="no"])
 
 	# in case we're using a system installed ivykis, we can link against
 	# it even without libtool and without extra linker arguments (as
@@ -997,44 +1175,10 @@ else
 fi
 AC_DEFINE_UNQUOTED(ENABLE_LEGACY_MONGODB_OPTIONS, [$enable_legacy_mongodb_options_bit], [Support libmongo-client non-URI MongoDB options])
 
-if test "x$with_mongoc" = "xauto"; then
-  with_mongoc="system"
-  PKG_CHECK_MODULES(LIBMONGO, libmongoc >= $LMC_MIN_VERSION,,with_mongoc="auto-internal")
-elif test "x$with_mongoc" = "xsystem"; then
-  PKG_CHECK_MODULES(LIBMONGO, libmongoc >= $LMC_MIN_VERSION)
-fi
+PKG_CHECK_MODULES(LIBMONGO, libmongoc-1.0 >= $LMC_MIN_VERSION, with_mongoc="yes", with_mongoc="no")
 
-if test "x$with_mongoc" = "xinternal" || test "x$with_mongoc" = "xauto-internal"; then
-        with_mongoc="internal"
-	if test -f "$srcdir/modules/afmongodb/mongo-c-driver/src/mongoc/mongoc.h"; then
-		AC_CONFIG_SUBDIRS([modules/afmongodb/mongo-c-driver])
-
-		# these can only be used in modules/mongodb as it assumes
-		# the current directory just one below mongo-c-driver
-
-		LIBMONGO_LIBS="\
-			-L\$(top_builddir)/modules/afmongodb/mongo-c-driver \
-			-L\$(top_builddir)/modules/afmongodb/mongo-c-driver/src/libbson \
-			-lmongoc-1.0 -lbson $OPENSSL_LIBS"
-		LIBMONGO_CFLAGS="\
-			-I\$(top_srcdir)/modules/afmongodb/mongo-c-driver/src/mongoc \
-			-I\$(top_srcdir)/modules/afmongodb/mongo-c-driver/src/libbson/src/bson \
-			-I\$(top_builddir)/modules/afmongodb/mongo-c-driver/src/libbson/src/bson \
-			-I\$(top_builddir)/modules/afmongodb/mongo-c-driver/src/mongoc \
-		"
-		LIBMONGO_SUBDIRS="modules/afmongodb/mongo-c-driver"
-		AC_CHECK_LIB(sasl2, prop_get, LIBMONGO_LIBS="$LIBMONGO_LIBS -lsasl2")
-	else
-		AC_MSG_WARN([Internal mongo-c-driver sources not found in modules/afmongodb/mongo-c-driver])
-		with_mongoc="no"
-	fi
-fi
-
-if test "x$with_mongoc" = "xno"; then
-   if test "x$enable_mongodb" = "xyes"; then
-      AC_MSG_ERROR([Could not find mongo-c-driver, and MongoDB support was explicitly enabled.])
-   fi
-   enable_mongodb="no"
+if test "x$with_mongoc" = "xno" && test "x$enable_mongodb" = "xyes"; then
+   AC_MSG_ERROR([Could not find mongo-c-driver, and MongoDB support was explicitly enabled.])
 fi
 
 dnl ***************************************************************************
@@ -1133,45 +1277,12 @@ dnl ***************************************************************************
 dnl rabbitmq-c headers/libraries
 dnl ***************************************************************************
 
-if test "x$with_librabbitmq_client" = "xinternal"; then
-    PYTHON_VERSION=`python -V 2>&1 | cut -d ' ' -f 2`
-    PYTHON_MAJOR=`echo $PYTHON_VERSION | cut -d '.' -f 1`
-    PYTHON_MINOR=`echo $PYTHON_VERSION | cut -d '.' -f 2`
-    if test ${PYTHON} = "" || test $PYTHON_MAJOR -eq 2 && test $PYTHON_MINOR -lt 5; then
-        AC_MSG_WARN([Was about to execute rabbitmq configure script, but that requires Python >= 2.5, which you don't seem to have, disabling rabbitmq])
-        with_librabbitmq_client=no
-    fi
+PKG_CHECK_MODULES(LIBRABBITMQ, librabbitmq >= $LIBRABBITMQ_MIN_VERSION, with_librabbitmq_client="yes", with_librabbitmq_client="no")
+
+if test "$enable_amqp" = "yes" && test "$with_librabbitmq_client" = "no"; then
+       AC_MSG_ERROR([Could not find librabbitmq-c, and AMQP support was explicitly enabled.])
 fi
 
-if test "x$with_librabbitmq_client" = "xinternal"; then
-    if test -f "$srcdir/modules/afamqp/rabbitmq-c/librabbitmq/amqp.h"; then
-        AC_CONFIG_SUBDIRS([modules/afamqp/rabbitmq-c])
-        # these can only be used in modules/amqp as it assumes
-        # the current directory just one below rabbitmq-c
-
-        LIBRABBITMQ_LIBS="-L\$(top_builddir)/modules/afamqp/rabbitmq-c/librabbitmq -lrabbitmq"
-        LIBRABBITMQ_CFLAGS="-I\$(top_srcdir)/modules/afamqp/rabbitmq-c/librabbitmq -I\$(top_builddir)/modules/afamqp/rabbitmq-c/librabbitmq"
-        LIBRABBITMQ_SUBDIRS="modules/afamqp/rabbitmq-c"
-    else
-        AC_MSG_WARN([Internal librabbitmq-client sources not found in modules/afamqp/rabbitmq-c])
-        with_librabbitmq_client="no"
-    fi
-elif test "x$with_librabbitmq_client" = "xsystem"; then
-    PKG_CHECK_MODULES(LIBRABBITMQ, librabbitmq >= $LIBRABBITMQ_MIN_VERSION, , enable_amqp = "no")
-fi
-
-if test "x$with_librabbitmq_client" = "xno"; then
-    if test "x$enable_amqp" = "xyes"; then
-      AC_MSG_ERROR([Could not find librabbitmq-client, and AMQP support was explicitly enabled.])
-    fi
-    enable_amqp="no"
-    LIBRABBITMQ_SUBDIRS=""
-fi
-
-if test "x$enable_amqp" = "xno"; then
-   with_librabbitmq_client="no"
-   LIBRABBITMQ_SUBDIRS=""
-fi
 
 if test "x$enable_native" = "xyes" -o "x$enable_native" = "xauto"; then
     AC_CONFIG_FILES([syslog-ng-native-connector.pc])
@@ -1190,17 +1301,37 @@ if test "$enable_riemann" != "no"; then
  else
    enable_riemann="yes";
  fi
+
+ if test "$enable_riemann" = "yes"; then
+
+    old_CFLAGS=$CFLAGS
+    CFLAGS=`pkg-config --cflags riemann-client`
+    AC_CHECK_DECLS(RIEMANN_EVENT_FIELD_TIME_MICROS, [riemann_micros="yes"], [riemann_micros="no"], [[#include <riemann/event.h>]])
+    CFLAGS=$old_CFLAGS
+ fi
 fi
+
+dnl ***************************************************************************
+dnl libsystemd headers/libraries
+dnl ***************************************************************************
+
+PKG_CHECK_MODULES(libsystemd, libsystemd >= ${LIBSYSTEMD_MIN_VERSION},
+                  have_libsystemd="yes", have_libsystemd="no")
 
 dnl ***************************************************************************
 dnl python checks
 dnl ***************************************************************************
 if test "x$enable_python" != "xno"; then
-  if test "x$with_python" != "xauto"; then
+  if test "x$with_python" = "xauto"; then
+    PKG_CHECK_MODULES(PYTHON, python3, python_found="yes", python_found="no")
+    if test "$python_found" = "no"; then
+      PKG_CHECK_MODULES(PYTHON, python2, python_found="yes", python_found="no")
+      if test "$python_found" = "no"; then
+        PKG_CHECK_MODULES(PYTHON, python, python_found="yes", python_found="no")
+      fi
+    fi
+  else
     case "$with_python" in
-      auto)
-          with_python="python"
-          ;;
       [[0-9]])
           with_python="python${with_python}"
           ;;
@@ -1208,15 +1339,21 @@ if test "x$enable_python" != "xno"; then
           with_python="python-${with_python}"
           ;;
     esac
-  else
-    with_python="python"
+
+    PKG_CHECK_MODULES(PYTHON, $with_python, python_found="yes", python_found="no")
   fi
 
-  PKG_CHECK_MODULES(PYTHON, $with_python >= 2.6, python_found="yes", python_found="no")
+  if test "x$python_found" = "xyes"; then
+    old_LIBS=$LIBS
+    LIBS="$LIBS $PYTHON_LIBS"
+    AC_CHECK_FUNCS(PyUnicode_AsUTF8, with_python=python3, with_python=python2)
+    LIBS=$old_LIBS
+  fi
+
   if test "x$enable_python" = "xyes" -a "x$python_found" = "xno"; then
     AC_MSG_ERROR([Could not find the requested Python development libraries])
   fi
-  enable_python="$python_found" 
+  enable_python="$python_found"
 else
   with_python=""
 fi
@@ -1263,8 +1400,7 @@ AC_MSG_CHECKING(whether to enable Sun STREAMS support)
 if test "x$ac_cv_header_stropts_h" = "xyes" -a \
         "x$ac_cv_header_sys_strlog_h" = "xyes" -a \
         "x$enable_sun_streams" != "xno" -a \
-        "x$blb_cv_c_i_conslog" != "xno" -o \
-        "x$enable_sun_streams" = "xyes"; then
+        "x$blb_cv_c_i_conslog" != "xno"; then
         enable_sun_streams=yes
         AC_MSG_RESULT(yes)
 else
@@ -1272,6 +1408,18 @@ else
         AC_MSG_RESULT(no)
 fi
 
+AC_MSG_CHECKING(whether to enable OpenBSD system source support)
+if test "x$enable_openbsd_system_source" = "xyes"; then
+        enable_openbsd_system_source="yes"
+        AC_MSG_RESULT(yes)
+elif test "x$enable_openbsd_system_source" = "xauto" -a \
+        "$ostype" = "OpenBSD" ; then
+        enable_openbsd_system_source="yes"
+        AC_MSG_RESULT(yes)
+else
+        enable_openbsd_system_source="no"
+        AC_MSG_RESULT(no)
+fi
 
 if test "x$enable_env_wrapper" = "xauto"; then
 	if test "x$env_ld_library_path" != "x"; then
@@ -1294,17 +1442,23 @@ fi
 
 
 if test "x$enable_linux_caps" = "xyes" -o "x$enable_linux_caps" = "xauto"; then
-        if test "x$ac_cv_header_sys_capability_h" = "xyes"; then
-                AC_CHECK_LIB(cap, cap_set_proc, LIBCAP_LIBS="-lcap"; has_linux_caps="yes", has_linux_caps="no")
-        else
-                has_linux_caps="no"
+        PKG_CHECK_MODULES(LIBCAP, libcap, has_linux_caps="yes", has_linux_caps="no")
+
+        if test "x$has_linux_caps" = "xno"; then
+                if test "x$ac_cv_header_sys_capability_h" = "xyes"; then
+                        AC_CHECK_LIB(cap, cap_set_proc, LIBCAP_LIBS="-lcap"; has_linux_caps="yes", has_linux_caps="no")
+                else
+                        has_linux_caps="no"
+                fi
+                AC_MSG_CHECKING(whether to enable Linux capability support)
+                AC_MSG_RESULT([$has_linux_caps])
         fi
-        AC_MSG_CHECKING(whether to enable Linux capability support)
-        AC_MSG_RESULT([$has_linux_caps])
 
         if test "x$enable_linux_caps" = "xyes" -a "x$has_linux_caps" = "xno"; then
            AC_MSG_ERROR([Cannot enable Linux capability support.])
         fi
+
+        enable_linux_caps="$has_linux_caps"
 fi
 
 if test "x$enable_mongodb" = "xauto"; then
@@ -1327,8 +1481,9 @@ if test "x$enable_amqp" = "xauto"; then
     AC_MSG_RESULT([$enable_amqp])
 fi
 
+
 if test "x$enable_systemd" = "xauto"; then
-	if test "$ostype" = "Linux" -a "$blb_cv_c_so_acceptconn" = "yes"; then
+	if test "$ostype" = "Linux" -a "$have_libsystemd" = "yes"; then
 		enable_systemd=yes
 	else
 		enable_systemd=no
@@ -1343,8 +1498,6 @@ if test "x$enable_systemd" != "xyes"; then
 fi
 
 if test "x$enable_systemd" = "xyes"; then
-        PKG_CHECK_MODULES(libsystemd, libsystemd >= ${LIBSYSTEMD_MIN_VERSION},
-                          have_libsystemd="yes", have_libsystemd="no")
 
         if test "x$with_systemdsystemunitdir" = "xyes"; then
 		# no arguments, just --with-systemdsystemunitdir
@@ -1387,6 +1540,11 @@ dnl ***************************************************************************
 AC_VAR_TIMEZONE_EXTERNALS
 
 dnl ***************************************************************************
+dnl check fmemopen
+dnl ***************************************************************************
+AC_CHECK_FUNCS([fmemopen])
+
+dnl ***************************************************************************
 dnl default modules to be loaded
 dnl ***************************************************************************
 
@@ -1402,7 +1560,7 @@ if test "x$module_path" = "x"; then
 	java_module_path="$moduledir"/java-modules
 fi
 
-CPPFLAGS="$CPPFLAGS $GLIB_CFLAGS $EVTLOG_CFLAGS $PCRE_CFLAGS $OPENSSL_CFLAGS $LIBNET_CFLAGS $LIBDBI_CFLAGS $IVYKIS_CFLAGS -D_GNU_SOURCE -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64"
+CPPFLAGS="$CPPFLAGS $GLIB_CFLAGS $EVTLOG_CFLAGS $PCRE_CFLAGS $OPENSSL_CFLAGS $LIBNET_CFLAGS $LIBDBI_CFLAGS $IVYKIS_CFLAGS $LIBCAP_CFLAGS -D_GNU_SOURCE -D_DEFAULT_SOURCE -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64"
 
 ########################################################
 ## NOTES: on how syslog-ng is linked
@@ -1450,7 +1608,7 @@ fi
 MODULE_DEPS_LIBS="\$(top_builddir)/lib/libsyslog-ng.la"
 
 if test "x$linking_mode" = "xdynamic"; then
-	SYSLOGNG_DEPS_LIBS="$LIBS $BASE_LIBS $GLIB_LIBS $EVTLOG_LIBS $RESOLV_LIBS $LIBCAP_LIBS $PCRE_LIBS $REGEX_LIBS $DL_LIBS"
+	SYSLOGNG_DEPS_LIBS="$LIBS $BASE_LIBS $GLIB_LIBS $EVTLOG_LIBS $SECRETSTORAGE_LIBS $RESOLV_LIBS $LIBCAP_LIBS $PCRE_LIBS $REGEX_LIBS $DL_LIBS"
 
 	if test "x$with_ivykis" = "xinternal"; then
 		# when using the internal ivykis, we're linking it statically into libsyslog-ng.so
@@ -1469,8 +1627,8 @@ if test "x$linking_mode" = "xdynamic"; then
 	# syslog-ng binary is linked with the default link command (e.g. libtool)
 	SYSLOGNG_LINK='$(LINK)'
 else
-	SYSLOGNG_DEPS_LIBS="$LIBS $BASE_LIBS $RESOLV_LIBS $LD_START_STATIC -Wl,${WHOLE_ARCHIVE_OPT} $GLIB_LIBS $EVTLOG_LIBS $PCRE_LIBS $REGEX_LIBS  -Wl,${NO_WHOLE_ARCHIVE_OPT} $IVYKIS_NO_LIBTOOL_LIBS $LD_END_STATIC $LIBCAP_LIBS $DL_LIBS "
-	TOOL_DEPS_LIBS="$LIBS $BASE_LIBS $GLIB_LIBS $EVTLOG_LIBS $RESOLV_LIBS $LIBCAP_LIBS $PCRE_LIBS $REGEX_LIBS $IVYKIS_LIBS $DL_LIBS"
+	SYSLOGNG_DEPS_LIBS="$LIBS $BASE_LIBS $RESOLV_LIBS $EVTLOG_NO_LIBTOOL_LIBS $SECRETSTORAGE_NO_LIBTOOL_LIBS $LD_START_STATIC -Wl,${WHOLE_ARCHIVE_OPT} $GLIB_LIBS $PCRE_LIBS $REGEX_LIBS  -Wl,${NO_WHOLE_ARCHIVE_OPT} $IVYKIS_NO_LIBTOOL_LIBS $LD_END_STATIC $LIBCAP_LIBS $DL_LIBS"
+	TOOL_DEPS_LIBS="$LIBS $BASE_LIBS $GLIB_LIBS $EVTLOG_LIBS $SECRETSTORAGE_LIBS $RESOLV_LIBS $LIBCAP_LIBS $PCRE_LIBS $REGEX_LIBS $IVYKIS_LIBS $DL_LIBS"
 	CORE_DEPS_LIBS=""
 
 	# bypass libtool in case we want to do mixed linking because it
@@ -1503,7 +1661,6 @@ AC_DEFINE_UNQUOTED(JOURNALD_OFF, 0, ["Disable systemd-journal source"])
 AC_DEFINE_UNQUOTED(JOURNALD_OPTIONAL, 1, ["Enable systemd-journal source if journald is available"])
 AC_DEFINE_UNQUOTED(JOURNALD_SYSTEM, 2, ["Force systemd-journal source to use system's journald"])
 
-AC_DEFINE_UNQUOTED(PACKAGE_NAME, "$PACKAGE_NAME", [package name])
 AC_DEFINE_UNQUOTED(VERSION, "$PACKAGE_VERSION", [version number])
 AC_DEFINE_UNQUOTED(SOURCE_REVISION, "$SOURCE_REVISION", [source revision])
 AC_DEFINE_UNQUOTED(LICENSE_VERSION, "$LICENSE_VERSION", [Required license version])
@@ -1527,12 +1684,15 @@ if test -n "$env_ld_library_path"; then
         AC_DEFINE_UNQUOTED(ENV_LD_LIBRARY_PATH, "$env_ld_library_path", [set LD_LIBRARY_PATH to this value])
 fi
 AC_DEFINE_UNQUOTED(PATH_MODULEDIR, "$moduledir", [module installation directory])
+AC_DEFINE_UNQUOTED(PATH_LOGGENPLUGINDIR, "$loggenplugindir", [loggenplugin installation directory])
 AC_DEFINE_UNQUOTED(MODULE_PATH, "$module_path", [module search path])
 AC_DEFINE_UNQUOTED(JAVA_MODULE_PATH, "$java_module_path", [java module search path])
-
+AC_DEFINE_UNQUOTED(PATH_TOPSRC_DIR, "$abs_topsrcdir", [self-defined top_srcdir path])
+AC_DEFINE_UNQUOTED(PACKAGE_NAME, "$PACKAGE_NAME", [package name])
 
 
 AC_DEFINE_UNQUOTED(WITH_COMPILE_DATE, $wcmp_date, [Include the compile date in the binary])
+AC_DEFINE_UNQUOTED(ENABLE_FORCED_SERVER_MODE, `enable_value $enable_forced_server_mode`, [Enable forced server mode])
 AC_DEFINE_UNQUOTED(ENABLE_DEBUG, `enable_value $enable_debug`, [Enable debugging])
 AC_DEFINE_UNQUOTED(ENABLE_LIBUUID, `enable_value $enable_libuuid`, [Enable libuuid support])
 AC_DEFINE_UNQUOTED(ENABLE_GPROF, `enable_value $enable_gprof`, [Enable gcc profiling])
@@ -1544,13 +1704,19 @@ AC_DEFINE_UNQUOTED(ENABLE_LINUX_CAPS, `enable_value $enable_linux_caps`, [Enable
 AC_DEFINE_UNQUOTED(ENABLE_ENV_WRAPPER, `enable_value $enable_env_wrapper`, [Enable environment wrapper support])
 AC_DEFINE_UNQUOTED(ENABLE_SYSTEMD, `enable_value $enable_systemd`, [Enable systemd support])
 AC_DEFINE_UNQUOTED(SYSTEMD_JOURNAL_MODE, `journald_mode`, [Systemd-journal support mode])
-
+AC_DEFINE_UNQUOTED(HAVE_INOTIFY, `enable_value $ac_cv_func_inotify_init`, [Have inotify])
+AC_DEFINE_UNQUOTED(HAVE_GETRANDOM, `enable_value $ac_cv_func_getrandom`, [Have getrandom])
+AC_DEFINE_UNQUOTED(ENABLE_PYTHONv2, `(echo "$with_python" | grep -Eq "python-?2.*") && echo 1 || echo 0`, [Python2 c api])
+AC_DEFINE_UNQUOTED(ENABLE_PYTHONv3, `(echo "$with_python" | grep -Eq "python-?3.*") && echo 1 || echo 0`, [Python3 c api])
+AC_DEFINE_UNQUOTED(HAVE_RIEMANN_MICROSECONDS, `enable_value $riemann_micros`, [Riemann microseconds support])
+AC_DEFINE_UNQUOTED(USE_CONST_IVYKIS_MOCK, `enable_value $IVYKIS_VERSION_UPDATED`, [ivykis version is greater than $IVYKIS_UPDATED_VERSION])
 
 AM_CONDITIONAL(ENABLE_ENV_WRAPPER, [test "$enable_env_wrapper" = "yes"])
 AM_CONDITIONAL(ENABLE_SYSTEMD, [test "$enable_systemd" = "yes"])
 AM_CONDITIONAL(ENABLE_SYSTEMD_UNIT_INSTALL, [test "$systemdsystemunitdir" != ""])
 AM_CONDITIONAL(ENABLE_SQL, [test "$enable_sql" = "yes"])
 AM_CONDITIONAL(ENABLE_SUN_STREAMS, [test "$enable_sun_streams" = "yes"])
+AM_CONDITIONAL(ENABLE_OPENBSD_SYSTEM_SOURCE, [test "$enable_openbsd_system_source" = "yes"])
 AM_CONDITIONAL(ENABLE_PACCT, [test "$enable_pacct" = "yes"])
 AM_CONDITIONAL(ENABLE_MONGODB, [test "$enable_mongodb" = "yes"])
 AM_CONDITIONAL(ENABLE_SMTP, [test "$enable_smtp" = "yes"])
@@ -1559,11 +1725,12 @@ AM_CONDITIONAL(ENABLE_AMQP, [test "$enable_amqp" = "yes"])
 AM_CONDITIONAL(ENABLE_STOMP, [test "$enable_stomp" = "yes"])
 AM_CONDITIONAL(ENABLE_JSON, [test "$enable_json" = "yes"])
 AM_CONDITIONAL(ENABLE_GEOIP, [test "$enable_geoip" = "yes"])
+AM_CONDITIONAL(ENABLE_GEOIP2, [test "$enable_geoip2" = "yes"])
 AM_CONDITIONAL(ENABLE_REDIS, [test "$enable_redis" = "yes"])
-AM_CONDITIONAL(IVYKIS_INTERNAL, [test "x$IVYKIS_SUBDIRS" != "x"])
+AM_CONDITIONAL(IVYKIS_INTERNAL, [test "x$with_ivykis" = "xinternal"])
 AM_CONDITIONAL(JSON_INTERNAL, [test "x$JSON_SUBDIRS" != "x"])
 AM_CONDITIONAL(LIBMONGO_INTERNAL, [test "x$LIBMONGO_SUBDIRS" != "x"])
-AM_CONDITIONAL(LIBRABBITMQ_INTERNAL, [test "x$LIBRABBITMQ_SUBDIRS" != "x"])
+AM_CONDITIONAL(LIBRABBITMQ_INTERNAL, [test "x$with_librabbitmq_client" = "xinternal"])
 AM_CONDITIONAL(ENABLE_RIEMANN, [test "$enable_riemann" != "no"])
 AM_CONDITIONAL(ENABLE_JOURNALD, [test "$with_systemd_journal" != "no"])
 AM_CONDITIONAL(ENABLE_PYTHON, [test "$enable_python" != "no"])
@@ -1573,13 +1740,20 @@ AM_CONDITIONAL(ENABLE_MANPAGES, [test "$enable_manpages" != "no"])
 AM_CONDITIONAL(ENABLE_NATIVE, [test "$enable_native" != "no"])
 AM_CONDITIONAL(ENABLE_EXTRA_WARNINGS, [test "$enable_extra_warnings" = "yes"])
 AM_CONDITIONAL(ENABLE_LEGACY_MONGODB_OPTIONS, [test x"$enable_legacy_mongodb_options" != x"no"])
+AM_CONDITIONAL(ENABLE_TESTING, [test "$enable_tests" != "no"])
+AM_CONDITIONAL([HAVE_INOTIFY], [test x$ac_cv_func_inotify_init = xyes])
+AM_CONDITIONAL([HAVE_GETRANDOM], [test x$ac_cv_func_getrandom = xyes])
+AM_CONDITIONAL([HAVE_FMEMOPEN], [test x$ac_cv_func_fmemopen = xyes])
+AM_CONDITIONAL(ENABLE_IPV6, [test $enable_ipv6 = yes])
 
 AC_SUBST(timezonedir)
 AC_SUBST(pidfiledir)
 AC_SUBST(moduledir)
+AC_SUBST(loggenplugindir)
 AC_SUBST(toolsdir)
 AC_SUBST(config_includedir)
 AC_SUBST(scldir)
+AC_SUBST(abs_topsrcdir)
 AC_SUBST(xsddir)
 AC_SUBST(systemdsystemunitdir)
 AC_SUBST(SYSLOGNG_LINK)
@@ -1614,7 +1788,6 @@ AC_SUBST(JSON_SUBDIRS)
 AC_SUBST(JSON_DEPENDENCY)
 AC_SUBST(IVYKIS_SUBDIRS)
 AC_SUBST(RESOLV_LIBS)
-AC_SUBST(CFLAGS_NOWARN_POINTER_SIGN)
 AC_SUBST(UUID_CFLAGS)
 AC_SUBST(UUID_LIBS)
 
@@ -1641,6 +1814,11 @@ AC_OUTPUT(dist.conf
 
 echo
 echo "syslog-ng Open Source Edition $PACKAGE_VERSION configured"
+echo " Edition settings:"
+echo "  Release type                : $RELEASE_TYPE"
+echo "  Pretty version              : $BROCHURE_VERSION"
+echo "  Combined vers.              : $COMBINED_VERSION"
+echo "  Package name                : $PACKAGE_NAME"
 echo " Compiler options:"
 echo "  compiler                    : $CC"
 echo "  compiler options            : $CFLAGS $CPPFLAGS"
@@ -1649,12 +1827,14 @@ echo "  prefix                      : $prefix"
 echo "  linking mode                : $linking_mode"
 echo "  embedded crypto             : ${with_embedded_crypto:=no}"
 echo "  __thread keyword            : ${ac_cv_have_tls:=no}"
+echo " Test dependencies:"
+echo "  Criterion                   : ${with_criterion:=no}"
+echo "  Unit tests                  : ${enable_tests:=no}"
 echo " Submodules:"
 echo "  ivykis                      : $with_ivykis"
-echo "  mongoc                      : $with_mongoc"
-echo "  librabbitmq                 : $with_librabbitmq_client"
 echo "  jsonc                       : $with_jsonc"
 echo " Features:"
+echo "  Forced server mode          : ${enable_forced_server_mode:=yes}"
 echo "  Debug symbols               : ${enable_debug:=no}"
 echo "  GCC profiling               : ${enable_gprof:=no}"
 echo "  Memtrace                    : ${enable_memtrace:=no}"
@@ -1669,6 +1849,7 @@ echo "  libmongo-client options     : ${enable_legacy_mongodb_options}"
 echo " Modules:"
 echo "  Module search path          : ${module_path}"
 echo "  Sun STREAMS support (module): ${enable_sun_streams:=no}"
+echo "  OpenBSD syslog (module)     : ${enable_openbsd_system_source:=no}"
 echo "  SQL support (module)        : ${enable_sql:=no}"
 echo "  PACCT module (EXPERIMENTAL) : ${enable_pacct:=no}"
 echo "  MongoDB destination (module): ${enable_mongodb:=no}"
@@ -1678,8 +1859,9 @@ echo "  HTTP support (module)       : ${enable_http:=no}"
 echo "  AMQP destination (module)   : ${enable_amqp:=no}"
 echo "  STOMP destination (module)  : ${enable_stomp:=no}"
 echo "  GEOIP support (module)      : ${enable_geoip:=no}"
+echo "  GEOIP2 support (module)     : ${enable_geoip2:=no}"
 echo "  Redis support (module)      : ${enable_redis:=no}"
-echo "  Riemann destination (module): ${enable_riemann:=no}"
+echo "  Riemann destination (module): ${enable_riemann:=no}, microseconds: ${riemann_micros:=no}"
 echo "  python                      : ${enable_python:=no} (pkg-config package: ${with_python:=none})"
 echo "  java                        : ${enable_java:=no}"
 echo "  java modules                : ${enable_java_modules:=no}"

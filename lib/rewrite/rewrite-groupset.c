@@ -37,7 +37,7 @@ log_rewrite_groupset_foreach_func(const gchar *name, TypeHint type,
                                   const gchar *value, gsize value_len,
                                   gpointer user_data)
 {
-  LogRewriteGroupSetCallbackData *callback_data = (LogRewriteGroupSetCallbackData*) user_data;
+  LogRewriteGroupSetCallbackData *callback_data = (LogRewriteGroupSetCallbackData *) user_data;
   LogMessage *msg = callback_data->msg;
   LogTemplate *template = callback_data->template;
   GString *result;
@@ -53,14 +53,30 @@ log_rewrite_groupset_foreach_func(const gchar *name, TypeHint type,
   return FALSE;
 }
 
+static gboolean
+log_rewrite_groupunset_foreach_func(const gchar *name, TypeHint type,
+                                    const gchar *value, gsize value_len,
+                                    gpointer user_data)
+{
+  LogRewriteGroupSetCallbackData *callback_data = (LogRewriteGroupSetCallbackData *) user_data;
+  LogMessage *msg = callback_data->msg;
+
+  NVHandle handle = log_msg_get_value_handle(name);
+  log_msg_unset_value(msg, handle);
+  return FALSE;
+}
+
 static void
 log_rewrite_groupset_process(LogRewrite *s, LogMessage **msg, const LogPathOptions *path_options)
 {
   LogRewriteGroupSet *self = (LogRewriteGroupSet *) s;
+  GlobalConfig *cfg = log_pipe_get_config(&s->super);
   LogRewriteGroupSetCallbackData userdata;
+
+  log_msg_make_writable(msg, path_options);
   userdata.msg = *msg;
   userdata.template = self->replacement;
-  value_pairs_foreach(self->query, log_rewrite_groupset_foreach_func, *msg, 0, LTZ_LOCAL, NULL, &userdata);
+  value_pairs_foreach(self->query, self->vp_func, *msg, 0, LTZ_LOCAL, &cfg->template_options, &userdata);
 }
 
 static void
@@ -85,15 +101,17 @@ log_rewrite_groupset_add_fields(LogRewrite *rewrite, GList *fields)
 static LogPipe *
 log_rewrite_groupset_clone(LogPipe *s)
 {
-   LogRewriteGroupSet *self = (LogRewriteGroupSet *) s;
-   LogRewriteGroupSet *cloned = (LogRewriteGroupSet *)log_rewrite_groupset_new(self->replacement, log_pipe_get_config(&self->super.super) );
-   value_pairs_unref(cloned->query);
-   cloned->query = value_pairs_ref(self->query);
+  LogRewriteGroupSet *self = (LogRewriteGroupSet *) s;
+  LogRewriteGroupSet *cloned = (LogRewriteGroupSet *)log_rewrite_groupset_new(self->replacement,
+      log_pipe_get_config(&self->super.super) );
+  value_pairs_unref(cloned->query);
+  cloned->query = value_pairs_ref(self->query);
+  cloned->vp_func = self->vp_func;
 
-   if (self->super.condition)
-     cloned->super.condition = filter_expr_ref(self->super.condition);
+  if (self->super.condition)
+    cloned->super.condition = filter_expr_ref(self->super.condition);
 
-   return &cloned->super.super;
+  return &cloned->super.super;
 };
 
 void
@@ -118,6 +136,15 @@ log_rewrite_groupset_new(LogTemplate *template, GlobalConfig *cfg)
 
   self->replacement = log_template_ref(template);
   self->query = value_pairs_new();
+  self->vp_func = log_rewrite_groupset_foreach_func;
 
+  return &self->super;
+}
+
+LogRewrite *
+log_rewrite_groupunset_new(GlobalConfig *cfg)
+{
+  LogRewriteGroupSet *self = (LogRewriteGroupSet *)log_rewrite_groupset_new(NULL, cfg);
+  self->vp_func = log_rewrite_groupunset_foreach_func;
   return &self->super;
 }

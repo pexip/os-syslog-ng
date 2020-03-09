@@ -7,7 +7,10 @@ modules_geoip_libgeoip_plugin_la_SOURCES=	\
 	modules/geoip/geoip-parser-grammar.y	\
 	modules/geoip/geoip-parser-parser.c	\
 	modules/geoip/geoip-parser-parser.h	\
-	modules/geoip/geoip-plugin.c
+	modules/geoip/geoip-plugin.c		\
+	modules/geoip/geoip-helper.h		\
+	modules/geoip/geoip-helper.c
+
 modules_geoip_libgeoip_plugin_la_CPPFLAGS	=	\
 	$(AM_CPPFLAGS)					\
 	-I$(top_srcdir)/modules/geoip			\
@@ -34,7 +37,8 @@ BUILT_SOURCES					+=	\
 	modules/geoip/geoip-parser-grammar.h
 EXTRA_DIST					+=	\
 	modules/geoip/geoip-parser-grammar.ym		\
-	modules/geoip/tfgeoip.c
+	modules/geoip/tfgeoip.c	\
+	modules/geoip/CMakeLists.txt
 
 .PHONY: modules/geoip/ mod-geoip
 

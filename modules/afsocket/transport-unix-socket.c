@@ -34,16 +34,16 @@
 #include <errno.h>
 #include <unistd.h>
 
-static void
+static void G_GNUC_UNUSED
 _add_nv_pair_int(LogTransportAuxData *aux, const gchar *name, gint value)
 {
-  SBGString *sbbuf = sb_gstring_acquire();
-  GString *buf = sb_gstring_string(sbbuf);
-  
+  ScratchBuffersMarker marker;
+  GString *buf = scratch_buffers_alloc_and_mark(&marker);
+
   g_string_truncate(buf, 0);
   format_uint32_padded(buf, -1, 0, 10, value);
   log_transport_aux_data_add_nv_pair(aux, name, buf->str);
-  sb_gstring_release(sbbuf);
+  scratch_buffers_reclaim_marked(marker);
 }
 
 static void
@@ -63,7 +63,7 @@ _read_text_file_content(const gchar *filename, gchar *buf, gsize buflen)
   if (fd < 0)
     return -1;
   rc = 1;
-  
+
   /* this loop leaves the last character of buf untouched, thus -1 in the
    * condition and the number of bytes to be read */
   while (rc > 0 && pos < buflen - 1)
@@ -89,7 +89,7 @@ static gssize
 _read_text_file_content_without_trailing_newline(const gchar *filename, gchar *buf, gsize buflen)
 {
   gssize content_len;
-  
+
   content_len = _read_text_file_content(filename, buf, buflen);
   if (content_len <= 0)
     return content_len;
@@ -100,8 +100,9 @@ _read_text_file_content_without_trailing_newline(const gchar *filename, gchar *b
 }
 
 
-static void
-_add_nv_pair_proc_read_unless_unset(LogTransportAuxData *aux, const gchar *name, pid_t pid, const gchar *proc_file, const gchar *unset_value)
+static void G_GNUC_UNUSED
+_add_nv_pair_proc_read_unless_unset(LogTransportAuxData *aux, const gchar *name, pid_t pid, const gchar *proc_file,
+                                    const gchar *unset_value)
 {
   gchar filename[64];
   gchar content[4096];
@@ -113,7 +114,7 @@ _add_nv_pair_proc_read_unless_unset(LogTransportAuxData *aux, const gchar *name,
     log_transport_aux_data_add_nv_pair(aux, name, content);
 }
 
-static void
+static void G_GNUC_UNUSED
 _add_nv_pair_proc_read_argv(LogTransportAuxData *aux, const gchar *name, pid_t pid, const gchar *proc_file)
 {
   gchar filename[64];
@@ -123,7 +124,7 @@ _add_nv_pair_proc_read_argv(LogTransportAuxData *aux, const gchar *name, pid_t p
 
   _format_proc_file_name(filename, sizeof(filename), pid, proc_file);
   content_len = _read_text_file_content(filename, content, sizeof(content));
-  
+
   for (i = 0; i < content_len; i++)
     {
       if (!g_ascii_isprint(content[i]))
@@ -133,7 +134,7 @@ _add_nv_pair_proc_read_argv(LogTransportAuxData *aux, const gchar *name, pid_t p
     log_transport_aux_data_add_nv_pair(aux, name, content);
 }
 
-static void
+static void G_GNUC_UNUSED
 _add_nv_pair_proc_readlink(LogTransportAuxData *aux, const gchar *name, pid_t pid, const gchar *proc_file)
 {
   gchar filename[64];
@@ -188,7 +189,7 @@ _feed_credentials_from_cmsg(LogTransportAuxData *aux, struct msghdr *msg)
 #if defined(CRED_PASS_SUPPORTED)
   struct cmsghdr *cmsg;
 
-  for (cmsg = CMSG_FIRSTHDR(msg); cmsg != NULL; cmsg = CMSG_NXTHDR(msg, cmsg)) 
+  for (cmsg = CMSG_FIRSTHDR(msg); cmsg != NULL; cmsg = CMSG_NXTHDR(msg, cmsg))
     {
       if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_CREDENTIALS)
         {
@@ -239,7 +240,7 @@ _unix_socket_read(gint fd, gpointer buf, gsize buflen, LogTransportAuxData *aux)
     {
       if (msg.msg_namelen && aux)
         log_transport_aux_data_set_peer_addr_ref(aux, g_sockaddr_new((struct sockaddr *) &ss, msg.msg_namelen));
-        
+
       _feed_aux_from_cmsg(aux, &msg);
     }
 

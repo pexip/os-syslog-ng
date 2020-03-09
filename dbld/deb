@@ -1,0 +1,21 @@
+#!/bin/bash
+
+set -e
+
+cd /source
+VERSION=`cat VERSION`
+GITREF=`git describe`
+cd /build
+
+rm -rf syslog-ng-${VERSION}
+tar xf syslog-ng-${VERSION}.tar.gz
+cp syslog-ng-${VERSION}.tar.gz syslog-ng_${VERSION}.orig.tar.gz
+cd syslog-ng-${VERSION}
+
+if [ ! -d debian ]; then
+	echo "You have no Debian packaging in debian/, this should already by in the tarball at this point"
+	exit 1
+fi
+dpkg-buildpackage -rfakeroot -d
+
+echo "Your debs are in /build, also available on the host in \$(top_srcdir)/dbld/build"

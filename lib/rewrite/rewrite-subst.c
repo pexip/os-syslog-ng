@@ -58,7 +58,8 @@ log_rewrite_subst_process(LogRewrite *s, LogMessage **pmsg, const LogPathOptions
   value = log_msg_get_value(*pmsg, self->super.value_handle, &length);
 
   log_msg_make_writable(pmsg, path_options);
-  new_value = log_matcher_replace(self->matcher, *pmsg, self->super.value_handle, value, length, self->replacement, &new_length);
+  new_value = log_matcher_replace(self->matcher, *pmsg, self->super.value_handle, value, length, self->replacement,
+                                  &new_length);
   if (new_value)
     {
       log_msg_set_value(*pmsg, self->super.value_handle, new_value, new_length);
@@ -69,15 +70,16 @@ log_rewrite_subst_process(LogRewrite *s, LogMessage **pmsg, const LogPathOptions
 gboolean
 log_rewrite_subst_compile_pattern(LogRewrite *s, const gchar *regexp, GError **error)
 {
-  LogRewriteSubst *self = (LogRewriteSubst*) s;
+  LogRewriteSubst *self = (LogRewriteSubst *) s;
   GlobalConfig *cfg = log_pipe_get_config(&s->super);
 
   log_matcher_options_init(&self->matcher_options, cfg);
-  self->matcher = log_matcher_new(&self->matcher_options);
+  self->matcher = log_matcher_new(cfg, &self->matcher_options);
 
   if (!log_matcher_is_replace_supported(self->matcher))
     {
-      g_set_error(error, LOG_MATCHER_ERROR, 0, "subst() only supports matchers that allow replacement, glob is not one of these");
+      g_set_error(error, LOG_MATCHER_ERROR, 0,
+                  "subst() only supports matchers that allow replacement, glob is not one of these");
       return FALSE;
     }
 
@@ -90,7 +92,7 @@ log_rewrite_subst_clone(LogPipe *s)
   LogRewriteSubst *self = (LogRewriteSubst *) s;
   LogRewriteSubst *cloned;
 
-  cloned = (LogRewriteSubst *) log_rewrite_subst_new(log_template_ref(self->replacement), s->cfg);
+  cloned = (LogRewriteSubst *) log_rewrite_subst_new(self->replacement, s->cfg);
   cloned->matcher = log_matcher_ref(self->matcher);
   cloned->super.value_handle = self->super.value_handle;
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2013 Balabit
+ * Copyright (c) 2010-2018 Balabit
  * Copyright (c) 2010-2013 Balázs Scheidler <balazs.scheidler@balabit.com>
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -31,18 +31,25 @@
 #include <stdio.h>
 #include <string.h>
 
-gboolean fail = FALSE;
+#include <criterion/criterion.h>
+#include <criterion/parameterized.h>
 
 MsgFormatOptions parse_options;
 
-static void _debug_print(gpointer key, gpointer value, gpointer dummy)
+static void setup(void)
 {
-  fprintf(stderr, "%s: %d\n", (gchar*) key, *((guint*) value));
+  app_startup();
+  configuration = cfg_new_snippet();
+  cfg_load_module(configuration, "syslogformat");
+  msg_format_options_defaults(&parse_options);
+  msg_format_options_init(&parse_options, configuration);
 }
 
-static void _debug_print2(gpointer key, gpointer value, gpointer dummy)
+static void teardown(void)
 {
-  fprintf(stderr, "%s: %d\n", (gchar*) key, ((Cluster *) value)->loglines->len);
+  log_tags_global_deinit();
+  msg_format_options_destroy(&parse_options);
+  app_shutdown();
 }
 
 typedef struct _loglinesType
@@ -52,7 +59,7 @@ typedef struct _loglinesType
 } loglinesType;
 
 loglinesType *
-testcase_get_logmessages(gchar *logs)
+_get_logmessages(const gchar *logs)
 {
   int i, len;
   loglinesType *self;
@@ -68,25 +75,86 @@ testcase_get_logmessages(gchar *logs)
   input_lines = g_strsplit(logs, "\n", 0);
 
   for (i = 0; input_lines[i]; ++i)
-     {
-       logline = g_strdup_printf("Jul 29 06:25:41 vav zorp/inter_http[27940]: %s", input_lines[i]);
-       len = strlen(logline);
-       if (logline[len-1] == '\n')
-         logline[len-1] = 0;
+    {
+      logline = g_strdup_printf("Jul 29 06:25:41 vav zorp/inter_http[27940]: %s", input_lines[i]);
+      len = strlen(logline);
+      if (logline[len-1] == '\n')
+        logline[len-1] = 0;
 
-       msg = log_msg_new(logline, len, addr, &parse_options);
-       g_ptr_array_add(self->logmessages, msg);
-       ++(self->num_of_logs);
-       g_free(logline);
-     }
+      msg = log_msg_new(logline, len, addr, &parse_options);
+      g_ptr_array_add(self->logmessages, msg);
+      ++(self->num_of_logs);
+      g_free(logline);
+    }
 
   msg_format_options_destroy(&parse_options);
   g_strfreev(input_lines);
   return self;
 }
 
-void
-testcase_frequent_words(gchar* logs, guint support, gchar *expected)
+typedef struct _patternize_params
+{
+  const gchar *logs;
+  guint support;
+  const gchar *expected;
+} PatternizeParams;
+
+ParameterizedTestParameters(dbparser, test_frequent_words)
+{
+  static PatternizeParams parser_params[] =
+  {
+    {
+      .logs = "a\n",
+      .support = 0,
+      .expected = "0 a:1"
+    },
+    {
+      .logs = "a b\n",
+      .support = 0,
+      .expected = "0 a:1,1 b:1",
+    },
+    {
+      .logs = "a a\nb b",
+      .support = 0,
+      .expected = "0 a:1,1 a:1,0 b:1,1 b:1",
+    },
+    {
+      .logs = "a b\nb a",
+      .support = 0,
+      .expected = "0 a:1,1 a:1,0 b:1,1 b:1",
+    },
+    {
+      .logs = "a b\na b",
+      .support = 0,
+      .expected = "0 a:2,1 b:2",
+    },
+    /* support threshold tests */
+    {
+      .logs = "a\n",
+      .support = 1,
+      .expected = "",
+    },
+    {
+      .logs = "a b\n",
+      .support = 1,
+      .expected = "",
+    },
+    {
+      .logs = "a b\nb a",
+      .support = 1,
+      .expected = "0 a:1,1 a:1,0 b:1,1 b:1",
+    },
+    {
+      .logs = "a b\nb a\na c",
+      .support = 2,
+      .expected = "0 a:2",
+    }
+  };
+
+  return cr_make_param_array(PatternizeParams, parser_params, G_N_ELEMENTS(parser_params));
+}
+
+ParameterizedTest(PatternizeParams *param, dbparser, test_frequent_words, .init = setup, .fini = teardown)
 {
   int i, twopass;
   gchar **expecteds;
@@ -94,48 +162,40 @@ testcase_frequent_words(gchar* logs, guint support, gchar *expected)
   loglinesType *logmessages;
   gchar *delimiters = " :&~?![]=,;()'\"";
 
-  logmessages = testcase_get_logmessages(logs);
+  logmessages = _get_logmessages(param->logs);
 
-  expecteds = g_strsplit(expected, ",", 0);
+  expecteds = g_strsplit(param->expected, ",", 0);
 
   for (twopass = 1; twopass <= 2; ++twopass)
     {
-      wordlist = ptz_find_frequent_words(logmessages->logmessages, support, delimiters, twopass == 1);
+      wordlist = ptz_find_frequent_words(logmessages->logmessages, param->support, delimiters, twopass == 1);
 
       for (i = 0; expecteds[i]; ++i)
         {
           char **expected_item;
           char *expected_word;
-          int expected_occurance;
+          int expected_occurrence;
           guint ret;
           gpointer retp;
 
           expected_item = g_strsplit(expecteds[i], ":", 2);
 
           expected_word = expected_item[0];
-          sscanf(expected_item[1], "%d", &expected_occurance);
+          sscanf(expected_item[1], "%d", &expected_occurrence);
 
           retp = g_hash_table_lookup(wordlist, expected_word);
           if (retp)
             {
-              ret = *((guint*) retp);
+              ret = *((guint *) retp);
             }
           else
             {
               ret = 0;
             }
 
-          if (ret != (guint) expected_occurance)
-            {
-              fail = TRUE;
-              fprintf(stderr, "Frequent words test case failed; word: '%s', expected=%d, got=%d, support=%d\n",
-                  expected_word, expected_occurance, ret, support);
-
-              fprintf(stderr, "Input:\n%s\n", logs);
-              fprintf(stderr, "Full results:\n");
-              g_hash_table_foreach(wordlist, _debug_print, NULL);
-
-            }
+          cr_expect_eq(ret, (guint) expected_occurrence,
+                       "Frequent words test case failed; word: '%s', expected=%d, got=%d, support=%d\nInput:%s\n",
+                       expected_word, expected_occurrence, ret, param->support, param->logs);
 
           g_strfreev(expected_item);
         }
@@ -150,61 +210,6 @@ testcase_frequent_words(gchar* logs, guint support, gchar *expected)
   g_free(logmessages);
 }
 
-void
-frequent_words_tests()
-{
-
-  /* simple tests */
-
-  testcase_frequent_words(
-      "a\n", 0,
-      "0 a:1");
-
-  testcase_frequent_words(
-      "a b\n", 0,
-      "0 a:1,"
-      "1 b:1");
-
-  testcase_frequent_words(
-      "a a\n"
-      "b b", 0,
-      "0 a:1,1 a:1,"
-      "0 b:1,1 b:1");
-
-  testcase_frequent_words(
-      "a b\n"
-      "b a", 0,
-      "0 a:1,1 a:1,"
-      "0 b:1,1 b:1");
-
-  testcase_frequent_words(
-      "a b\n"
-      "a b", 0,
-      "0 a:2,"
-      "1 b:2");
-
-  /* support threshold tests */
-
-  testcase_frequent_words(
-      "a\n", 1,
-      "");
-
-  testcase_frequent_words(
-      "a b\n", 1,
-      "");
-
-  testcase_frequent_words(
-      "a b\n"
-      "b a", 1,
-      "0 a:1,1 a:1,"
-      "0 b:1,1 b:1");
-
-  testcase_frequent_words(
-      "a b\n"
-      "b a\n"
-      "a c", 2,
-      "0 a:2");
-}
 
 typedef struct _clusterfindData
 {
@@ -222,7 +227,7 @@ typedef struct _clusterfind2Data
 } clusterfind2Data;
 
 void
-test_clusters_loglines_find(gpointer value, gpointer user_data)
+_clusters_loglines_find(gpointer value, gpointer user_data)
 {
   clusterfind2Data *data;
   LogMessage *msg;
@@ -237,12 +242,10 @@ test_clusters_loglines_find(gpointer value, gpointer user_data)
   msgstr = (gchar *) log_msg_get_value(msg, LM_V_MESSAGE, &msglen);
   if (strcmp(data->search_line, msgstr) == 0)
     data->found = TRUE;
-
-
 }
 
 gboolean
-test_clusters_find(gpointer key, gpointer value, gpointer user_data)
+_clusters_find(gpointer key, gpointer value, gpointer user_data)
 {
   int i;
   gchar *line;
@@ -258,7 +261,8 @@ test_clusters_find(gpointer key, gpointer value, gpointer user_data)
   for (i = 0; i < data->num_of_lines; ++i)
     {
 
-      line = g_strdup((gchar *) log_msg_get_value((LogMessage *) g_ptr_array_index(data->logs, data->lines[i]), LM_V_MESSAGE, &msglen));
+      line = g_strdup((gchar *) log_msg_get_value((LogMessage *) g_ptr_array_index(data->logs, data->lines[i]), LM_V_MESSAGE,
+                                                  &msglen));
 
       find_data = g_new(clusterfind2Data, 1);
       find_data->search_line = line;
@@ -267,7 +271,7 @@ test_clusters_find(gpointer key, gpointer value, gpointer user_data)
        * but why on earth should we optimize a unit test?... :)
        */
       find_data->lines_in_cluster = 0;
-      g_ptr_array_foreach(((Cluster *) value)->loglines, test_clusters_loglines_find, find_data);
+      g_ptr_array_foreach(((Cluster *) value)->loglines, _clusters_loglines_find, find_data);
 
       if (find_data->found)
         ++lines_found;
@@ -291,12 +295,76 @@ test_clusters_find(gpointer key, gpointer value, gpointer user_data)
     return TRUE;
   else
     return FALSE;
-
-
 }
 
-void
-testcase_find_clusters_slct(gchar* logs, guint support, gchar *expected)
+ParameterizedTestParameters(dbparser, test_find_clusters_slct)
+{
+  static PatternizeParams parser_params[] =
+  {
+    {
+      .logs = "a\n",
+      .support = 0,
+      .expected = "0:1",
+    },
+    {
+      .logs = "a\nb\n",
+      .support = 0,
+      .expected = "0:1|1:1",
+    },
+    {
+      .logs = "a\nb\na\nb\n",
+      .support = 2,
+      .expected = "0,2:2|1,3:2",
+    },
+    {
+      .logs = "alma korte korte alma\nalma korte\nbela korte\nalma\n",
+      .support = 1,
+      .expected = "0:1|1:1|2:1|3:1",
+    },
+    {
+      .logs = "alma korte\n"
+      "alma korte\n"
+      "alma korte\n"
+      "alma korte\n"
+      "bela korte\n"
+      "bela korte\n"
+      "alma\n",
+      .support = 2,
+      .expected = "0,1,2,3:4|4,5:2",
+    },
+    {
+      .logs = "alma korte\n"
+      "alma korte\n"
+      "alma korte\n"
+      "alma korte\n"
+      "bela korte\n"
+      "bela korte\n"
+      "alma\n",
+      .support = 3,
+      .expected = "0,1,2,3:4",
+    },
+    {
+      .logs = "alma korte asdf1 labda\n"
+      "alma korte asdf2 labda\n"
+      "alma korte asdf3 labda\n"
+      "sallala\n",
+      .support = 3,
+      .expected = "0,1,2:3",
+    },
+    {
+      .logs = "alma korte asdf1 labda qwe1\n"
+      "alma korte asdf2 labda qwe2\n"
+      "alma korte asdf3 labda qwe3\n"
+      "sallala\n",
+      .support = 3,
+      .expected = "0,1,2:3",
+    }
+  };
+
+  return cr_make_param_array(PatternizeParams, parser_params, G_N_ELEMENTS(parser_params));
+}
+
+ParameterizedTest(PatternizeParams *param, dbparser, test_find_clusters_slct, .init = setup, .fini = teardown)
 {
   int i,j;
   gchar **expecteds;
@@ -306,11 +374,11 @@ testcase_find_clusters_slct(gchar* logs, guint support, gchar *expected)
   Cluster *test_cluster;
   gchar *delimiters = " :&~?![]=,;()'\"";
 
-  logmessages = testcase_get_logmessages(logs);
+  logmessages = _get_logmessages(param->logs);
 
-  clusters = ptz_find_clusters_slct(logmessages->logmessages, support, delimiters, 0);
+  clusters = ptz_find_clusters_slct(logmessages->logmessages, param->support, delimiters, 0);
 
-  expecteds = g_strsplit(expected, "|", 0);
+  expecteds = g_strsplit(param->expected, "|", 0);
   for (i = 0; expecteds[i]; ++i)
     {
       gchar **expected_item, **expected_lines_s;
@@ -333,25 +401,12 @@ testcase_find_clusters_slct(gchar* logs, guint support, gchar *expected)
       find_data->lines = expected_lines;
       find_data->num_of_lines = num_of_expected_lines;
       find_data->logs = logmessages->logmessages;
-      test_cluster = (Cluster *) g_hash_table_find(clusters, test_clusters_find, find_data);
+      test_cluster = (Cluster *) g_hash_table_find(clusters, _clusters_find, find_data);
 
-      if (!test_cluster || test_cluster->loglines->len != expected_support)
-        {
-          if (!test_cluster)
-            fprintf(stderr, "No cluster found;");
-          else
-            fprintf(stderr, "Support value does not match;");
-
-          fprintf(stderr, " expected_cluster='%s', expected_support='%d'\n", expected_item[0], expected_support);
-          fprintf(stderr, "Input:\n%s\n", logs);
-          fprintf(stderr, "Got clusters:\n");
-          g_hash_table_foreach(clusters, _debug_print2, NULL);
-
-          fail = TRUE;
-        }
+      cr_expect_not(!test_cluster || test_cluster->loglines->len != expected_support,
+                    "expected_cluster='%s', expected_support='%d'\nInput:\n%s\n", expected_item[0], expected_support, param->logs);
 
       g_free(find_data);
-//      g_strfreev(expected_line_strings); // FIXME: this segfaults, so let's leak it instead :)
       g_strfreev(expected_item);
       g_strfreev(expected_lines_s);
     }
@@ -363,99 +418,4 @@ testcase_find_clusters_slct(gchar* logs, guint support, gchar *expected)
   g_ptr_array_free(logmessages->logmessages, TRUE);
   g_free(logmessages);
   g_strfreev(expecteds);
-}
-
-void
-find_clusters_slct_tests()
-{
-  testcase_find_clusters_slct(
-      "a\n", 0,
-      "0:1");
-
-  testcase_find_clusters_slct(
-      "a\n"
-      "b\n", 0,
-      "0:1|1:1");
-
-  testcase_find_clusters_slct(
-      "a\n"
-      "b\n"
-      "a\n"
-      "b\n", 2,
-      "0,2:2|1,3:2");
-
-  testcase_find_clusters_slct(
-      "alma korte korte alma\n"
-      "alma korte\n"
-      "bela korte\n"
-      "alma\n", 1,
-      "0:1|1:1|2:1|3:1");
-
-  /*
-  testcase_find_clusters_slct(
-      "alma korte korte alma\n"
-      "alma korte\n"
-      "bela korte\n"
-      "alma\n", 2,
-      "0,1:2");
-
-  testcase_find_clusters_slct(
-      "alma korte korte alma\n"
-      "alma korte\n"
-      "bela korte\n"
-      "alma\n", 3,
-      "0,1,3:3"); // FIXME: will this happen this way?
-
-      */
-
-  testcase_find_clusters_slct(
-      "alma korte\n"
-      "alma korte\n"
-      "alma korte\n"
-      "alma korte\n"
-      "bela korte\n"
-      "bela korte\n"
-      "alma\n", 2,
-      "0,1,2,3:4|4,5:2");
-
-  testcase_find_clusters_slct(
-      "alma korte\n"
-      "alma korte\n"
-      "alma korte\n"
-      "alma korte\n"
-      "bela korte\n"
-      "bela korte\n"
-      "alma\n", 3,
-      "0,1,2,3:4");
-
-  testcase_find_clusters_slct(
-      "alma korte asdf1 labda\n"
-      "alma korte asdf2 labda\n"
-      "alma korte asdf3 labda\n"
-      "sallala\n", 3,
-      "0,1,2:3");
-
-  testcase_find_clusters_slct(
-      "alma korte asdf1 labda qwe1\n"
-      "alma korte asdf2 labda qwe2\n"
-      "alma korte asdf3 labda qwe3\n"
-      "sallala\n", 3,
-      "0,1,2:3");
-}
-
-int
-main()
-{
-  app_startup();
-  configuration = cfg_new(0x0201);
-  plugin_load_module("syslogformat", configuration, NULL);
-  msg_format_options_defaults(&parse_options);
-  msg_format_options_init(&parse_options, configuration);
-
-  frequent_words_tests();
-  find_clusters_slct_tests();
-  log_tags_global_deinit();
-
-  return  (fail ? 1 : 0);
-
 }

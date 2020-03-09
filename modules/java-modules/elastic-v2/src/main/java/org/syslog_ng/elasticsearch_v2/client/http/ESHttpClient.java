@@ -35,14 +35,54 @@ import org.syslog_ng.elasticsearch_v2.client.ESClient;
 import org.syslog_ng.elasticsearch_v2.messageprocessor.ESIndex;
 import org.syslog_ng.elasticsearch_v2.messageprocessor.ESMessageProcessorFactory;
 import org.syslog_ng.elasticsearch_v2.messageprocessor.http.HttpMessageProcessor;
+import java.util.Set;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.HostnameVerifier;
+import org.apache.http.conn.ssl.DefaultHostnameVerifier;
+import org.apache.http.conn.ssl.NoopHostnameVerifier;
+import org.apache.http.conn.ssl.TrustStrategy;
+import org.apache.http.ssl.SSLContextBuilder;
+import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
+import org.apache.http.nio.conn.SchemeIOSessionStrategy;
+import org.apache.http.nio.conn.ssl.SSLIOSessionStrategy;
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
+import java.security.UnrecoverableKeyException;
+import java.security.NoSuchAlgorithmException;
+import java.security.KeyStore;
+import java.security.KeyStoreException;
+import java.io.FileInputStream;
+import org.apache.log4j.PropertyConfigurator;
 
 import java.io.IOException;
 
 public class ESHttpClient implements ESClient {
 	private ElasticSearchOptions options;
+	private String authtype;
 	private JestClient client;
 	private HttpMessageProcessor messageProcessor;
-	private Logger logger;
+	protected Logger logger;
+
+  static  {
+      PropertyConfigurator.configure(System.getProperty("log4j.configuration"));
+  }
+
+
+  public class HttpClientBuilderException extends RuntimeException {
+    public HttpClientBuilderException() {}
+
+    public HttpClientBuilderException(String msg) {
+      super(msg);
+    }
+
+    public HttpClientBuilderException(String msg, Throwable cause) {
+      super(msg, cause);
+    }
+
+    public HttpClientBuilderException(Throwable cause) {
+      super(cause);
+    }
+  }
 
 	public ESHttpClient(ElasticSearchOptions options) {
 		this.options = options;
@@ -50,13 +90,26 @@ public class ESHttpClient implements ESClient {
 		messageProcessor = ESMessageProcessorFactory.getMessageProcessor(options, this);
 	}
 
+  protected void setupHttpClientBuilder(HttpClientConfig.Builder httpClientConfigBuilder, ElasticSearchOptions options) {}
+
+  private HttpClientConfig buildHttpClientConfig() {
+ 		HttpClientConfig.Builder httpClientConfigBuilder = new HttpClientConfig
+			.Builder(options.getClusterUrls())
+			.multiThreaded(true)
+			.defaultSchemeForDiscoveredNodes(options.getClientMode());
+
+		/* HTTP Basic authentication requested */
+		if (options.getHttpAuthType().equals("basic")) {
+			httpClientConfigBuilder.defaultCredentials(options.getHttpAuthTypeBasicUsername(), options.getHttpAuthTypeBasicPassword());
+    } 
+    setupHttpClientBuilder(httpClientConfigBuilder, this.options);
+
+    return httpClientConfigBuilder.build();
+  }
+
 	private JestClient createClient() {
-		String connectionUrl = options.getClusterUrl();
 		JestClientFactory clientFactory = new JestClientFactory();
-		clientFactory.setHttpClientConfig(new HttpClientConfig
-				.Builder(connectionUrl)
-				.multiThreaded(false)
-				.build());
+	  clientFactory.setHttpClientConfig(buildHttpClientConfig());
 		return clientFactory.getObject();
 	}
 
@@ -67,7 +120,13 @@ public class ESHttpClient implements ESClient {
 	@Override
 	public boolean open() {
 		if (client == null) {
-			client = createClient();
+      try {
+			  client = createClient();
+      }
+      catch (ESHttpClient.HttpClientBuilderException e) {
+        logger.error(e.getMessage());
+        return false;
+      }
 		}
 		messageProcessor.init();
 		return true;
@@ -102,13 +161,20 @@ public class ESHttpClient implements ESClient {
 	@Override
 	public String getClusterName() {
 		NodesInfo nodesinfo = new NodesInfo.Builder().build();
-		String clusterName;
+		String clusterName = options.getCluster();
 		try {
 			JestResult result = client.execute(nodesinfo);
-			clusterName = result.getValue("cluster_name").toString();
+			if (result != null ) {
+				clusterName = result.getValue("cluster_name").toString();
+			} 
 		} catch (IOException e) {
-			clusterName = new String();
+      logger.info("Failed to get cluster name from the client, use the name set in the config file: " + clusterName);
 		}
 		return clusterName;
 	}
+
+    @Override
+    public void onMessageQueueEmpty() {
+        messageProcessor.onMessageQueueEmpty();
+    }
 }

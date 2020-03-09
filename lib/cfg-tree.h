@@ -29,13 +29,15 @@
 #include "template/templates.h"
 #include "cfg-lexer.h"
 #include "messages.h"
+#include "atomic.h"
 
 const gchar *log_expr_node_get_content_name(gint content);
 
-#define LC_CATCHALL 1
-#define LC_FALLBACK 2
-#define LC_FINAL    4
-#define LC_FLOW_CONTROL 8
+#define LC_CATCHALL       1
+#define LC_FALLBACK       2
+#define LC_FINAL          4
+#define LC_FLOW_CONTROL   8
+#define LC_DROP_UNMATCHED 16
 
 enum
 {
@@ -97,6 +99,7 @@ typedef struct _LogExprNode LogExprNode;
  */
 struct _LogExprNode
 {
+  GAtomicCounter ref_cnt;
   gint16 layout;
   gint16 content;
 
@@ -129,8 +132,11 @@ void log_expr_node_set_object(LogExprNode *self, gpointer object, GDestroyNotify
 const gchar *log_expr_node_format_location(LogExprNode *self, gchar *buf, gsize buf_len);
 EVTTAG *log_expr_node_location_tag(LogExprNode *self);
 
-LogExprNode *log_expr_node_new(gint layout, gint content, const gchar *name, LogExprNode *children, guint32 flags, YYLTYPE *yylloc);
-void log_expr_node_free(LogExprNode *self);
+LogExprNode *log_expr_node_new(gint layout, gint content, const gchar *name, LogExprNode *children, guint32 flags,
+                               YYLTYPE *yylloc);
+
+LogExprNode *log_expr_node_ref(LogExprNode *self);
+LogExprNode *log_expr_node_unref(LogExprNode *self);
 
 LogExprNode *log_expr_node_new_pipe(LogPipe *pipe, YYLTYPE *yylloc);
 LogExprNode *log_expr_node_new_source(const gchar *name, LogExprNode *children, YYLTYPE *yylloc);
@@ -146,6 +152,10 @@ LogExprNode *log_expr_node_new_rewrite_reference(const gchar *name, YYLTYPE *yyl
 LogExprNode *log_expr_node_new_log(LogExprNode *children, guint32 flags, YYLTYPE *yylloc);
 LogExprNode *log_expr_node_new_sequence(LogExprNode *children, YYLTYPE *yylloc);
 LogExprNode *log_expr_node_new_junction(LogExprNode *children, YYLTYPE *yylloc);
+void log_expr_node_conditional_set_false_branch_of_the_last_if(LogExprNode *conditional_node, LogExprNode *false_expr);
+LogExprNode *log_expr_node_new_conditional_with_filter(LogExprNode *filter_pipe, LogExprNode *true_expr,
+                                                       YYLTYPE *yylloc);
+LogExprNode *log_expr_node_new_conditional_with_block(LogExprNode *block, YYLTYPE *yylloc);
 
 typedef struct _CfgTree
 {
@@ -162,6 +172,7 @@ typedef struct _CfgTree
 
 gboolean cfg_tree_add_object(CfgTree *self, LogExprNode *rule);
 LogExprNode *cfg_tree_get_object(CfgTree *self, gint type, const gchar *name);
+GList *cfg_tree_get_objects(CfgTree *self);
 
 gboolean cfg_tree_add_template(CfgTree *self, LogTemplate *template);
 LogTemplate *cfg_tree_lookup_template(CfgTree *self, const gchar *name);
