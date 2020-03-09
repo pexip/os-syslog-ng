@@ -90,7 +90,7 @@ override_dh_auto_configure:
 		--enable-spoof-source \
 		--enable-tcp-wrapper \
 		--enable-sql \
-		--enable-mongodb \
+		--disable-mongodb \
 		--enable-json \
 		--enable-riemann \
 		--disable-java \
@@ -99,7 +99,6 @@ override_dh_auto_configure:
 		$(PACCT_CONFIGURE_OPTS) \
 		--enable-python \
 		\
-		--with-mongoc=system \
 		--with-ivykis=system \
 		--with-jsonc=system \
 		--with-librabbitmq-client=system \

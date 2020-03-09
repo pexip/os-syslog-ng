@@ -6,6 +6,7 @@ syslog-ng (3.19.1-5pexip1) pexip; urgency=medium
   * Remove patch applied upstream:
     debian/patches/tlscontext_refcnt.patch
   * Update control file with pexip ovveride file breaks
+  * Disable mongodb integration
 
  -- Vincent Sanders <vince@pexip.com>  Mon, 09 Mar 2020 11:48:51 +0000
 

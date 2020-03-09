@@ -17,7 +17,7 @@ Build-Depends: debhelper (>= 10~),
                libglib2.0-dev,
                libdbi-dev | libdbi0-dev,
                libssl1.0-dev | libssl-dev (<< 1.1),
-               libmongoc-dev,
+#               libmongoc-dev,
                libbson-dev,
                libjson-c-dev | libjson0-dev,
                libwrap0-dev,
@@ -172,29 +172,29 @@ Description: Enhanced system logging daemon (systemd journal plugin)
  This package provides the systemd-journal() source plugin, which
  allows syslog-ng to read directly from the systemd Journal.
 
-Package: syslog-ng-mod-mongodb
-Architecture: any
-Multi-Arch: foreign
-Depends: ${shlibs:Depends}, ${misc:Depends}, syslog-ng-core (>= ${source:Version}), syslog-ng-core (<< ${source:Version}.1~)
-Suggests: mongodb-server
-Description: Enhanced system logging daemon (MongoDB plugin)
- syslog-ng is an enhanced log daemon, supporting a wide range of input
- and output methods: syslog, unstructured text, message queues,
- databases (SQL and NoSQL alike) and more.
- .
- Key features:
- .
-  * receive and send RFC3164 and RFC5424 style syslog messages
-  * work with any kind of unstructured data
-  * receive and send JSON formatted messages
-  * classify and structure logs with builtin parsers (csv-parser(),
-    db-parser(), etc.)
-  * normalize, crunch and process logs as they flow through the system
-  * hand on messages for further processing using message queues (like
-    AMQP), files or databases (like PostgreSQL or MongoDB).
- .
- This package provides the MongoDB destination plugin, which allows
- one to log system messages to MongoDB.
+#Package: syslog-ng-mod-mongodb
+#Architecture: any
+#Multi-Arch: foreign
+#Depends: ${shlibs:Depends}, ${misc:Depends}, syslog-ng-core (>= ${source:Version}), syslog-ng-core (<< ${source:Version}.1~)
+#Suggests: mongodb-server
+#Description: Enhanced system logging daemon (MongoDB plugin)
+# syslog-ng is an enhanced log daemon, supporting a wide range of input
+# and output methods: syslog, unstructured text, message queues,
+# databases (SQL and NoSQL alike) and more.
+# .
+# Key features:
+# .
+#  * receive and send RFC3164 and RFC5424 style syslog messages
+#  * work with any kind of unstructured data
+#  * receive and send JSON formatted messages
+#  * classify and structure logs with builtin parsers (csv-parser(),
+#    db-parser(), etc.)
+#  * normalize, crunch and process logs as they flow through the system
+#  * hand on messages for further processing using message queues (like
+#    AMQP), files or databases (like PostgreSQL or MongoDB).
+# .
+# This package provides the MongoDB destination plugin, which allows
+# one to log system messages to MongoDB.
 
 Package: syslog-ng-mod-sql
 Architecture: any
