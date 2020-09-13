@@ -2,16 +2,28 @@ if ENABLE_HTTP
 
 module_LTLIBRARIES      += modules/http/libhttp.la
 modules_http_libhttp_la_SOURCES = \
+  modules/http/autodetect-ca-location.h \
+  modules/http/autodetect-ca-location.c \
+  modules/http/response-handler.h   \
+  modules/http/response-handler.c   \
   modules/http/http.h 		    \
   modules/http/http.c               \
   modules/http/http-worker.c	    \
   modules/http/http-worker.h	    \
   modules/http/http-loadbalancer.c  \
   modules/http/http-loadbalancer.h  \
+  modules/http/http-curl-header-list.h \
+  modules/http/http-curl-header-list.c \
   modules/http/http-grammar.y       \
   modules/http/http-parser.c        \
   modules/http/http-parser.h        \
-  modules/http/http-plugin.c
+  modules/http/http-plugin.c        \
+  modules/http/http-signals.h
+
+modules_http_libhttp_ladir = ${pkgincludedir}/modules/http
+
+modules_http_libhttp_la_HEADERS = \
+	modules/http/http-signals.h
 
 modules_http_libhttp_la_CPPFLAGS  =     \
   $(AM_CPPFLAGS)            \

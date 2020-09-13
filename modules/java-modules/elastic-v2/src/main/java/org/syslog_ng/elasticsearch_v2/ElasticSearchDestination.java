@@ -51,9 +51,14 @@ public class ElasticSearchDestination extends StructuredLogDestination {
 
 	@Override
 	protected boolean init() {
+		logger.warn("Using elasticsearch2() destination is deprecated please use elasticsearch-http() instead. The java-based elasticsearch2() works as before but it may be removed in the future");
 		boolean result = false;
 		try {
 			options.init();
+
+                        setBatchLines(options.getFlushLimit());
+                        setBatchTimeout(options.getFlushTimeout());
+
 			client = ESClientFactory.getESClient(options);
 			client.init();
 			result = true;
@@ -86,13 +91,31 @@ public class ElasticSearchDestination extends StructuredLogDestination {
 		return new ESIndex.Builder().formattedMessage(formattedMessage).index(index).id(customId).type(type).build();
     }
 
+	private int send_batch(ESIndex index) {
+		if (client.send(index))
+			return QUEUED;
+		else
+			return ERROR;
+	}
+
+	private int send_single(ESIndex index) {
+		if (client.send(index))
+			return SUCCESS;
+		else
+			return ERROR;
+	}
+
 	@Override
-	protected boolean send(LogMessage msg) {
+	protected int send(LogMessage msg) {
 		if (!client.isOpened()) {
-			close();
-			return false;
+			return NOT_CONNECTED;
 		}
-		return client.send(createIndexRequest(msg));
+
+                ESIndex index = createIndexRequest(msg);
+		if (options.getFlushLimit() > 1)
+			return send_batch(index);
+		else
+			return send_single(index);
 	}
 
 	@Override
@@ -115,7 +138,10 @@ public class ElasticSearchDestination extends StructuredLogDestination {
 	}
 
 	@Override
-	public void onMessageQueueEmpty() {
-	    client.onMessageQueueEmpty();
+	public int flush() {
+		if (client.flush())
+			return SUCCESS;
+		else
+			return ERROR;
 	}
 }

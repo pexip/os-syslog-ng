@@ -25,13 +25,16 @@
 #include "logsource.h"
 #include "messages.h"
 #include "host-resolve.h"
-#include "timeutils.h"
 #include "stats/stats-registry.h"
-#include "stats/stats-syslog.h"
+#include "stats/stats-cluster-single.h"
+#include "msg-stats.h"
 #include "logmsg/tags.h"
-#include "ack_tracker.h"
+#include "ack-tracker/ack_tracker.h"
+#include "timeutils/misc.h"
+#include "scratch-buffers.h"
 
 #include <string.h>
+#include <unistd.h>
 
 gboolean accurate_nanosleep = FALSE;
 
@@ -44,19 +47,34 @@ log_source_wakeup(LogSource *self)
   msg_diagnostics("Source has been resumed", log_pipe_location_tag(&self->super));
 }
 
-void
-log_source_window_empty(LogSource *self)
+static inline guint32
+_take_reclaimed_window(LogSource *self, guint32 window_size_increment)
 {
-  if (self->window_empty_cb)
-    self->window_empty_cb(self);
-  msg_diagnostics("LogSource window is empty");
+  gssize old = atomic_gssize_sub(&self->window_size_to_be_reclaimed, window_size_increment);
+  gboolean reclaim_in_progress = (old > 0);
+
+  if (!reclaim_in_progress)
+    {
+      return window_size_increment;
+    }
+
+  guint32 remaining_window_size_increment = MAX(window_size_increment - old, 0);
+  guint32 reclaimed = window_size_increment - remaining_window_size_increment;
+  atomic_gssize_add(&self->pending_reclaimed, reclaimed);
+
+  return remaining_window_size_increment;
 }
 
 static inline void
 _flow_control_window_size_adjust(LogSource *self, guint32 window_size_increment, gboolean last_ack_type_is_suspended)
 {
   gboolean suspended;
+
+  if (G_UNLIKELY(dynamic_window_is_enabled(&self->dynamic_window)))
+    window_size_increment = _take_reclaimed_window(self, window_size_increment);
+
   gsize old_window_size = window_size_counter_add(&self->window_size, window_size_increment, &suspended);
+  stats_counter_add(self->stat_window_size, window_size_increment);
 
   msg_diagnostics("Window size adjustment",
                   evt_tag_int("old_window_size", old_window_size),
@@ -69,9 +87,6 @@ _flow_control_window_size_adjust(LogSource *self, guint32 window_size_increment,
     window_size_counter_resume(&self->window_size);
   if (old_window_size == 0 || need_to_resume_counter)
     log_source_wakeup(self);
-
-  if (old_window_size+window_size_increment == self->options->init_window_size)
-    log_source_window_empty(self);
 }
 
 static void
@@ -151,6 +166,12 @@ log_source_flow_control_adjust_when_suspended(LogSource *self, guint32 window_si
   _flow_control_rate_adjust(self);
 }
 
+void
+log_source_disable_bookmark_saving(LogSource *self)
+{
+  ack_tracker_disable_bookmark_saving(self->ack_tracker);
+}
+
 /**
  * log_source_msg_ack:
  *
@@ -172,6 +193,175 @@ log_source_flow_control_suspend(LogSource *self)
             evt_tag_str("function", __FUNCTION__));
 
   window_size_counter_suspend(&self->window_size);
+}
+
+void
+log_source_enable_dynamic_window(LogSource *self, DynamicWindowPool *window_pool)
+{
+  dynamic_window_set_pool(&self->dynamic_window, dynamic_window_pool_ref(window_pool));
+}
+
+gboolean
+log_source_is_dynamic_window_enabled(LogSource *self)
+{
+  return dynamic_window_is_enabled(&self->dynamic_window);
+}
+
+void
+log_source_dynamic_window_update_statistics(LogSource *self)
+{
+  dynamic_window_stat_update(&self->dynamic_window.stat, window_size_counter_get(&self->window_size, NULL));
+  msg_trace("Updating dynamic window statistic", evt_tag_int("avg window size",
+                                                             dynamic_window_stat_get_avg(&self->dynamic_window.stat)));
+}
+
+static void
+_reclaim_dynamic_window(LogSource *self, gsize window_size)
+{
+  g_assert(self->full_window_size - window_size >= self->options->init_window_size);
+  atomic_gssize_set(&self->window_size_to_be_reclaimed, window_size);
+}
+
+static void
+_release_dynamic_window(LogSource *self)
+{
+  g_assert(self->ack_tracker == NULL);
+
+  gsize dynamic_part = self->full_window_size - self->options->init_window_size;
+  msg_trace("Releasing dynamic part of the window", evt_tag_int("dynamic_window_to_be_released", dynamic_part),
+            log_pipe_location_tag(&self->super));
+
+  self->full_window_size -= dynamic_part;
+  stats_counter_sub(self->stat_full_window, dynamic_part);
+
+  window_size_counter_sub(&self->window_size, dynamic_part, NULL);
+  stats_counter_sub(self->stat_window_size, dynamic_part);
+  dynamic_window_release(&self->dynamic_window, dynamic_part);
+
+  dynamic_window_pool_unref(self->dynamic_window.pool);
+}
+
+static void
+_inc_balanced(LogSource *self, gsize inc)
+{
+  gsize offered_dynamic = dynamic_window_request(&self->dynamic_window, inc);
+
+  msg_trace("Balance::increase",
+            log_pipe_location_tag(&self->super),
+            evt_tag_printf("connection", "%p", self),
+            evt_tag_int("old_full_window_size", self->full_window_size),
+            evt_tag_int("new_full_window_size", self->full_window_size + offered_dynamic));
+
+  self->full_window_size += offered_dynamic;
+  stats_counter_add(self->stat_full_window, offered_dynamic);
+
+  gsize old_window_size = window_size_counter_add(&self->window_size, offered_dynamic, NULL);
+  stats_counter_add(self->stat_window_size, offered_dynamic);
+  if (old_window_size == 0 && offered_dynamic != 0)
+    log_source_wakeup(self);
+}
+
+static void
+_dec_balanced(LogSource *self, gsize dec)
+{
+  gsize new_full_window_size = self->full_window_size - dec;
+
+  gsize empty_window = window_size_counter_get(&self->window_size, NULL);
+  gsize remaining_sub = 0;
+
+  if (empty_window <= dec)
+    {
+      remaining_sub = dec - empty_window;
+      if (empty_window == 0)
+        {
+          dec = 0;
+        }
+      else
+        {
+          dec = empty_window - 1;
+        }
+
+      new_full_window_size = self->full_window_size - dec;
+      _reclaim_dynamic_window(self, remaining_sub);
+    }
+
+  window_size_counter_sub(&self->window_size, dec, NULL);
+  stats_counter_sub(self->stat_window_size, dec);
+
+  msg_trace("Balance::decrease",
+            log_pipe_location_tag(&self->super),
+            evt_tag_printf("connection", "%p", self),
+            evt_tag_int("old_full_window_size", self->full_window_size),
+            evt_tag_int("new_full_window_size", new_full_window_size),
+            evt_tag_int("to_be_reclaimed", remaining_sub));
+
+  self->full_window_size = new_full_window_size;
+  stats_counter_set(self->stat_full_window, new_full_window_size);
+  dynamic_window_release(&self->dynamic_window, dec);
+}
+
+static gboolean
+_reclaim_window_instead_of_rebalance(LogSource *self)
+{
+  //check pending_reclaimed
+  gssize total_reclaim = (gssize)atomic_gssize_set_and_get(&self->pending_reclaimed, 0);
+  gssize to_be_reclaimed = (gssize)atomic_gssize_get(&self->window_size_to_be_reclaimed);
+  gboolean reclaim_in_progress = (to_be_reclaimed > 0);
+
+  if (total_reclaim > 0)
+    {
+      self->full_window_size -= total_reclaim;
+      stats_counter_sub(self->stat_full_window, total_reclaim);
+      dynamic_window_release(&self->dynamic_window, total_reclaim);
+    }
+  else
+    {
+      //to avoid underflow, we need to set a value <= 0
+      if (to_be_reclaimed < 0)
+        atomic_gssize_set(&self->window_size_to_be_reclaimed, 0);
+    }
+
+  msg_trace("Checking if reclaim is in progress...",
+            log_pipe_location_tag(&self->super),
+            evt_tag_printf("connection", "%p", self),
+            evt_tag_printf("in progress", "%s", reclaim_in_progress ? "yes" : "no"),
+            evt_tag_long("total_reclaim", total_reclaim));
+
+  return reclaim_in_progress;
+}
+
+static void
+_dynamic_window_rebalance(LogSource *self)
+{
+  gsize current_dynamic_win = self->full_window_size - self->options->init_window_size;
+  gboolean have_to_increase = current_dynamic_win < self->dynamic_window.pool->balanced_window;
+  gboolean have_to_decrease = current_dynamic_win > self->dynamic_window.pool->balanced_window;
+
+  msg_trace("Rebalance dynamic window",
+            log_pipe_location_tag(&self->super),
+            evt_tag_printf("connection", "%p", self),
+            evt_tag_int("full_window", self->full_window_size),
+            evt_tag_int("dynamic_win", current_dynamic_win),
+            evt_tag_int("static_window", self->options->init_window_size),
+            evt_tag_int("balanced_window", self->dynamic_window.pool->balanced_window),
+            evt_tag_int("avg_free", dynamic_window_stat_get_avg(&self->dynamic_window.stat)));
+
+  if (have_to_increase)
+    _inc_balanced(self, self->dynamic_window.pool->balanced_window - current_dynamic_win);
+  else if (have_to_decrease)
+    _dec_balanced(self, current_dynamic_win - self->dynamic_window.pool->balanced_window);
+}
+
+void
+log_source_dynamic_window_realloc(LogSource *self)
+{
+  /* it is safe to assume that the window size is not decremented while this function runs,
+   * only incrementation is possible by destination threads */
+
+  if (!_reclaim_window_instead_of_rebalance(self))
+    _dynamic_window_rebalance(self);
+
+  dynamic_window_stat_reset(&self->dynamic_window.stat);
 }
 
 void
@@ -210,14 +400,7 @@ log_source_mangle_hostname(LogSource *self, LogMessage *msg)
           else
             {
               /* everything else, append source hostname */
-              if (orig_host && orig_host[0])
-                host_len = g_snprintf(host, sizeof(host), "%s/%s", orig_host, resolved_name);
-              else
-                {
-                  strncpy(host, resolved_name, sizeof(host));
-                  /* just in case it is not zero terminated */
-                  host[255] = 0;
-                }
+              host_len = g_snprintf(host, sizeof(host), "%s/%s", orig_host, resolved_name);
             }
           if (host_len >= sizeof(host))
             host_len = sizeof(host) - 1;
@@ -230,10 +413,58 @@ log_source_mangle_hostname(LogSource *self, LogMessage *msg)
     }
 }
 
+static void
+_register_window_stats(LogSource *self)
+{
+  if (!stats_check_level(4))
+    return;
+
+  const gchar *instance_name = self->name ? : self->stats_instance;
+
+  StatsClusterKey sc_key;
+  stats_cluster_single_key_set_with_name(&sc_key, self->options->stats_source | SCS_SOURCE, self->stats_id,
+                                         instance_name, "free_window");
+  self->stat_window_size_cluster = stats_register_dynamic_counter(4, &sc_key, SC_TYPE_SINGLE_VALUE,
+                                   &self->stat_window_size);
+  stats_counter_set(self->stat_window_size, window_size_counter_get(&self->window_size, NULL));
+
+
+  stats_cluster_single_key_set_with_name(&sc_key, self->options->stats_source | SCS_SOURCE, self->stats_id,
+                                         instance_name, "full_window");
+  self->stat_full_window_cluster = stats_register_dynamic_counter(4, &sc_key, SC_TYPE_SINGLE_VALUE,
+                                   &self->stat_full_window);
+  stats_counter_set(self->stat_full_window, self->full_window_size);
+
+}
+
+static void
+_unregister_window_stats(LogSource *self)
+{
+  if (!stats_check_level(4))
+    return;
+
+  stats_unregister_dynamic_counter(self->stat_window_size_cluster, SC_TYPE_SINGLE_VALUE, &self->stat_window_size);
+  stats_unregister_dynamic_counter(self->stat_full_window_cluster, SC_TYPE_SINGLE_VALUE, &self->stat_full_window);
+}
+
+static inline void
+_create_ack_tracker_if_not_exists(LogSource *self)
+{
+  if (!self->ack_tracker)
+    {
+      if (self->pos_tracked)
+        self->ack_tracker = late_ack_tracker_new(self);
+      else
+        self->ack_tracker = early_ack_tracker_new(self);
+    }
+}
+
 gboolean
 log_source_init(LogPipe *s)
 {
   LogSource *self = (LogSource *) s;
+
+  _create_ack_tracker_if_not_exists(self);
 
   stats_lock();
   StatsClusterKey sc_key;
@@ -241,6 +472,9 @@ log_source_init(LogPipe *s)
   stats_register_counter(self->options->stats_level, &sc_key,
                          SC_TYPE_PROCESSED, &self->recvd_messages);
   stats_register_counter(self->options->stats_level, &sc_key, SC_TYPE_STAMP, &self->last_message_seen);
+
+  _register_window_stats(self);
+
   stats_unlock();
 
   return TRUE;
@@ -256,6 +490,9 @@ log_source_deinit(LogPipe *s)
   stats_cluster_logpipe_key_set(&sc_key, self->options->stats_source | SCS_SOURCE, self->stats_id, self->stats_instance);
   stats_unregister_counter(&sc_key, SC_TYPE_PROCESSED, &self->recvd_messages);
   stats_unregister_counter(&sc_key, SC_TYPE_STAMP, &self->last_message_seen);
+
+  _unregister_window_stats(self);
+
   stats_unlock();
 
   return TRUE;
@@ -276,6 +513,7 @@ log_source_post(LogSource *self, LogMessage *msg)
   msg->ack_func = log_source_msg_ack;
 
   old_window_size = window_size_counter_sub(&self->window_size, 1, NULL);
+  stats_counter_sub(self->stat_window_size, 1);
 
   if (G_UNLIKELY(old_window_size == 1))
     {
@@ -293,7 +531,11 @@ log_source_post(LogSource *self, LogMessage *msg)
    */
 
   g_assert(old_window_size > 0);
+
+  ScratchBuffersMarker mark;
+  scratch_buffers_mark(&mark);
   log_pipe_queue(&self->super, msg, &path_options);
+  scratch_buffers_reclaim_marked(mark);
 }
 
 static gboolean
@@ -306,7 +548,7 @@ _invoke_mangle_callbacks(LogPipe *s, LogMessage *msg, const LogPathOptions *path
     {
       if(next_item->data)
         {
-          if(!((mangle_callback) (next_item->data))(log_pipe_get_config(s),msg,self))
+          if(!((mangle_callback) (next_item->data))(log_pipe_get_config(s), msg, self))
             {
               log_msg_drop(msg, path_options, AT_PROCESSED);
               return FALSE;
@@ -315,35 +557,6 @@ _invoke_mangle_callbacks(LogPipe *s, LogMessage *msg, const LogPathOptions *path
       next_item = next_item->next;
     }
   return TRUE;
-}
-
-static inline void
-_increment_dynamic_stats_counters(const gchar *source_id, const LogMessage *msg)
-{
-  if (stats_check_level(2))
-    {
-      stats_lock();
-
-      StatsClusterKey sc_key;
-      stats_cluster_logpipe_key_set(&sc_key, SCS_HOST | SCS_SOURCE, NULL, log_msg_get_value(msg, LM_V_HOST, NULL) );
-      stats_register_and_increment_dynamic_counter(2, &sc_key, msg->timestamps[LM_TS_RECVD].tv_sec);
-
-      if (stats_check_level(3))
-        {
-          stats_cluster_logpipe_key_set(&sc_key, SCS_SENDER | SCS_SOURCE, NULL, log_msg_get_value(msg, LM_V_HOST_FROM, NULL) );
-          stats_register_and_increment_dynamic_counter(3, &sc_key, msg->timestamps[LM_TS_RECVD].tv_sec);
-          stats_cluster_logpipe_key_set(&sc_key, SCS_PROGRAM | SCS_SOURCE, NULL, log_msg_get_value(msg, LM_V_PROGRAM, NULL) );
-          stats_register_and_increment_dynamic_counter(3, &sc_key, msg->timestamps[LM_TS_RECVD].tv_sec);
-
-          stats_cluster_logpipe_key_set(&sc_key, SCS_HOST | SCS_SOURCE, source_id, log_msg_get_value(msg, LM_V_HOST, NULL));
-          stats_register_and_increment_dynamic_counter(3, &sc_key, msg->timestamps[LM_TS_RECVD].tv_sec);
-          stats_cluster_logpipe_key_set(&sc_key, SCS_SENDER | SCS_SOURCE, source_id, log_msg_get_value(msg, LM_V_HOST_FROM,
-                                        NULL));
-          stats_register_and_increment_dynamic_counter(3, &sc_key, msg->timestamps[LM_TS_RECVD].tv_sec);
-        }
-
-      stats_unlock();
-    }
 }
 
 static void
@@ -362,6 +575,25 @@ log_source_override_program(LogSource *self, LogMessage *msg)
   log_msg_set_value(msg, LM_V_PROGRAM, self->options->program_override, self->options->program_override_len);
 }
 
+static gchar *
+_get_pid_string(void)
+{
+#define MAX_PID_CHAR_COUNT 20 /* max PID on 64 bit systems is 2^64 - 1, which is 19 characters, +1 for terminating 0 */
+
+  static gchar pid_string[MAX_PID_CHAR_COUNT];
+
+  if (pid_string[0] == '\0')
+    {
+#ifdef _WIN32
+      g_snprintf(pid_string, MAX_PID_CHAR_COUNT, "%lu", GetCurrentProcessId());
+#else
+      g_snprintf(pid_string, MAX_PID_CHAR_COUNT, "%d", getpid());
+#endif
+    }
+
+  return pid_string;
+}
+
 static void
 log_source_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options)
 {
@@ -375,13 +607,11 @@ log_source_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options
                   log_pipe_location_tag(s),
                   evt_tag_printf("msg", "%p", msg));
 
-  if (!self->options->keep_timestamp)
-    msg->timestamps[LM_TS_STAMP] = msg->timestamps[LM_TS_RECVD];
-
-  g_assert(msg->timestamps[LM_TS_STAMP].zone_offset != -1);
-
   /* $HOST setup */
   log_source_mangle_hostname(self, msg);
+
+  if (self->options->use_syslogng_pid)
+    log_msg_set_value(msg, LM_V_PID, _get_pid_string(), -1);
 
   /* source specific tags */
   if (self->options->tags)
@@ -404,13 +634,12 @@ log_source_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options
   if (self->options->program_override)
     log_source_override_program(self, msg);
 
-  _increment_dynamic_stats_counters(self->stats_id, msg);
-  stats_syslog_process_message_pri(msg->pri);
+  msg_stats_update_counters(self->stats_id, msg);
 
   /* message setup finished, send it out */
 
   stats_counter_inc(self->recvd_messages);
-  stats_counter_set(self->last_message_seen, msg->timestamps[LM_TS_RECVD].tv_sec);
+  stats_counter_set(self->last_message_seen, msg->timestamps[LM_TS_RECVD].ut_sec);
   log_pipe_forward_msg(s, msg, path_options);
 
   if (accurate_nanosleep && self->threaded && self->window_full_sleep_nsec > 0 && !log_source_free_to_send(self))
@@ -428,19 +657,20 @@ log_source_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options
                   evt_tag_printf("msg", "%p", msg));
 
   msg_set_context(NULL);
-
 }
 
-static inline void
-_create_ack_tracker_if_not_exists(LogSource *self, gboolean pos_tracked)
+static void
+_initialize_window(LogSource *self, gint init_window_size)
 {
-  if (!self->ack_tracker)
-    {
-      if (pos_tracked)
-        self->ack_tracker = late_ack_tracker_new(self);
-      else
-        self->ack_tracker = early_ack_tracker_new(self);
-    }
+  self->window_initialized = TRUE;
+  window_size_counter_set(&self->window_size, init_window_size);
+  self->full_window_size = init_window_size;
+}
+
+static gboolean
+_is_window_initialized(LogSource *self)
+{
+  return self->window_initialized;
 }
 
 void
@@ -452,8 +682,9 @@ log_source_set_options(LogSource *self, LogSourceOptions *options,
    * configuration and we received a SIGHUP.  This means that opened
    * connections will not have their window_size changed. */
 
-  if ((gint)window_size_counter_get(&self->window_size, NULL) == -1)
-    window_size_counter_set(&self->window_size, options->init_window_size);
+  if (!_is_window_initialized(self))
+    _initialize_window(self, options->init_window_size);
+
   self->options = options;
   if (self->stats_id)
     g_free(self->stats_id);
@@ -463,10 +694,16 @@ log_source_set_options(LogSource *self, LogSourceOptions *options,
   self->stats_instance = stats_instance ? g_strdup(stats_instance): NULL;
   self->threaded = threaded;
   self->pos_tracked = pos_tracked;
+
   log_pipe_detach_expr_node(&self->super);
   log_pipe_attach_expr_node(&self->super, expr_node);
+}
 
-  _create_ack_tracker_if_not_exists(self, pos_tracked);
+void
+log_source_set_name(LogSource *self, const gchar *name)
+{
+  g_free(self->name);
+  self->name = name ? g_strdup(name) : NULL;
 }
 
 void
@@ -477,7 +714,7 @@ log_source_init_instance(LogSource *self, GlobalConfig *cfg)
   self->super.free_fn = log_source_free;
   self->super.init = log_source_init;
   self->super.deinit = log_source_deinit;
-  window_size_counter_set(&self->window_size, (gsize)-1);
+  self->window_initialized = FALSE;
   self->ack_tracker = NULL;
 }
 
@@ -486,18 +723,23 @@ log_source_free(LogPipe *s)
 {
   LogSource *self = (LogSource *) s;
 
+  g_free(self->name);
   g_free(self->stats_id);
   g_free(self->stats_instance);
   log_pipe_detach_expr_node(&self->super);
   log_pipe_free_method(s);
 
   ack_tracker_free(self->ack_tracker);
+  self->ack_tracker = NULL;
+
+  if (G_UNLIKELY(dynamic_window_is_enabled(&self->dynamic_window)))
+    _release_dynamic_window(self);
 }
 
 void
 log_source_options_defaults(LogSourceOptions *options)
 {
-  options->init_window_size = 100;
+  options->init_window_size = -1;
   options->keep_hostname = -1;
   options->chain_hostnames = -1;
   options->keep_timestamp = -1;
@@ -516,6 +758,8 @@ log_source_options_init(LogSourceOptions *options, GlobalConfig *cfg, const gcha
 
   options->source_queue_callbacks = cfg->source_mangle_callback_list;
 
+  if (options->init_window_size == -1)
+    options->init_window_size = 100;
   if (options->keep_hostname == -1)
     options->keep_hostname = cfg->keep_hostname;
   if (options->chain_hostnames == -1)

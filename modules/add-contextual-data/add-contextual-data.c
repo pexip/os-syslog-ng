@@ -28,11 +28,10 @@
 #include "cfg.h"
 #include "contextual-data-record-scanner.h"
 #include "add-contextual-data-selector.h"
-#include "add-contextual-data-template-selector.h"
-#include "add-contextual-data-filter-selector.h"
 #include "template/templates.h"
 #include "context-info-db.h"
 #include "pathutils.h"
+#include "scratch-buffers.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -58,14 +57,6 @@ add_contextual_data_set_filename(LogParser *p, const gchar *filename)
 }
 
 void
-add_contextual_data_set_database_selector_template(LogParser *p, const gchar *selector)
-{
-  AddContextualData *self = (AddContextualData *) p;
-  add_contextual_data_selector_free(self->selector);
-  self->selector = add_contextual_data_template_selector_new(log_pipe_get_config(&p->super), selector);
-}
-
-void
 add_contextual_data_set_prefix(LogParser *p, const gchar *prefix)
 {
   AddContextualData *self = (AddContextualData *) p;
@@ -75,7 +66,14 @@ add_contextual_data_set_prefix(LogParser *p, const gchar *prefix)
 }
 
 void
-add_contextual_data_set_database_default_selector(LogParser *p, const gchar *default_selector)
+add_contextual_data_set_ignore_case(LogParser *p, gboolean ignore)
+{
+  AddContextualData *self = (AddContextualData *)p;
+  self->ignore_case = ignore;
+}
+
+void
+add_contextual_data_set_default_selector(LogParser *p, const gchar *default_selector)
 {
   AddContextualData *self = (AddContextualData *) p;
 
@@ -88,22 +86,8 @@ add_contextual_data_set_selector(LogParser *p, AddContextualDataSelector *select
 {
   AddContextualData *self = (AddContextualData *) p;
 
-  self->selector = selector;
-}
-
-void
-add_contextual_data_set_selector_filter(LogParser *p, const gchar *filename)
-{
-  AddContextualData *self = (AddContextualData *) p;
   add_contextual_data_selector_free(self->selector);
-  self->selector = add_contextual_data_selector_filter_new(log_pipe_get_config(&p->super), filename);
-}
-
-void
-add_contextual_data_set_ignore_case(LogParser *p, gboolean ignore)
-{
-  AddContextualData *self = (AddContextualData *)p;
-  self->ignore_case = ignore;
+  self->selector = selector;
 }
 
 static gboolean
@@ -116,7 +100,10 @@ static void
 _add_context_data_to_message(gpointer pmsg, const ContextualDataRecord *record)
 {
   LogMessage *msg = (LogMessage *) pmsg;
-  log_msg_set_value_by_name(msg, record->name->str, record->value->str, (gssize)record->value->len);
+  GString *result = scratch_buffers_alloc();
+
+  log_template_format(record->value, msg, NULL, LTZ_LOCAL, 0, NULL, result);
+  log_msg_set_value(msg, record->value_handle, result->str, result->len);
 }
 
 static gboolean
@@ -132,8 +119,8 @@ _process(LogParser *s, LogMessage **pmsg,
   if (!context_info_db_contains(self->context_info_db, selector) && _is_default_selector_set(self))
     selector = self->default_selector;
 
-  msg_trace("add-contextual-data(): message processing",
-            evt_tag_str("input", input),
+  msg_trace("add-contextual-data(): message lookup finished",
+            evt_tag_str("message", input),
             evt_tag_str("resolved_selector", resolved_selector),
             evt_tag_str("selector", selector),
             evt_tag_printf("msg", "%p", *pmsg));
@@ -167,8 +154,8 @@ _clone(LogPipe *s)
   _replace_context_info_db(&cloned->context_info_db, self->context_info_db);
   add_contextual_data_set_prefix(&cloned->super, self->prefix);
   add_contextual_data_set_filename(&cloned->super, self->filename);
-  add_contextual_data_set_database_default_selector(&cloned->super,
-                                                    self->default_selector);
+  add_contextual_data_set_default_selector(&cloned->super,
+                                           self->default_selector);
   add_contextual_data_set_ignore_case(&cloned->super, self->ignore_case);
   cloned->selector = add_contextual_data_selector_clone(self->selector, s->cfg);
 
@@ -226,63 +213,61 @@ static ContextualDataRecordScanner *
 _get_scanner(AddContextualData *self)
 {
   const gchar *type = get_filename_extension(self->filename);
-  ContextualDataRecordScanner *scanner =
-    create_contextual_data_record_scanner_by_type(self->filename, type);
 
-  if (!scanner)
+  if (g_strcmp0(type, "csv") != 0)
     {
       msg_error("add-contextual-data(): unknown file extension, only files with a .csv extension are supported",
                 evt_tag_str("filename", self->filename));
       return NULL;
     }
 
-  contextual_data_record_scanner_set_name_prefix(scanner, self->prefix);
-
-  return scanner;
+  return contextual_data_record_scanner_new(log_pipe_get_config(&self->super.super), self->prefix);
 }
 
 static gboolean
 _load_context_info_db(AddContextualData *self)
 {
-  ContextualDataRecordScanner *scanner = _get_scanner(self);
+  ContextualDataRecordScanner *scanner;
+  FILE *f = NULL;
+  gboolean result = FALSE;
 
-  if (!scanner)
-    return FALSE;
+  if (!(scanner = _get_scanner(self)))
+    goto error;
 
-  FILE *f = _open_data_file(self->filename);
+  f = _open_data_file(self->filename);
   if (!f)
     {
       msg_error("add-contextual-data(): Error opening database",
                 evt_tag_str("filename", self->filename),
                 evt_tag_error("error"));
-      contextual_data_record_scanner_free(scanner);
-      return FALSE;
+      goto error;
     }
 
-  gboolean tag_db_loaded =
-    context_info_db_import(self->context_info_db, f, scanner);
-  contextual_data_record_scanner_free(scanner);
-
-  fclose(f);
-  if (!tag_db_loaded)
+  if (!context_info_db_import(self->context_info_db, f, self->filename, scanner))
     {
       msg_error("add-contextual-data(): Error while parsing database",
                 evt_tag_str("filename", self->filename));
-      return FALSE;
+      goto error;
     }
+  result = TRUE;
 
-  return TRUE;
+error:
+  if (scanner)
+    contextual_data_record_scanner_free(scanner);
+  if (f)
+    fclose(f);
+
+  return result;
 }
 
 static gboolean
 _init_context_info_db(AddContextualData *self)
 {
-  if (self->selector && add_contextual_data_selector_is_ordering_required(self->selector))
-    context_info_db_enable_ordering(self->context_info_db);
+  /* are we reinitializing after an unsuccessful config reload?  in that
+   * case we already have the context_info_db */
 
-  context_info_db_set_ignore_case(self->context_info_db, self->ignore_case);
-  if (!context_info_db_is_loaded(self->context_info_db))
-    context_info_db_init(self->context_info_db);
+  if (self->context_info_db)
+    return TRUE;
 
   if (self->filename == NULL)
     {
@@ -290,12 +275,12 @@ _init_context_info_db(AddContextualData *self)
       return FALSE;
     }
 
-  if (!context_info_db_is_loaded(self->context_info_db) && !_load_context_info_db(self))
-    {
-      return FALSE;
-    }
+  self->context_info_db = context_info_db_new(self->ignore_case);
 
-  return TRUE;
+  if (self->selector && add_contextual_data_selector_is_ordering_required(self->selector))
+    context_info_db_enable_ordering(self->context_info_db);
+
+  return _load_context_info_db(self);
 }
 
 static gboolean
@@ -328,7 +313,6 @@ add_contextual_data_parser_new(GlobalConfig *cfg)
 
   self->super.process = _process;
   self->selector = NULL;
-  self->context_info_db = context_info_db_new();
 
   self->super.super.clone = _clone;
   self->super.super.free_fn = _free;

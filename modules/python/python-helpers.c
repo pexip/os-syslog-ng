@@ -45,7 +45,7 @@ _py_get_callable_name(PyObject *callable, gchar *buf, gsize buf_len)
 }
 
 void
-_py_log_python_traceback_to_stderr_in_debug_mode(void)
+_py_log_python_traceback_to_stderr(void)
 {
   PyObject *traceback_module = NULL;
   PyObject *print_exception = NULL;
@@ -53,6 +53,8 @@ _py_log_python_traceback_to_stderr_in_debug_mode(void)
   PyObject *exc, *value, *tb;
 
   PyErr_Fetch(&exc, &value, &tb);
+  if (!exc)
+    return;
 
   traceback_module = _py_do_import("traceback");
   if (!traceback_module)
@@ -112,7 +114,7 @@ _py_format_exception_text(gchar *buf, gsize buf_len)
 void
 _py_finish_exception_handling(void)
 {
-  _py_log_python_traceback_to_stderr_in_debug_mode();
+  _py_log_python_traceback_to_stderr();
   PyErr_Clear();
 }
 
@@ -186,7 +188,7 @@ _py_resolve_qualified_name(const gchar *name)
 
   if (!_split_fully_qualified_name(name, &module_name, &attribute_name))
     {
-      module_name = g_strdup("_syslogng");
+      module_name = g_strdup("_syslogng_main");
       attribute_name = g_strdup(name);
     }
 
@@ -225,6 +227,27 @@ _py_invoke_function(PyObject *func, PyObject *arg, const gchar *class, const gch
   PyObject *ret;
 
   ret = PyObject_CallFunctionObjArgs(func, arg, NULL);
+  if (!ret)
+    {
+      gchar buf1[256], buf2[256];
+
+      msg_error("Exception while calling a Python function",
+                evt_tag_str("caller", caller_context),
+                evt_tag_str("class", class),
+                evt_tag_str("function", _py_get_callable_name(func, buf1, sizeof(buf1))),
+                evt_tag_str("exception", _py_format_exception_text(buf2, sizeof(buf2))));
+      _py_finish_exception_handling();
+      return NULL;
+    }
+  return ret;
+}
+
+PyObject *
+_py_invoke_function_with_args(PyObject *func, PyObject *args, const gchar *class, const gchar *caller_context)
+{
+  PyObject *ret;
+
+  ret = PyObject_CallObject(func, args);
   if (!ret)
     {
       gchar buf1[256], buf2[256];
@@ -412,6 +435,7 @@ _py_string_from_string(const gchar *str, gssize len)
         }
       else
         {
+          g_error_free(error);
           if (len >= 0)
             return PyBytes_FromStringAndSize(str, len);
           else
@@ -424,4 +448,10 @@ _py_string_from_string(const gchar *str, gssize len)
   else
     return PyBytes_FromString(str);
 #endif
+}
+
+void
+py_slng_generic_dealloc(PyObject *self)
+{
+  Py_TYPE(self)->tp_free(self);
 }

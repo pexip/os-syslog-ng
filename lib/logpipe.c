@@ -24,6 +24,7 @@
 
 #include "logpipe.h"
 #include "cfg-tree.h"
+#include "cfg-walker.h"
 
 gboolean (*pipe_single_step_hook)(LogPipe *pipe, LogMessage *msg, const LogPathOptions *path_options);
 
@@ -47,6 +48,15 @@ void log_pipe_detach_expr_node(LogPipe *self)
   self->expr_node = NULL;
 }
 
+static GList *
+_arcs(LogPipe *self)
+{
+  if (self->pipe_next)
+    return g_list_append(NULL, arc_new(self, self->pipe_next, ARC_TYPE_PIPE_NEXT));
+  else
+    return NULL;
+}
+
 void
 log_pipe_init_instance(LogPipe *self, GlobalConfig *cfg)
 {
@@ -55,6 +65,7 @@ log_pipe_init_instance(LogPipe *self, GlobalConfig *cfg)
   self->pipe_next = NULL;
   self->persist_name = NULL;
   self->plugin_name = NULL;
+  self->signal_slot_connector = signal_slot_connector_new();
 
   /* NOTE: queue == NULL means that this pipe simply forwards the
    * message along the pipeline, e.g. like it has called
@@ -63,6 +74,7 @@ log_pipe_init_instance(LogPipe *self, GlobalConfig *cfg)
 
   self->queue = NULL;
   self->free_fn = log_pipe_free_method;
+  self->arcs = _arcs;
 }
 
 LogPipe *
@@ -99,6 +111,8 @@ _free(LogPipe *self)
     self->free_fn(self);
   g_free((gpointer)self->persist_name);
   g_free(self->plugin_name);
+  g_list_free_full(self->info, g_free);
+  signal_slot_connector_free(self->signal_slot_connector);
   g_free(self);
 }
 
@@ -131,6 +145,12 @@ log_pipe_get_persist_name(const LogPipe *self)
 {
   return (self->generate_persist_name != NULL) ? self->generate_persist_name(self)
          : self->persist_name;
+}
+
+void
+log_pipe_add_info(LogPipe *self, const gchar *info)
+{
+  self->info = g_list_append(self->info, g_strdup(info));
 }
 
 #ifdef __linux__

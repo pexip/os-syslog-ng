@@ -25,9 +25,9 @@
 
 #include "logsource.h"
 #include "logpipe.h"
-#include "timeutils.h"
 #include "logmsg/logmsg.h"
 #include "template/templates.h"
+#include "timeutils/misc.h"
 
 #include <iv.h>
 
@@ -36,6 +36,7 @@ struct MsgGeneratorSource
   LogSource super;
   MsgGeneratorSourceOptions *options;
   struct iv_timer timer;
+  gint num;
 };
 
 static void
@@ -55,6 +56,15 @@ _start_timer(MsgGeneratorSource *self)
   iv_timer_register(&self->timer);
 }
 
+static void
+_start_timer_immediately(MsgGeneratorSource *self)
+{
+  iv_validate_now();
+  self->timer.expires = iv_now;
+
+  iv_timer_register(&self->timer);
+}
+
 static gboolean
 _init(LogPipe *s)
 {
@@ -62,7 +72,7 @@ _init(LogPipe *s)
   if (!log_source_init(s))
     return FALSE;
 
-  _start_timer(self);
+  _start_timer_immediately(self);
 
   return TRUE;
 }
@@ -84,12 +94,26 @@ _free(LogPipe *s)
 }
 
 static void
+_add_name_value(gpointer key, gpointer value, gpointer data)
+{
+  gchar *name = (gchar *) key;
+  LogTemplate *val = (LogTemplate *) value;
+  LogMessage *msg = (LogMessage *) data;
+  GString *msg_body = g_string_sized_new(128);
+  log_template_format(val, msg, NULL, LTZ_LOCAL, 0, NULL, msg_body);
+  log_msg_set_value_by_name(msg, name, msg_body->str, msg_body->len);
+  g_string_free(msg_body, TRUE);
+
+}
+
+static void
 _send_generated_message(MsgGeneratorSource *self)
 {
   if (!log_source_free_to_send(&self->super))
     return;
 
   LogMessage *msg = log_msg_new_empty();
+  g_hash_table_foreach(self->options->name_value, _add_name_value, msg);
   log_msg_set_value(msg, LM_V_MESSAGE, "-- Generated message. --", -1);
 
   if (self->options->template)
@@ -111,7 +135,18 @@ _timer_expired(void *cookie)
 
   _send_generated_message(self);
 
-  _start_timer(self);
+  if (self->options->max_num > 0)
+    {
+      self->num++;
+      if (self->num < self->options->max_num)
+        {
+          _start_timer(self);
+        }
+    }
+  else
+    {
+      _start_timer(self);
+    }
 }
 
 gboolean

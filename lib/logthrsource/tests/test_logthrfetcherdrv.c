@@ -39,6 +39,8 @@ typedef struct _TestThreadedFetcherDriver
   gint num_of_messages_to_generate;
   gint num_of_connection_failures_to_generate;
   gint connect_counter;
+  gboolean try_again_first_time;
+  gboolean no_data_first_time;
 
   GMutex *lock;
   GCond *cond;
@@ -85,6 +87,20 @@ test_threaded_fetcher_free(LogPipe *s)
   log_threaded_fetcher_driver_free_method(s);
 }
 
+gboolean
+test_threaded_fetcher_driver_init_method(LogPipe *s)
+{
+  TestThreadedFetcherDriver *self = (TestThreadedFetcherDriver *)s;
+
+  if (!log_threaded_fetcher_driver_init_method(s))
+    return FALSE;
+
+  /* mock out the hard-coded DNS lookup calls inside log_source_queue() */
+  _get_source(self)->super.queue = _source_queue_mock;
+
+  return TRUE;
+}
+
 static TestThreadedFetcherDriver *
 test_threaded_fetcher_new(GlobalConfig *cfg)
 {
@@ -95,12 +111,11 @@ test_threaded_fetcher_new(GlobalConfig *cfg)
   self->lock = g_mutex_new();
   self->cond = g_cond_new();
 
+  self->super.super.super.super.super.init = test_threaded_fetcher_driver_init_method;
+
   self->super.super.format_stats_instance = _format_stats_instance;
   self->super.super.super.super.super.generate_persist_name = _generate_persist_name;
   self->super.super.super.super.super.free_fn = test_threaded_fetcher_free;
-
-  /* mock out the hard-coded DNS lookup calls inside log_source_queue() */
-  _get_source(self)->super.queue = _source_queue_mock;
 
   return self;
 }
@@ -115,7 +130,7 @@ static void
 start_test_threaded_fetcher(TestThreadedFetcherDriver *s)
 {
   cr_assert(log_pipe_init(&s->super.super.super.super.super));
-  app_post_config_loaded();
+  app_config_changed();
 }
 
 static void
@@ -188,7 +203,7 @@ _fetch(LogThreadedFetcherDriver *s)
   return (LogThreadedFetchResult)
   {
     .result = THREADED_FETCH_SUCCESS,
-     .msg = msg
+    .msg = msg
   };
 }
 
@@ -240,6 +255,129 @@ Test(logthrfetcherdrv, test_reconnect)
   StatsCounterItem *recvd_messages = _get_source(s)->recvd_messages;
   cr_assert(stats_counter_get(recvd_messages) == 10);
   cr_assert_geq(s->connect_counter, 6);
+
+  destroy_test_threaded_fetcher(s);
+}
+
+static LogThreadedFetchResult
+_fetch_for_try_again_test(LogThreadedFetcherDriver *s)
+{
+  TestThreadedFetcherDriver *self = (TestThreadedFetcherDriver *) s;
+
+  if (self->try_again_first_time)
+    {
+      self->try_again_first_time = FALSE;
+      return (LogThreadedFetchResult)
+      {
+        THREADED_FETCH_TRY_AGAIN, NULL
+      };
+    }
+
+  g_mutex_lock(self->lock);
+  if (self->num_of_messages_to_generate <= 0)
+    {
+      g_cond_signal(self->cond);
+      g_mutex_unlock(self->lock);
+      return (LogThreadedFetchResult)
+      {
+        THREADED_FETCH_ERROR, NULL
+      };
+    }
+
+  LogMessage *msg = create_sample_message();
+
+  self->num_of_messages_to_generate--;
+  g_mutex_unlock(self->lock);
+
+  return (LogThreadedFetchResult)
+  {
+    .result = THREADED_FETCH_SUCCESS,
+    .msg = msg
+  };
+}
+
+Test(logthrfetcherdrv, test_try_again)
+{
+  TestThreadedFetcherDriver *s = create_threaded_fetcher();
+  s->try_again_first_time = TRUE;
+
+  s->num_of_messages_to_generate = 1;
+  s->super.time_reopen = 10;
+  s->super.fetch = _fetch_for_try_again_test;
+
+  struct timespec start = {0};
+  cr_assert(!clock_gettime(CLOCK_MONOTONIC, &start));
+
+  start_test_threaded_fetcher(s);
+  wait_for_messages(s);
+  stop_test_threaded_fetcher(s);
+
+  struct timespec stop = {0};
+  cr_assert(!clock_gettime(CLOCK_MONOTONIC, &stop));
+
+  // Should not pass time_reopen in case of try_again
+  cr_assert(!stop.tv_sec - start.tv_sec < 2);
+
+  destroy_test_threaded_fetcher(s);
+}
+
+static LogThreadedFetchResult
+_fetch_for_no_data(LogThreadedFetcherDriver *s)
+{
+  TestThreadedFetcherDriver *self = (TestThreadedFetcherDriver *) s;
+
+  if (self->no_data_first_time)
+    {
+      self->no_data_first_time = FALSE;
+      return (LogThreadedFetchResult)
+      {
+        THREADED_FETCH_NO_DATA, NULL
+      };
+    }
+
+  g_mutex_lock(self->lock);
+  if (self->num_of_messages_to_generate <= 0)
+    {
+      g_cond_signal(self->cond);
+      g_mutex_unlock(self->lock);
+      return (LogThreadedFetchResult)
+      {
+        THREADED_FETCH_ERROR, NULL
+      };
+    }
+
+  LogMessage *msg = create_sample_message();
+
+  self->num_of_messages_to_generate--;
+  g_mutex_unlock(self->lock);
+
+  return (LogThreadedFetchResult)
+  {
+    .result = THREADED_FETCH_SUCCESS,
+    .msg = msg
+  };
+}
+
+Test(logthrfetcherdrv, test_no_data)
+{
+  TestThreadedFetcherDriver *s = create_threaded_fetcher();
+  s->no_data_first_time = TRUE;
+
+  s->num_of_messages_to_generate = 1;
+  log_threaded_fetcher_driver_set_fetch_no_data_delay(&s->super.super.super.super, 1);
+  s->super.fetch = _fetch_for_no_data;
+
+  struct timespec start = {0};
+  cr_assert(!clock_gettime(CLOCK_MONOTONIC, &start));
+
+  start_test_threaded_fetcher(s);
+  wait_for_messages(s);
+  stop_test_threaded_fetcher(s);
+
+  struct timespec stop = {0};
+  cr_assert(!clock_gettime(CLOCK_MONOTONIC, &stop));
+
+  cr_assert(stop.tv_sec - start.tv_sec >= 1);
 
   destroy_test_threaded_fetcher(s);
 }

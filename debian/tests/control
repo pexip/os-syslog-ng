@@ -31,7 +31,7 @@ Depends: syslog-ng-core, syslog-ng-mod-amqp
 Restrictions: allow-stderr
 
 Tests: basic
-Depends: syslog-ng-core, syslog-ng-mod-geoip
+Depends: syslog-ng-core, syslog-ng-mod-geoip2
 Restrictions: allow-stderr
 
 Tests: basic
@@ -71,7 +71,7 @@ Depends: syslog-ng-core, syslog-ng-mod-map-value-pairs
 Restrictions: allow-stderr
 
 Tests: basic
-Depends: syslog-ng-core, syslog-ng-mod-snmptrapd-parser
+Depends: syslog-ng-core, syslog-ng-mod-snmp
 Restrictions: allow-stderr
 
 Tests: basic

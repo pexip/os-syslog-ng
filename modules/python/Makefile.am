@@ -26,6 +26,8 @@ modules_python_libmod_python_la_SOURCES		= \
 	modules/python/python-module.h		  \
 	modules/python/python-config.h		  \
 	modules/python/python-config.c		  \
+	modules/python/python-persist.h		  \
+	modules/python/python-persist.c		  \
 	modules/python/python-helpers.h		  \
 	modules/python/python-helpers.c		  \
 	modules/python/python-main.h		  \
@@ -48,6 +50,8 @@ modules_python_libmod_python_la_SOURCES		= \
 	modules/python/python-logtemplate-options.c\
 	modules/python/python-integerpointer.c    \
 	modules/python/python-integerpointer.h    \
+	modules/python/python-logger.c    \
+	modules/python/python-logger.h    \
 	modules/python/python-global-code-loader.h\
 	modules/python/python-global-code-loader.c\
 	modules/python/python-debugger.h	  \
@@ -57,7 +61,10 @@ modules_python_libmod_python_la_SOURCES		= \
 	modules/python/python-source.h	  \
 	modules/python/python-source.c	  \
 	modules/python/python-fetcher.h	  \
-	modules/python/python-fetcher.c
+	modules/python/python-fetcher.c   \
+	modules/python/python-http-header.h   \
+	modules/python/python-http-header.c
+
 
 modules_python_libmod_python_la_LDFLAGS		 = \
 	$(MODULE_LDFLAGS) \

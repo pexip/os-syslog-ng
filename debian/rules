@@ -5,6 +5,10 @@
 ##
 ## Released under the GPLv2+, see /usr/share/common-licenses/GPL-2 on
 ## Debian systems.
+include /usr/share/dpkg/pkg-info.mk
+
+# Uncomment this to turn on verbose mode.
+#export DH_VERBOSE=1
 
 # For my own sanity, when debian/rules is ran without any argument,
 # display something meaningful, instead of just running the first
@@ -34,7 +38,7 @@ endif
 # sources are in a submodule, in syslog-ng-*. Since we do not wish to
 # update the rules for every major version if it can be helped, figure
 # it out from the changelog instead.
-UMAJOR		   = $(shell dpkg-parsechangelog | sed -n '/^Version:/s/^Version: //p' | cut -d. -f1,2)
+UMAJOR		= $(shell echo ${DEB_VERSION_UPSTREAM} | cut -d. -f1,2)
 
 export DH_OPTIONS += -O-Bdebian/build-tree --dbg-package=syslog-ng-dbg
 
@@ -74,8 +78,7 @@ endif
 override_dh_auto_configure:
 	install -d debian/build-tree
 	-rm -rf doc/man/*.?
-	SOURCE_REVISION="$(shell dpkg-parsechangelog | \
-			  sed -n '/^Version:/s/^Version: //p')"; \
+	SOURCE_REVISION="${DEB_VERSION}"; \
 	dh_auto_configure -- \
 		--build=$(dpkg-architecture -qDEB_BUILD_GNU_TYPE) \
 		--prefix=/usr \
@@ -98,6 +101,9 @@ override_dh_auto_configure:
 		--enable-amqp \
 		$(PACCT_CONFIGURE_OPTS) \
 		--enable-python \
+		--with-python=3 \
+		--enable-http \
+		--enable-kafka \
 		\
 		--with-mongoc=system \
 		--with-ivykis=system \
@@ -121,10 +127,11 @@ override_dh_auto_configure:
 # the list-missing option
 override_dh_auto_install:
 	dh_auto_install -- \
-		pkgconfigdir=/usr/lib/$(MULTIARCH_PATH)/pkgconfig \
-		PYSETUP_OPTIONS="--install-layout=deb \
-		--root=$(CURDIR)/debian/tmp/"
+		pkgconfigdir=/usr/lib/$(MULTIARCH_PATH)/pkgconfig
 	find . -name \*.la | xargs --no-run-if-empty rm
+	[ ! -f $(CURDIR)/debian/tmp/usr/share/syslog-ng/tools/merge-grammar.py ] || \
+		sed -i 's/ python$$/ python3/' \
+		$(CURDIR)/debian/tmp/usr/share/syslog-ng/tools/merge-grammar.py
 
 # To get better test results, and actually see failing tests, we need
 # to pass VERBOSE=1 to make when running the tests. Do that here.
@@ -178,22 +185,17 @@ override_dh_gencontrol:
 	dh_gencontrol -- -Vsng:Modules=$(shell debian/tools/list-modules.sh optional) \
 			 -Vsng:CoreModules=$(shell debian/tools/list-modules.sh core)
 
-# Sadly, dh_python2 barfs on --dbg-package=, so we work it around by
-# clearing DH_OPTIONS here.
-override_dh_python2:
-	DH_OPTIONS="" dh_python2
-
 # Sadly, dh_python3 barfs on --dbg-package=, so we work it around by
 # clearing DH_OPTIONS here.
 override_dh_python3:
-	DH_OPTIONS="" dh_python3
+	DH_OPTIONS="" dh_python3 usr/lib/syslog-ng/${UMAJOR}
 
 ##
 #* Other, non-override targets
 ##
 
 override_dh_missing:
-	dh_missing $(shell awk '{sub(/.*\//, "", $$1); print "-X"$$2"/"$$1}' debian/syslog-ng-mod-extra.install) --fail-missing
+	dh_missing $(shell awk '{sub(/.*\//, "", $$1); print "-X"$$2$$1}' debian/syslog-ng-mod-extra.install) --fail-missing
 
 # By default, the arch:all syslog-ng package does not need anything
 # built, so build-indep shall be empty. This avoids triggering another
@@ -204,4 +206,4 @@ build-indep: ;
 
 # And for the rest, there is debhelper!
 %:
-	dh $@ --with autoreconf,systemd,python2
+	dh $@ --with autoreconf,python3

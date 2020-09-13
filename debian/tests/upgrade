@@ -5,12 +5,11 @@ orig_version=$(apt-cache policy syslog-ng | grep "500$" | awk '{print $1}')
 apt_line=""
 for pkg in syslog-ng \
                 syslog-ng-core \
-                syslog-ng-mod-journal \
                 syslog-ng-mod-mongodb \
                 syslog-ng-mod-sql \
                 syslog-ng-mod-smtp \
                 syslog-ng-mod-amqp \
-                syslog-ng-mod-geoip \
+                syslog-ng-mod-geoip2 \
                 syslog-ng-mod-redis \
                 syslog-ng-mod-stomp \
                 syslog-ng-mod-riemann \

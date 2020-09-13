@@ -26,6 +26,13 @@ package org.syslog_ng;
 
 public abstract class LogDestination extends LogPipe {
 
+	protected static final int DROP = 0;
+	protected static final int ERROR = 1;
+	protected static final int SUCCESS = 3;
+	protected static final int QUEUED = 4;
+	protected static final int NOT_CONNECTED = 5;
+	protected static final int RETRY = 6;
+
 	public LogDestination(long pipeHandle) {
 		super(pipeHandle);
 	}
@@ -42,6 +49,18 @@ public abstract class LogDestination extends LogPipe {
  		return getSeqNum(getHandle());
         }
 
+	public int getBatchLines() {
+ 		return getBatchLines(getHandle());
+        }
+
+	public void setBatchLines(long batch_size) {
+ 		setBatchLines(getHandle(), batch_size);
+        }
+
+	public void setBatchTimeout(long timeout) {
+ 		setBatchTimeout(getHandle(), timeout);
+        }
+
 	protected abstract boolean open();
 
 	protected abstract void close();
@@ -56,8 +75,14 @@ public abstract class LogDestination extends LogPipe {
 
 	private native int getSeqNum(long ptr);
 
-	protected void onMessageQueueEmpty() {
-		return;
+	private native int getBatchLines(long ptr);
+
+	private native int setBatchLines(long ptr, long batch_size);
+
+	private native int setBatchTimeout(long ptr, long timeout);
+
+	protected int flush() {
+		return SUCCESS;
 	}
 
 	public boolean openProxy() {
@@ -89,12 +114,13 @@ public abstract class LogDestination extends LogPipe {
 		}
 	}
 
-	public void onMessageQueueEmptyProxy() {
+	public int flushProxy() {
 		try {
-			onMessageQueueEmpty();
+			return flush();
 		}
 		catch (Exception e) {
 			sendExceptionMessage(e);
+			return ERROR;
 		}
 	}
 

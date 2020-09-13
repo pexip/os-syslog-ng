@@ -51,12 +51,14 @@ static CfgLexerKeyword afsocket_keywords[] =
   { "pkcs12_file",        KW_PKCS12_FILE },
   { "ca_dir",             KW_CA_DIR },
   { "crl_dir",            KW_CRL_DIR },
+  { "ca_file",            KW_CA_FILE },
   { "trusted_keys",       KW_TRUSTED_KEYS },
   { "trusted_dn",         KW_TRUSTED_DN },
   { "cipher_suite",       KW_CIPHER_SUITE },
   { "ecdh_curve_list",    KW_ECDH_CURVE_LIST },
   { "curve_list",         KW_ECDH_CURVE_LIST, KWS_OBSOLETE, "ecdh_curve_list"},
   { "ssl_options",        KW_SSL_OPTIONS },
+  { "sni",                KW_SNI },
   { "allow_compress",     KW_ALLOW_COMPRESS },
 
   { "localip",            KW_LOCALIP },
@@ -79,11 +81,13 @@ static CfgLexerKeyword afsocket_keywords[] =
   { "tcp_keepalive_probes", KW_TCP_KEEPALIVE_PROBES },
   { "tcp_keepalive_intvl", KW_TCP_KEEPALIVE_INTVL },
   { "spoof_source",       KW_SPOOF_SOURCE },
+  { "spoof_source_max_msglen", KW_SPOOF_SOURCE_MAX_MSGLEN },
   { "transport",          KW_TRANSPORT },
   { "ip_protocol",        KW_IP_PROTOCOL },
   { "max_connections",    KW_MAX_CONNECTIONS },
   { "listen_backlog",     KW_LISTEN_BACKLOG },
   { "keep_alive",         KW_KEEP_ALIVE },
+  { "close_on_input",     KW_CLOSE_ON_INPUT },
   { "systemd_syslog",     KW_SYSTEMD_SYSLOG  },
   { "failover_servers",   KW_FAILOVER_SERVERS, KWS_OBSOLETE, "failover-servers has been deprecated, try failover() and use servers() option inside it." },
   { "failover",           KW_FAILOVER },
@@ -91,6 +95,9 @@ static CfgLexerKeyword afsocket_keywords[] =
   { "servers",            KW_SERVERS },
   { "tcp_probe_interval", KW_TCP_PROBE_INTERVAL },
   { "successful_probes_required", KW_SUCCESSFUL_PROBES_REQUIRED },
+  { "dynamic_window_size", KW_DYNAMIC_WINDOW_SIZE },
+  { "dynamic_window_stats_freq", KW_DYNAMIC_WINDOW_STATS_FREQ },
+  { "dynamic_window_realloc_ticks", KW_DYNAMIC_WINDOW_REALLOC_TICKS },
   { NULL }
 };
 

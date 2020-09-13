@@ -34,6 +34,8 @@ typedef struct _LogProtoClient LogProtoClient;
 
 typedef struct _LogProtoClientOptions
 {
+  gboolean drop_input;
+  gint timeout;
 } LogProtoClientOptions;
 
 typedef union _LogProtoClientOptionsStorage
@@ -52,6 +54,10 @@ typedef struct
   gpointer user_data;
 } LogProtoClientFlowControlFuncs;
 
+void log_proto_client_options_set_drop_input(LogProtoClientOptions *options, gboolean drop_input);
+void log_proto_client_options_set_timeout(LogProtoClientOptions *options, gint timeout);
+gint log_proto_client_options_get_timeout(LogProtoClientOptions *options);
+
 void log_proto_client_options_defaults(LogProtoClientOptions *options);
 void log_proto_client_options_init(LogProtoClientOptions *options, GlobalConfig *cfg);
 void log_proto_client_options_destroy(LogProtoClientOptions *options);
@@ -64,6 +70,7 @@ struct _LogProtoClient
   /* FIXME: rename to something else */
   gboolean (*prepare)(LogProtoClient *s, gint *fd, GIOCondition *cond, gint *timeout);
   LogProtoStatus (*post)(LogProtoClient *s, LogMessage *logmsg, guchar *msg, gsize msg_len, gboolean *consumed);
+  LogProtoStatus (*process_in)(LogProtoClient *s);
   LogProtoStatus (*flush)(LogProtoClient *s);
   gboolean (*validate_options)(LogProtoClient *s);
   gboolean (*handshake_in_progess)(LogProtoClient *s);
@@ -92,6 +99,12 @@ log_proto_client_msg_rewind(LogProtoClient *self)
 {
   if (self->flow_control_funcs.rewind_callback)
     self->flow_control_funcs.rewind_callback(self->flow_control_funcs.user_data);
+}
+
+static inline void
+log_proto_client_set_options(LogProtoClient *self, const LogProtoClientOptions *options)
+{
+  self->options = options;
 }
 
 static inline gboolean
@@ -130,6 +143,23 @@ static inline LogProtoStatus
 log_proto_client_flush(LogProtoClient *s)
 {
   if (s->flush)
+    return s->flush(s);
+  else
+    return LPS_SUCCESS;
+}
+
+static inline LogProtoStatus
+log_proto_client_process_in(LogProtoClient *s)
+{
+  if (s->process_in)
+    return s->process_in(s);
+  else if (s->flush)
+    /*
+     * In some clients, flush is used for input processing, but it should not be.
+     * Fix these clients, than remove the flush call here.
+     *
+     * SSL_ERROR_WANT_READ in the TLS transport is also built upon this.
+     */
     return s->flush(s);
   else
     return LPS_SUCCESS;

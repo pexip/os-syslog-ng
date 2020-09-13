@@ -31,6 +31,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+MsgFormatOptions parse_options;
+
 static LogMessage *
 _create_log_message(const gchar *log)
 {
@@ -38,11 +40,8 @@ _create_log_message(const gchar *log)
   gchar buf[1024];
   NVHandle nonasciiz = log_msg_get_value_handle("NON-ASCIIZ");
   gssize msglen;
-  GSockAddr *sa;
 
-  sa = g_sockaddr_inet_new("10.10.10.10", 1010);
-  msg = log_msg_new(log, strlen(log), sa, &parse_options);
-  g_sockaddr_unref(sa);
+  msg = log_msg_new(log, strlen(log), &parse_options);
 
   /* NOTE: we test how our matchers cope with non-zero terminated values. We don't change message_len, only the value */
   g_snprintf(buf, sizeof(buf), "%sAAAAAAAAAAAA", log_msg_get_value(msg, LM_V_MESSAGE, &msglen));
@@ -55,14 +54,14 @@ _create_log_message(const gchar *log)
 }
 
 static LogMatcher *
-_construct_matcher(gint matcher_flags, LogMatcher *(*construct)(GlobalConfig *cfg, const LogMatcherOptions *options))
+_construct_matcher(gint matcher_flags, LogMatcher *(*construct)(const LogMatcherOptions *options))
 {
   LogMatcherOptions matcher_options;
 
   log_matcher_options_defaults(&matcher_options);
   matcher_options.flags = matcher_flags;
 
-  return construct(configuration, &matcher_options);
+  return construct(&matcher_options);
 }
 
 
@@ -128,7 +127,7 @@ void
 setup(void)
 {
   app_startup();
-  init_and_load_syslogformat_module();
+  init_parse_options_and_load_syslogformat(&parse_options);
 }
 
 void
@@ -154,12 +153,10 @@ Test(matcher, pcre_regexp, .description = "PCRE regexp")
                    _construct_matcher(LMF_GLOBAL, log_matcher_pcre_re_new));
 }
 
-Test(matcher, back_ref, .description = "back references are not portable, they work only on Linux")
+Test(matcher, back_ref)
 {
-#if __linux__
   testcase_replace("<155>2006-02-11T10:34:56+01:00 bzorp syslog-ng[23323]: wikiwiki", "(wiki)\\1", "", "",
                    _construct_matcher(LMF_STORE_MATCHES, log_matcher_pcre_re_new));
-#endif
 }
 
 Test(matcher, empty_global, .description = "empty match with global flag")
@@ -186,6 +183,12 @@ Test(matcher, empty_global, .description = "empty match with global flag")
                    _construct_matcher(LMF_GLOBAL, log_matcher_pcre_re_new));
   testcase_replace("<155>2006-02-11T10:34:56+01:00 bzorp syslog-ng[23323]: wikiwiki", "wi", "kuku", "kukukikukuki",
                    _construct_matcher(LMF_GLOBAL, log_matcher_pcre_re_new));
+}
+
+Test(matcher, disable_jit)
+{
+  testcase_replace("<155>2006-02-11T10:34:56+01:00 bzorp syslog-ng[23323]: árvíztűrőtükörfúrógép", "árvíz",
+                   "favíz", "favíztűrőtükörfúrógép", _construct_matcher(LMF_DISABLE_JIT, log_matcher_pcre_re_new));
 }
 
 Test(matcher, string_match)

@@ -50,20 +50,43 @@ void
 log_rewrite_subst_process(LogRewrite *s, LogMessage **pmsg, const LogPathOptions *path_options)
 {
   LogRewriteSubst *self = (LogRewriteSubst *) s;
+  LogMessage *msg;
+  NVTable *nvtable;
   const gchar *value;
   gchar *new_value;
   gssize length;
   gssize new_length = -1;
 
-  value = log_msg_get_value(*pmsg, self->super.value_handle, &length);
-
-  log_msg_make_writable(pmsg, path_options);
-  new_value = log_matcher_replace(self->matcher, *pmsg, self->super.value_handle, value, length, self->replacement,
+  msg = log_msg_make_writable(pmsg, path_options);
+  nvtable = nv_table_ref(msg->payload);
+  value = log_msg_get_value(msg, self->super.value_handle, &length);
+  new_value = log_matcher_replace(self->matcher, msg, self->super.value_handle, value, length, self->replacement,
                                   &new_length);
+
   if (new_value)
     {
-      log_msg_set_value(*pmsg, self->super.value_handle, new_value, new_length);
+      msg_trace("Performing subst() rewrite",
+                evt_tag_str("rule", s->name),
+                evt_tag_str("value", log_msg_get_value_name(s->value_handle, NULL)),
+                evt_tag_printf("input", "%.*s", (gint) length, value),
+                evt_tag_str("type", self->matcher_options.type),
+                evt_tag_str("pattern", self->matcher->pattern),
+                evt_tag_str("replacement", self->replacement->template),
+                log_pipe_location_tag(&s->super));
+      log_msg_set_value(msg, self->super.value_handle, new_value, new_length);
     }
+  else
+    {
+      msg_trace("Performing subst() rewrite failed, pattern did not match",
+                evt_tag_str("rule", s->name),
+                evt_tag_str("value", log_msg_get_value_name(s->value_handle, NULL)),
+                evt_tag_printf("input", "%.*s", (gint) length, value),
+                evt_tag_str("type", self->matcher_options.type),
+                evt_tag_str("pattern", self->matcher->pattern),
+                evt_tag_str("replacement", self->replacement->template),
+                log_pipe_location_tag(&s->super));
+    }
+  nv_table_unref(nvtable);
   g_free(new_value);
 }
 
@@ -71,10 +94,9 @@ gboolean
 log_rewrite_subst_compile_pattern(LogRewrite *s, const gchar *regexp, GError **error)
 {
   LogRewriteSubst *self = (LogRewriteSubst *) s;
-  GlobalConfig *cfg = log_pipe_get_config(&s->super);
 
-  log_matcher_options_init(&self->matcher_options, cfg);
-  self->matcher = log_matcher_new(cfg, &self->matcher_options);
+  log_matcher_options_init(&self->matcher_options);
+  self->matcher = log_matcher_new(&self->matcher_options);
 
   if (!log_matcher_is_replace_supported(self->matcher))
     {

@@ -160,6 +160,19 @@ Test(lexer, test_string)
   assert_parser_string("test\n\r\a\t\vc");
 }
 
+Test(lexer, test_unquoted_string)
+{
+  _input("test");
+  assert_parser_identifier("test");
+
+  _input("..test");
+  assert_parser_token(LL_DOTDOT);
+
+  _input(".test");
+  assert_parser_token('.');
+  assert_parser_identifier("test");
+}
+
 Test(lexer, test_qstring)
 {
   _input("'test'");
@@ -214,6 +227,16 @@ Test(lexer, block_token_is_taken_literally_between_a_pair_of_enclosing_character
   cfg_lexer_start_block_state(parser->lexer, "{}");
   assert_parser_block(" \"hello\\\nworld\" ");
   assert_location_range(1, 1, 2, 9);
+
+  _input(" { \"hello \\a\\n\\r\\t\\v\\x40\\o100 world\" }");
+  cfg_lexer_start_block_state(parser->lexer, "{}");
+  assert_parser_block(" \"hello \\a\\n\\r\\t\\v\\x40\\o100 world\" ");
+  assert_location_range(1, 1, 1, 39);
+
+  _input(" { \"hello \\\" world\" }");
+  cfg_lexer_start_block_state(parser->lexer, "{}");
+  assert_parser_block(" \"hello \\\" world\" ");
+  assert_location_range(1, 1, 1, 22);
 }
 
 Test(lexer, block_new_lines_in_text_leading_to_the_opening_bracket_are_tracked_properly)
@@ -288,23 +311,26 @@ Test(lexer, at_version_stores_config_version_in_parsed_version_in_hex_form)
 {
   parser->lexer->ignore_pragma = FALSE;
 
-  _input("@version: 3.19\n\
+  cfg_set_version_without_validation(configuration, 0);
+  _input("@version: 3.28\n\
 foo\n");
   assert_parser_identifier("foo");
-  cr_assert_eq(configuration->parsed_version, 0x0313,
-               "@version parsing mismatch, value %04x expected %04x", configuration->parsed_version, 0x0313);
+  cr_assert_eq(configuration->user_version, 0x031c,
+               "@version parsing mismatch, value %04x expected %04x", configuration->user_version, 0x031c);
 
+  cfg_set_version_without_validation(configuration, 0);
   _input("@version: 3.1\n\
 bar\n");
   assert_parser_identifier("bar");
-  cr_assert_eq(configuration->parsed_version, 0x0301,
-               "@version parsing mismatch, value %04x expected %04x", configuration->parsed_version, 0x0301);
+  cr_assert_eq(configuration->user_version, 0x0301,
+               "@version parsing mismatch, value %04x expected %04x", configuration->user_version, 0x0301);
 
+  cfg_set_version_without_validation(configuration, 0);
   _input("@version: 3.5\n\
 baz\n");
   assert_parser_identifier("baz");
-  cr_assert_eq(configuration->parsed_version, 0x0305,
-               "@version parsing mismatch, value %04x expected %04x", configuration->parsed_version, 0x0305);
+  cr_assert_eq(configuration->user_version, 0x0305,
+               "@version parsing mismatch, value %04x expected %04x", configuration->user_version, 0x0305);
 }
 
 Test(lexer, test_lexer_others)
@@ -443,20 +469,8 @@ Test(lexer, include_finds_wildcards_files_in_include_path)
   assert_parser_identifier("foo");
 }
 
-Test(lexer, include_statement_without_at_sign)
-{
-  CfgLexer *lexer = parser->lexer;
-
-  cfg_lexer_push_context(parser->lexer, main_parser.context, main_parser.keywords, main_parser.name);
-  parser->lexer->ignore_pragma = FALSE;
-  _input("@define include-path \"" TESTDATA_DIR "/include-test\"\n\
-include \"foo.conf\";\n");
-  assert_parser_identifier("foo");
-  cfg_lexer_pop_context(lexer);
-}
-
 static gboolean
-_fake_generator_generate(CfgBlockGenerator *self, GlobalConfig *cfg, CfgArgs *args, GString *result,
+_fake_generator_generate(CfgBlockGenerator *self, GlobalConfig *cfg, gpointer args, GString *result,
                          const gchar *reference)
 {
   g_string_append(result, "fake_generator_content");

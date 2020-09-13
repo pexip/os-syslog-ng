@@ -24,8 +24,12 @@
 
 #include "template/macros.h"
 #include "template/escaping.h"
-#include "timeutils.h"
-#include "logstamp.h"
+#include "timeutils/cache.h"
+#include "timeutils/names.h"
+#include "timeutils/unixtime.h"
+#include "timeutils/format.h"
+#include "timeutils/misc.h"
+#include "timeutils/conv.h"
 #include "messages.h"
 #include "str-format.h"
 #include "run-id.h"
@@ -43,9 +47,14 @@ LogMacroDef macros[] =
 {
   { "FACILITY", M_FACILITY },
   { "FACILITY_NUM", M_FACILITY_NUM },
-  { "PRIORITY", M_LEVEL },
-  { "LEVEL", M_LEVEL },
-  { "LEVEL_NUM", M_LEVEL_NUM },
+  { "SEVERITY", M_SEVERITY },
+  { "SEVERITY_NUM", M_SEVERITY_NUM },
+
+  /* these are obsolete aliases of $SEVERITY that we support for compatibility only */
+  { "PRIORITY", M_SEVERITY },         /* deprecated */
+  { "LEVEL", M_SEVERITY },            /* deprecated */
+  { "LEVEL_NUM", M_SEVERITY_NUM },    /* deprecated */
+
   { "TAG", M_TAG },
   { "TAGS", M_TAGS },
   { "BSDTAG", M_BSDTAG },
@@ -71,9 +80,10 @@ LogMacroDef macros[] =
   { "AMPM",           M_AMPM },
   { "WEEKDAY",        M_WEEK_DAY_ABBREV }, /* deprecated */
   { "WEEK_DAY",       M_WEEK_DAY },
-  { "WEEK_DAY_ABBREV",M_WEEK_DAY_ABBREV },
+  { "WEEK_DAY_ABBREV", M_WEEK_DAY_ABBREV },
   { "WEEK_DAY_NAME",  M_WEEK_DAY_NAME },
   { "WEEK",           M_WEEK },
+  { "ISOWEEK",        M_ISOWEEK },
   { "TZOFFSET",       M_TZOFFSET },
   { "TZ",             M_TZ },
   { "SYSUPTIME",      M_SYSUPTIME },
@@ -99,9 +109,10 @@ LogMacroDef macros[] =
   { "R_AMPM",           M_RECVD_OFS + M_AMPM },
   { "R_WEEKDAY",        M_RECVD_OFS + M_WEEK_DAY_ABBREV }, /* deprecated */
   { "R_WEEK_DAY",       M_RECVD_OFS + M_WEEK_DAY },
-  { "R_WEEK_DAY_ABBREV",M_RECVD_OFS + M_WEEK_DAY_ABBREV },
+  { "R_WEEK_DAY_ABBREV", M_RECVD_OFS + M_WEEK_DAY_ABBREV },
   { "R_WEEK_DAY_NAME",  M_RECVD_OFS + M_WEEK_DAY_NAME },
   { "R_WEEK",           M_RECVD_OFS + M_WEEK },
+  { "R_ISOWEEK",        M_RECVD_OFS + M_ISOWEEK },
   { "R_TZOFFSET",       M_RECVD_OFS + M_TZOFFSET },
   { "R_TZ",             M_RECVD_OFS + M_TZ },
   { "R_UNIXTIME",       M_RECVD_OFS + M_UNIXTIME },
@@ -126,9 +137,10 @@ LogMacroDef macros[] =
   { "S_AMPM",           M_STAMP_OFS + M_AMPM },
   { "S_WEEKDAY",        M_STAMP_OFS + M_WEEK_DAY_ABBREV }, /* deprecated */
   { "S_WEEK_DAY",       M_STAMP_OFS + M_WEEK_DAY },
-  { "S_WEEK_DAY_ABBREV",M_STAMP_OFS + M_WEEK_DAY_ABBREV },
+  { "S_WEEK_DAY_ABBREV", M_STAMP_OFS + M_WEEK_DAY_ABBREV },
   { "S_WEEK_DAY_NAME",  M_STAMP_OFS + M_WEEK_DAY_NAME },
   { "S_WEEK",           M_STAMP_OFS + M_WEEK },
+  { "S_ISOWEEK",        M_STAMP_OFS + M_ISOWEEK },
   { "S_TZOFFSET",       M_STAMP_OFS + M_TZOFFSET },
   { "S_TZ",             M_STAMP_OFS + M_TZ },
   { "S_UNIXTIME",       M_STAMP_OFS + M_UNIXTIME },
@@ -153,9 +165,10 @@ LogMacroDef macros[] =
   { "C_AMPM",           M_CSTAMP_OFS + M_AMPM },
   { "C_WEEKDAY",        M_CSTAMP_OFS + M_WEEK_DAY_ABBREV }, /* deprecated */
   { "C_WEEK_DAY",       M_CSTAMP_OFS + M_WEEK_DAY },
-  { "C_WEEK_DAY_ABBREV",M_CSTAMP_OFS + M_WEEK_DAY_ABBREV },
+  { "C_WEEK_DAY_ABBREV", M_CSTAMP_OFS + M_WEEK_DAY_ABBREV },
   { "C_WEEK_DAY_NAME",  M_CSTAMP_OFS + M_WEEK_DAY_NAME },
   { "C_WEEK",           M_CSTAMP_OFS + M_WEEK },
+  { "C_ISOWEEK",        M_CSTAMP_OFS + M_ISOWEEK },
   { "C_TZOFFSET",       M_CSTAMP_OFS + M_TZOFFSET },
   { "C_TZ",             M_CSTAMP_OFS + M_TZ },
   { "C_UNIXTIME",       M_CSTAMP_OFS + M_UNIXTIME },
@@ -180,9 +193,10 @@ LogMacroDef macros[] =
   { "P_AMPM",           M_PROCESSED_OFS + M_AMPM },
   { "P_WEEKDAY",        M_PROCESSED_OFS + M_WEEK_DAY_ABBREV }, /* deprecated */
   { "P_WEEK_DAY",       M_PROCESSED_OFS + M_WEEK_DAY },
-  { "P_WEEK_DAY_ABBREV",M_PROCESSED_OFS + M_WEEK_DAY_ABBREV },
+  { "P_WEEK_DAY_ABBREV", M_PROCESSED_OFS + M_WEEK_DAY_ABBREV },
   { "P_WEEK_DAY_NAME",  M_PROCESSED_OFS + M_WEEK_DAY_NAME },
   { "P_WEEK",           M_PROCESSED_OFS + M_WEEK },
+  { "P_ISOWEEK",        M_PROCESSED_OFS + M_ISOWEEK },
   { "P_TZOFFSET",       M_PROCESSED_OFS + M_TZOFFSET },
   { "P_TZ",             M_PROCESSED_OFS + M_TZ },
   { "P_UNIXTIME",       M_PROCESSED_OFS + M_UNIXTIME },
@@ -190,6 +204,9 @@ LogMacroDef macros[] =
   { "SDATA", M_SDATA },
   { "MSGHDR", M_MSGHDR },
   { "SOURCEIP", M_SOURCE_IP },
+  { "DESTIP", M_DEST_IP },
+  { "DESTPORT", M_DEST_PORT },
+  { "PROTO", M_PROTOCOL },
   { "SEQNUM", M_SEQNUM },
   { "CONTEXT_ID", M_CONTEXT_ID },
   { "_", M_CONTEXT_ID },
@@ -237,6 +254,172 @@ _is_message_source_an_ip_address(const LogMessage *msg)
   return FALSE;
 }
 
+static gboolean
+_is_message_dest_an_ip_address(const LogMessage *msg)
+{
+  if (!msg->daddr)
+    return FALSE;
+  if (g_sockaddr_inet_check(msg->daddr))
+    return TRUE;
+#if SYSLOG_NG_ENABLE_IPV6
+  if (g_sockaddr_inet6_check(msg->daddr))
+    return TRUE;
+#endif
+  return FALSE;
+}
+
+static void
+log_macro_expand_date_time(GString *result, gint id, gboolean escape, const LogTemplateOptions *opts, gint tz,
+                           gint32 seq_num,
+                           const gchar *context_id, const LogMessage *msg)
+{
+  /* year, month, day */
+  const UnixTime *stamp;
+  UnixTime sstamp;
+  guint tmp_hour;
+
+  if (id >= M_TIME_FIRST && id <= M_TIME_LAST)
+    {
+      stamp = &msg->timestamps[LM_TS_STAMP];
+    }
+  else if (id >= M_TIME_FIRST + M_RECVD_OFS && id <= M_TIME_LAST + M_RECVD_OFS)
+    {
+      id -= M_RECVD_OFS;
+      stamp = &msg->timestamps[LM_TS_RECVD];
+    }
+  else if (id >= M_TIME_FIRST + M_STAMP_OFS && id <= M_TIME_LAST + M_STAMP_OFS)
+    {
+      id -= M_STAMP_OFS;
+      stamp = &msg->timestamps[LM_TS_STAMP];
+    }
+  else if (id >= M_TIME_FIRST + M_CSTAMP_OFS && id <= M_TIME_LAST + M_CSTAMP_OFS)
+    {
+      id -= M_CSTAMP_OFS;
+      unix_time_set_now(&sstamp);
+      stamp = &sstamp;
+    }
+  else if (id >= M_TIME_FIRST + M_PROCESSED_OFS && id <= M_TIME_LAST + M_PROCESSED_OFS)
+    {
+      id -= M_PROCESSED_OFS;
+      stamp = &msg->timestamps[LM_TS_PROCESSED];
+
+      if (!unix_time_is_set(stamp))
+        {
+          unix_time_set_now(&sstamp);
+          stamp = &sstamp;
+        }
+    }
+  else
+    {
+      g_assert_not_reached();
+      return;
+    }
+
+  /* try to use the following zone values in order:
+   *   destination specific timezone, if one is specified
+   *   message specific timezone, if one is specified
+   *   local timezone
+   */
+  WallClockTime wct;
+
+  convert_unix_time_to_wall_clock_time_with_tz_override(stamp, &wct,
+                                                        time_zone_info_get_offset(opts->time_zone_info[tz], stamp->ut_sec));
+  switch (id)
+    {
+    case M_WEEK_DAY_ABBREV:
+      g_string_append_len(result, weekday_names_abbrev[wct.wct_wday], WEEKDAY_NAME_ABBREV_LEN);
+      break;
+    case M_WEEK_DAY_NAME:
+      g_string_append(result, weekday_names[wct.wct_wday]);
+      break;
+    case M_WEEK_DAY:
+      format_uint32_padded(result, 0, 0, 10, wct.wct_wday + 1);
+      break;
+    case M_WEEK:
+      format_uint32_padded(result, 2, '0', 10, (wct.wct_yday - (wct.wct_wday - 1 + 7) % 7 + 7) / 7);
+      break;
+    case M_ISOWEEK:
+      format_uint32_padded(result, 2, '0', 10, wall_clock_time_iso_week_number(&wct));
+      break;
+    case M_YEAR:
+      format_uint32_padded(result, 4, '0', 10, wct.wct_year + 1900);
+      break;
+    case M_YEAR_DAY:
+      format_uint32_padded(result, 3, '0', 10, wct.wct_yday + 1);
+      break;
+    case M_MONTH:
+      format_uint32_padded(result, 2, '0', 10, wct.wct_mon + 1);
+      break;
+    case M_MONTH_WEEK:
+      format_uint32_padded(result, 0, 0, 10, ((wct.wct_mday / 7) +
+                                              ((wct.wct_wday > 0) &&
+                                               ((wct.wct_mday % 7) >= wct.wct_wday))));
+      break;
+    case M_MONTH_ABBREV:
+      g_string_append_len(result, month_names_abbrev[wct.wct_mon], MONTH_NAME_ABBREV_LEN);
+      break;
+    case M_MONTH_NAME:
+      g_string_append(result, month_names[wct.wct_mon]);
+      break;
+    case M_DAY:
+      format_uint32_padded(result, 2, '0', 10, wct.wct_mday);
+      break;
+    case M_HOUR:
+      format_uint32_padded(result, 2, '0', 10, wct.wct_hour);
+      break;
+    case M_HOUR12:
+      if (wct.wct_hour < 12)
+        tmp_hour = wct.wct_hour;
+      else
+        tmp_hour = wct.wct_hour - 12;
+
+      if (tmp_hour == 0)
+        tmp_hour = 12;
+      format_uint32_padded(result, 2, '0', 10, tmp_hour);
+      break;
+    case M_MIN:
+      format_uint32_padded(result, 2, '0', 10, wct.wct_min);
+      break;
+    case M_SEC:
+      format_uint32_padded(result, 2, '0', 10, wct.wct_sec);
+      break;
+    case M_MSEC:
+      format_uint32_padded(result, 3, '0', 10, stamp->ut_usec/1000);
+      break;
+    case M_USEC:
+      format_uint32_padded(result, 6, '0', 10, stamp->ut_usec);
+      break;
+    case M_AMPM:
+      g_string_append(result, wct.wct_hour < 12 ? "AM" : "PM");
+      break;
+    case M_DATE:
+      append_format_wall_clock_time(&wct, result, TS_FMT_BSD, opts->frac_digits);
+      break;
+    case M_STAMP:
+      if (opts->ts_format == TS_FMT_UNIX)
+        append_format_unix_time(stamp, result, TS_FMT_UNIX, wct.wct_gmtoff, opts->frac_digits);
+      else
+        append_format_wall_clock_time(&wct, result, opts->ts_format, opts->frac_digits);
+      break;
+    case M_ISODATE:
+      append_format_wall_clock_time(&wct, result, TS_FMT_ISO, opts->frac_digits);
+      break;
+    case M_FULLDATE:
+      append_format_wall_clock_time(&wct, result, TS_FMT_FULL, opts->frac_digits);
+      break;
+    case M_UNIXTIME:
+      append_format_unix_time(stamp, result, TS_FMT_UNIX, wct.wct_gmtoff, opts->frac_digits);
+      break;
+    case M_TZ:
+    case M_TZOFFSET:
+      append_format_zone_info(result, wct.wct_gmtoff);
+      break;
+    default:
+      g_assert_not_reached();
+      break;
+    }
+}
+
 gboolean
 log_macro_expand(GString *result, gint id, gboolean escape, const LogTemplateOptions *opts, gint tz, gint32 seq_num,
                  const gchar *context_id, const LogMessage *msg)
@@ -248,7 +431,7 @@ log_macro_expand(GString *result, gint id, gboolean escape, const LogTemplateOpt
       /* facility */
       const char *n;
 
-      n = syslog_name_lookup_name_by_value(msg->pri & LOG_FACMASK, sl_facilities);
+      n = syslog_name_lookup_facility_by_value(msg->pri & LOG_FACMASK);
       if (n)
         {
           g_string_append(result, n);
@@ -264,12 +447,12 @@ log_macro_expand(GString *result, gint id, gboolean escape, const LogTemplateOpt
       format_uint32_padded(result, 0, 0, 10, (msg->pri & LOG_FACMASK) >> 3);
       break;
     }
-    case M_LEVEL:
+    case M_SEVERITY:
     {
       /* level */
       const char *n;
 
-      n = syslog_name_lookup_name_by_value(msg->pri & LOG_PRIMASK, sl_levels);
+      n = syslog_name_lookup_severity_by_value(msg->pri & LOG_PRIMASK);
       if (n)
         {
           g_string_append(result, n);
@@ -281,7 +464,7 @@ log_macro_expand(GString *result, gint id, gboolean escape, const LogTemplateOpt
 
       break;
     }
-    case M_LEVEL_NUM:
+    case M_SEVERITY_NUM:
     {
       format_uint32_padded(result, 0, 0, 10, msg->pri & LOG_PRIMASK);
       break;
@@ -337,6 +520,7 @@ log_macro_expand(GString *result, gint id, gboolean escape, const LogTemplateOpt
       break;
     }
     case M_SDATA:
+    {
       if (escape)
         {
           GString *sdstr = g_string_sized_new(0);
@@ -350,6 +534,7 @@ log_macro_expand(GString *result, gint id, gboolean escape, const LogTemplateOpt
           log_msg_append_format_sdata(msg, result, seq_num);
         }
       break;
+    }
     case M_MSGHDR:
     {
       gssize len;
@@ -378,8 +563,10 @@ log_macro_expand(GString *result, gint id, gboolean escape, const LogTemplateOpt
       break;
     }
     case M_MESSAGE:
+    {
       _result_append_value(result, msg, LM_V_MESSAGE, escape);
       break;
+    }
     case M_SOURCE_IP:
     {
       gchar *ip;
@@ -395,6 +582,43 @@ log_macro_expand(GString *result, gint id, gboolean escape, const LogTemplateOpt
           ip = "127.0.0.1";
         }
       result_append(result, ip, strlen(ip), escape);
+      break;
+    }
+    case M_DEST_IP:
+    {
+      gchar *ip;
+      gchar buf[MAX_SOCKADDR_STRING];
+
+      if (_is_message_dest_an_ip_address(msg))
+        {
+          g_sockaddr_format(msg->daddr, buf, sizeof(buf), GSA_ADDRESS_ONLY);
+          ip = buf;
+        }
+      else
+        {
+          ip = "127.0.0.1";
+        }
+      result_append(result, ip, strlen(ip), escape);
+      break;
+    }
+    case M_DEST_PORT:
+    {
+      gint port;
+
+      if (_is_message_dest_an_ip_address(msg))
+        {
+          port = g_sockaddr_get_port(msg->daddr);
+        }
+      else
+        {
+          port = 0;
+        }
+      format_uint32_padded(result, 0, 0, 10, port);
+      break;
+    }
+    case M_PROTOCOL:
+    {
+      format_uint32_padded(result, 0, 0, 10, msg->proto);
       break;
     }
     case M_SEQNUM:
@@ -446,7 +670,9 @@ log_macro_expand(GString *result, gint id, gboolean escape, const LogTemplateOpt
 
     case M_LOGHOST:
     {
-      const gchar *hname = get_local_hostname_fqdn();
+      const gchar *hname = opts->use_fqdn
+                           ? get_local_hostname_fqdn()
+                           : get_local_hostname_short();
 
       result_append(result, hname, -1, escape);
       break;
@@ -462,156 +688,10 @@ log_macro_expand(GString *result, gint id, gboolean escape, const LogTemplateOpt
 
     default:
     {
-      /* year, month, day */
-      struct tm *tm, tm_storage;
-      gchar buf[64];
-      gint length;
-      time_t t;
-      const LogStamp *stamp;
-      LogStamp sstamp;
-      glong zone_ofs;
-      guint tmp_hour;
-
-      if (id >= M_TIME_FIRST && id <= M_TIME_LAST)
-        {
-          stamp = &msg->timestamps[LM_TS_STAMP];
-        }
-      else if (id >= M_TIME_FIRST + M_RECVD_OFS && id <= M_TIME_LAST + M_RECVD_OFS)
-        {
-          id -= M_RECVD_OFS;
-          stamp = &msg->timestamps[LM_TS_RECVD];
-        }
-      else if (id >= M_TIME_FIRST + M_STAMP_OFS && id <= M_TIME_LAST + M_STAMP_OFS)
-        {
-          id -= M_STAMP_OFS;
-          stamp = &msg->timestamps[LM_TS_STAMP];
-        }
-      else if (id >= M_TIME_FIRST + M_CSTAMP_OFS && id <= M_TIME_LAST + M_CSTAMP_OFS)
-        {
-          GTimeVal tv;
-
-          id -= M_CSTAMP_OFS;
-          cached_g_current_time(&tv);
-          sstamp.tv_sec = tv.tv_sec;
-          sstamp.tv_usec = tv.tv_usec;
-          sstamp.zone_offset = -1;
-          stamp = &sstamp;
-        }
-      else if (id >= M_TIME_FIRST + M_PROCESSED_OFS && id <= M_TIME_LAST + M_PROCESSED_OFS)
-        {
-          id -= M_PROCESSED_OFS;
-          stamp = &msg->timestamps[LM_TS_PROCESSED];
-        }
-      else
-        {
-          g_assert_not_reached();
-          break;
-        }
-
-      /* try to use the following zone values in order:
-       *   destination specific timezone, if one is specified
-       *   message specific timezone, if one is specified
-       *   local timezone
-       */
-      zone_ofs = (opts->time_zone_info[tz] != NULL ? time_zone_info_get_offset(opts->time_zone_info[tz],
-                  stamp->tv_sec) : stamp->zone_offset);
-      if (zone_ofs == -1)
-        zone_ofs = stamp->zone_offset;
-
-      t = stamp->tv_sec + zone_ofs;
-
-      cached_gmtime(&t, &tm_storage);
-      tm  = &tm_storage;
-
-      switch (id)
-        {
-        case M_WEEK_DAY_ABBREV:
-          g_string_append_len(result, weekday_names_abbrev[tm->tm_wday], 3);
-          break;
-        case M_WEEK_DAY_NAME:
-          g_string_append(result, weekday_names[tm->tm_wday]);
-          break;
-        case M_WEEK_DAY:
-          format_uint32_padded(result, 0, 0, 10, tm->tm_wday + 1);
-          break;
-        case M_WEEK:
-          format_uint32_padded(result, 2, '0', 10, (tm->tm_yday - (tm->tm_wday - 1 + 7) % 7 + 7) / 7);
-          break;
-        case M_YEAR:
-          format_uint32_padded(result, 4, '0', 10, tm->tm_year + 1900);
-          break;
-        case M_YEAR_DAY:
-          format_uint32_padded(result, 3, '0', 10, tm->tm_yday + 1);
-          break;
-        case M_MONTH:
-          format_uint32_padded(result, 2, '0', 10, tm->tm_mon + 1);
-          break;
-        case M_MONTH_WEEK:
-          format_uint32_padded(result, 0, 0, 10, ((tm->tm_mday / 7) + ((tm->tm_wday > 0) && ((tm->tm_mday % 7) >= tm->tm_wday))));
-          break;
-        case M_MONTH_ABBREV:
-          g_string_append_len(result, month_names_abbrev[tm->tm_mon], 3);
-          break;
-        case M_MONTH_NAME:
-          g_string_append(result, month_names[tm->tm_mon]);
-          break;
-        case M_DAY:
-          format_uint32_padded(result, 2, '0', 10, tm->tm_mday);
-          break;
-        case M_HOUR:
-          format_uint32_padded(result, 2, '0', 10, tm->tm_hour);
-          break;
-        case M_HOUR12:
-          if (tm->tm_hour < 12)
-            tmp_hour = tm->tm_hour;
-          else
-            tmp_hour = tm->tm_hour - 12;
-
-          if (tmp_hour == 0)
-            tmp_hour = 12;
-          format_uint32_padded(result, 2, '0', 10, tmp_hour);
-          break;
-        case M_MIN:
-          format_uint32_padded(result, 2, '0', 10, tm->tm_min);
-          break;
-        case M_SEC:
-          format_uint32_padded(result, 2, '0', 10, tm->tm_sec);
-          break;
-        case M_MSEC:
-          format_uint32_padded(result, 3, '0', 10, stamp->tv_usec/1000);
-          break;
-        case M_USEC:
-          format_uint32_padded(result, 6, '0', 10, stamp->tv_usec);
-          break;
-        case M_AMPM:
-          g_string_append(result, tm->tm_hour < 12 ? "AM" : "PM");
-          break;
-        case M_DATE:
-        case M_STAMP:
-        case M_ISODATE:
-        case M_FULLDATE:
-        case M_UNIXTIME:
-        {
-          gint format = id == M_DATE ? TS_FMT_BSD :
-                        id == M_ISODATE ? TS_FMT_ISO :
-                        id == M_FULLDATE ? TS_FMT_FULL :
-                        id == M_UNIXTIME ? TS_FMT_UNIX :
-                        opts->ts_format;
-
-          log_stamp_append_format(stamp, result, format, zone_ofs, opts->frac_digits);
-          break;
-        }
-        case M_TZ:
-        case M_TZOFFSET:
-          length = format_zone_info(buf, sizeof(buf), zone_ofs);
-          g_string_append_len(result, buf, length);
-          break;
-        default:
-          g_assert_not_reached();
-          break;
-        }
+      log_macro_expand_date_time(result, id, escape, opts, tz, seq_num, context_id, msg);
       break;
     }
+
     }
   return TRUE;
 }

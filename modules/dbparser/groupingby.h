@@ -27,12 +27,14 @@
 #include "filter/filter-expr.h"
 
 void grouping_by_set_key_template(LogParser *s, LogTemplate *context_id);
+void grouping_by_set_sort_key_template(LogParser *s, LogTemplate *sort_key);
 void grouping_by_set_timeout(LogParser *s, gint timeout);
 void grouping_by_set_scope(LogParser *s, CorrellationScope scope);
 void grouping_by_set_synthetic_message(LogParser *s, SyntheticMessage *message);
 void grouping_by_set_trigger_condition(LogParser *s, FilterExprNode *filter_expr);
 void grouping_by_set_where_condition(LogParser *s, FilterExprNode *filter_expr);
 void grouping_by_set_having_condition(LogParser *s, FilterExprNode *filter_expr);
+gchar *grouping_by_format_persist_name(LogParser *s);
 LogParser *grouping_by_new(GlobalConfig *cfg);
 void grouping_by_global_init(void);
 

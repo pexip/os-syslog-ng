@@ -2,44 +2,52 @@ language: c
 git:
   submodules: false
 
-env: B=autotools
-
 os: linux
 
 cache:
   apt: true
 
+services:
+  - docker
+
+addons:
+  apt:
+    sources:
+      - sourceline: 'deb http://download.opensuse.org/repositories/home:/laszlo_budai:/syslog-ng/xUbuntu_14.04 ./'
+        key_url: 'http://download.opensuse.org/repositories/home:/laszlo_budai:/syslog-ng/xUbuntu_14.04/Release.key'
+    packages:
+      - autoconf-archive
+      - bison
+      - docbook-xsl
+      - flex
+      - gradle
+      - libcap-dev
+      - libdbd-sqlite3
+      - libdbi0-dev
+      - libesmtp-dev
+      - libglib2.0-dev
+      - libhiredis-dev
+      - libivykis-dev
+      - librabbitmq-dev
+      - libmongoc-dev
+      - libjson0-dev
+      - libnet1-dev
+      - libriemann-client-dev
+      - librdkafka-dev
+      - libwrap0-dev
+      - pkg-config
+      - sqlite3
+      - xsltproc
+      - criterion-dev
+      - libmaxminddb-dev
+      - libxml2-utils
+      - doxygen
+      - libsnmp-dev
+      - ninja-build
+      - snmptt
 install:
-  - curl -4 http://download.opensuse.org/repositories/home:/laszlo_budai:/syslog-ng/xUbuntu_14.04/Release.key | sudo apt-key add -
-  - echo "deb http://download.opensuse.org/repositories/home:/laszlo_budai:/syslog-ng/xUbuntu_14.04 ./" | sudo tee --append /etc/apt/sources.list.d/syslog-ng-obs.list
-  - sudo apt-get update -qq
-  - sudo apt-get install -qq
-      autoconf-archive
-      bison
-      docbook-xsl
-      flex
-      gradle-2.2.1
-      libcap-dev
-      libdbd-sqlite3
-      libdbi0-dev
-      libesmtp-dev
-      libgeoip-dev
-      libglib2.0-dev
-      libhiredis-dev
-      libivykis-dev
-      librabbitmq-dev
-      libmongoc-dev
-      libjson0-dev
-      libnet1-dev
-      libriemann-client-dev
-      libwrap0-dev
-      pkg-config
-      sqlite3
-      xsltproc
-      criterion-dev
-      libmaxminddb-dev
-      libxml2-utils
-  - pip install --user -r requirements.txt
+      - python2 -m pip install --user --cache-dir=$PWD/pip-cache -r requirements.txt
+      - python2 -m pip list
 before_script:
   - echo 'Europe/Budapest' | sudo tee /etc/timezone
   - sudo dpkg-reconfigure --frontend noninteractive tzdata
@@ -62,70 +70,78 @@ before_script:
       --disable-sql
       --enable-pacct
       --enable-manpages
+      --enable-force-gnu99
       --with-python=2
-      --with-docbook=/usr/share/xml/docbook/stylesheet/docbook-xsl/manpages/docbook.xsl
       $EXTRA_WARN
       $DISABLE_MONGODB
       "
   - ./configure $CONFIGURE_FLAGS
-script:
-  - . tests/build-log-cflags-propagation.sh;
-    if [ "$CC" = "gcc" ]; then
-      export DISTCHECK_CONFIGURE_FLAGS="$CONFIGURE_FLAGS";
-      exec_prop_check "make distcheck -j 3 V=1 --keep-going" ||
-      {
-        S=$?;
-        make V=1 distcheck;
-        find . -name test-suite.log | xargs cat;
-        return $S;
-      };
-      find . -name test-suite.log | xargs cat;
-    else
-      make --keep-going -j $(nproc);
-      S=$?;
-      if [ "$S" = "0" ]; then
-        make install
-        . scripts/get-libjvm-path.sh || return $?;
-        export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$JNI_LIBDIR";
-        make func-test V=1;
-        make pytest-self-check;
-        make pytest-check;
-      elif [ "$S" = "42" ]; then
-        return $S;
-      else
-        make V=1 install;
-        return $S;
-      fi;
-    fi
-compiler:
-  - gcc
-  - clang
 
 matrix:
   include:
+    - env: B=distcheck
+      dist: trusty
+      compiler: gcc
+      script:
+        - set -e
+        - . tests/build-log-cflags-propagation.sh;
+        - export DISTCHECK_CONFIGURE_FLAGS="$CONFIGURE_FLAGS";
+        - exec_prop_check "make distcheck -j 3 V=1"
+      after_script:
+        - find . -name test-suite.log | xargs cat
+
+    - env: B=autotools-clang
+      dist: trusty
+      compiler: clang
+      script:
+        - set -e
+        - python2 -m pip install --user --cache-dir=$PWD/pip-cache pre-commit-hooks
+        - make --keep-going -j $(nproc) || make V=1 install;
+        - make install
+        - . scripts/get-libjvm-path.sh;
+        - export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$JNI_LIBDIR";
+        - make pytest-self-check
+        - make python-pep8
+        - make python-pylint
+        - make pytest-linters
+        - make VERBOSE=1 func-test
+        - make pytest-check
+
     - env: B=style-check
       dist: trusty
       sudo: required
+      addons:
+      before_install:
+      - docker pull balabit/syslog-ng-devshell
       install:
-      - curl -4 http://download.opensuse.org/repositories/home:/laszlo_budai:/syslog-ng/xUbuntu_14.04/Release.key | sudo apt-key add -
-      - echo "deb http://download.opensuse.org/repositories/home:/laszlo_budai:/syslog-ng/xUbuntu_14.04 ./" | sudo tee --append /etc/apt/sources.list.d/syslog-ng-obs.list
-      - sudo apt-get update -qq
-      - sudo apt-get install -qq
-          astyle
       before_script:
-      - astyle --version
       script:
-      - scripts/style-checker.sh format
+      - set -e
+      - ./dbld/rules run-devshell RUN_COMMAND="cd /source && astyle --version && scripts/style-checker.sh format"
       - git diff --exit-code
+
     - env: B=copyright-check
       sudo: false
       compiler: gcc
       install:
       before_script:
       script:
+        - set -e
         - export COPYRIGHTVERBOSITY=1
         - tests/copyright/check.sh . .
-    - env: B=trusty-cmake-internal
+
+    - env: B=commits-check
+      sudo: false
+      compiler: gcc
+      install:
+      before_script:
+      git:
+        submodules: false
+        depth: false
+      script:
+        - tests/commits/check.sh "${TRAVIS_COMMIT_RANGE}"
+
+    - env: B=cmake-submodules-and-pytest
       compiler: gcc
       dist: trusty
       sudo: required
@@ -133,6 +149,8 @@ matrix:
       git:
         submodules: true
       script:
+        - set -e
+        - python2 -m pip install --user --cache-dir=$PWD/pip-cache pre-commit-hooks
         - mkdir build
         - cd build
         - cmake
@@ -140,64 +158,173 @@ matrix:
             -DPYTHON_VERSION=2
             -DCMAKE_INSTALL_PREFIX=$HOME/install/syslog-ng
             ..
-        - make --keep-going -j $(nproc) ARGS="-j $(nproc)" all test install
-        - make VERBOSE=1 func-test
+        - make --keep-going -j $(nproc) all check install
         - make pytest-self-check
+        - make python-pep8
+        - make python-pylint
+        - make pytest-linters
+        - make VERBOSE=1 func-test
         - make pytest-check
-    - env: B=trusty-cmake
+
+    - env: B=cmake
       compiler: clang
       dist: trusty
       sudo: required
       before_script:
       script:
+        - set -e
+        - mkdir build
+        - cd build
+        - cmake
+            -G Ninja
+            -DCMAKE_C_FLAGS=-Werror
+            -DPYTHON_VERSION=2
+            -DCMAKE_INSTALL_PREFIX=$HOME/install/syslog-ng
+            ..
+        - ninja all check install
+
+    - env: B=cmake-arm
+      compiler: gcc
+      sudo: required
+      arch: arm64
+      addons:
+        apt:
+          packages:
+            - autoconf-archive
+            - bison
+            - docbook-xsl
+            - flex
+            - gradle
+            - libcap-dev
+            - libcurl4-openssl-dev
+            - libdbd-sqlite3
+            - libdbi0-dev
+            - libesmtp-dev
+            - libglib2.0-dev
+            - libhiredis-dev
+            - libivykis-dev
+            - librabbitmq-dev
+            - libmongoc-dev
+            - libjson-c-dev
+            - python-dev
+            - python-pip
+            - python-setuptools
+            - libnet1-dev
+            - libriemann-client-dev
+            - librdkafka-dev
+            - libwrap0-dev
+            - pkg-config
+            - sqlite3
+            - xsltproc
+            - libmaxminddb-dev
+            - libxml2-utils
+            - doxygen
+            - libsnmp-dev
+      git:
+        submodules: false
+      before_script:
+      script:
+        - set -e
+        - git clone https://github.com/Snaipe/Criterion.git -b v2.3.3
+        - cd Criterion
+        - git submodule update --init
+        - cmake .
+        - make all
+        - sudo make install
+        - cd ..
         - mkdir build
         - cd build
         - cmake
             -DCMAKE_C_FLAGS=-Werror
             -DPYTHON_VERSION=2
             -DCMAKE_INSTALL_PREFIX=$HOME/install/syslog-ng
-            -DENABLE_EXTRA_WARNINGS=no
             ..
-        - make --keep-going -j $(nproc) ARGS="-j $(nproc)" all test install
-    - env: B=check
-      os: osx
-      osx_image: xcode9.3
-      compiler: clang
+        - make --keep-going -j $(nproc) all install
+        - ctest -j $(nproc) --output-on-failure
+
+    - env: B=bionic-python3
+      compiler: gcc
+      dist: bionic
+      sudo: required
+      addons:
+        apt:
+          sources:
+            - sourceline: 'deb http://download.opensuse.org/repositories/home:/laszlo_budai:/syslog-ng/xUbuntu_18.04 ./'
+              key_url: 'http://download.opensuse.org/repositories/home:/laszlo_budai:/syslog-ng/xUbuntu_18.04/Release.key'
+          packages:
+            - autoconf-archive
+            - bison
+            - docbook-xsl
+            - flex
+            - gradle
+            - libcap-dev
+            - libdbd-sqlite3
+            - libdbi0-dev
+            - libesmtp-dev
+            - libglib2.0-dev
+            - libhiredis-dev
+            - librabbitmq-dev
+            - libmongoc-dev
+            - libjson-c-dev
+            - libnet1-dev
+            - libriemann-client-dev
+            - librdkafka-dev
+            - libwrap0-dev
+            - pkg-config
+            - sqlite3
+            - xsltproc
+            - criterion-dev
+            - libmaxminddb-dev
+            - libxml2-utils
+            - doxygen
+            - libsnmp-dev
+            - snmptrapd
+            - python3
+            - python3-pip
+            - python3-setuptools
+            - openjdk-8-jdk
+            - openjdk-8-jre
       install:
-        - export PYTHONUSERBASE=$HOME/python_packages
-        - export PATH=/usr/local/opt/bison/bin:/usr/local/opt/libnet/bin:$PYTHONUSERBASE/bin:$PATH
-        - export PKG_CONFIG_PATH=/usr/local/opt/openssl/lib/pkgconfig:$PKG_CONFIG_PATH
-        - brew update > /dev/null
-        - brew install python@2 &> /dev/null || brew link --overwrite python@2
-        - pip2 install --user -r requirements.txt
-        - brew bundle --file=contrib/Brewfile
+        - python3 -m pip install --user -r requirements.txt
+        - export PATH=`echo $PATH | sed -r 's|:/usr/local/lib/jvm/openjdk11/bin||'`
+        - sudo update-java-alternatives --set java-1.8.0-openjdk-amd64
+      git:
+        submodules: true
       before_script:
+        - echo 'Europe/Budapest' | sudo tee /etc/timezone
+        - sudo dpkg-reconfigure --frontend noninteractive tzdata
         - ./autogen.sh
-        - ./configure
-            --with-ivykis=system
+        - unset PYTHON_CFLAGS # HACK
+        - CONFIGURE_FLAGS="
+            CFLAGS=-Werror
+            --prefix=$HOME/install/syslog-ng
+            --with-ivykis=internal
+            --with-jsonc=system
+            --disable-env-wrapper
+            --disable-memtrace
+            --enable-tcp-wrapper
+            --enable-linux-caps
             --disable-sun-streams
-            --disable-systemd
-            --disable-pacct
-            --disable-smtp
-            --disable-geoip
             --enable-all-modules
-        - make --keep-going -j $(sysctl -n hw.physicalcpu) ||
-          {
-            S=$?;
-            make V=1;
-            return $S;
-          }
+            --disable-mongodb
+            --disable-sql
+            --enable-pacct
+            --enable-manpages
+            --enable-force-gnu99
+            --with-python=3
+            "
+        - ./configure $CONFIGURE_FLAGS
       script:
-        - make --keep-going check -j $(sysctl -n hw.physicalcpu) ||
-          {
-            S=$?;
-            echo "Output of first test invocation:";
-            find . -name test-suite.log | xargs cat;
-            make V=1 check;
-            echo "Output of second test invocation:";
-            find . -name test-suite.log | xargs cat;
-            return $S;
-          }
+        - set -e
+        - make V=1 -j $(nproc)
+        - make V=1 check
+        - make install
+        - make pytest-self-check
+        - make python-pep8
+        - make python-pylint
+        - make pytest-linters
+        - make VERBOSE=1 func-test
+        - make pytest-check
 
 branches:
   except:

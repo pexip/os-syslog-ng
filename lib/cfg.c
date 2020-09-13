@@ -23,6 +23,7 @@
  */
 
 #include "cfg.h"
+#include "cfg-path.h"
 #include "cfg-grammar.h"
 #include "module-config.h"
 #include "cfg-tree.h"
@@ -41,6 +42,7 @@
 #include "rcptid.h"
 #include "resolved-configurable-paths.h"
 #include "mainloop.h"
+#include "timeutils/format.h"
 
 #include <sys/types.h>
 #include <signal.h>
@@ -159,7 +161,7 @@ _invoke_module_deinit(gchar *key, ModuleConfig *mc, gpointer user_data)
   module_config_deinit(mc, cfg);
 }
 
-static void
+static gboolean
 _sync_plugin_module_path_with_global_define(GlobalConfig *self)
 {
   const gchar *module_path;
@@ -171,31 +173,26 @@ _sync_plugin_module_path_with_global_define(GlobalConfig *self)
   if (self->lexer)
     {
       module_path = cfg_args_get(self->globals, "module-path");
-      if (module_path)
+      if (module_path && strcmp(module_path, self->plugin_context.module_path) != 0)
         {
           plugin_context_set_module_path(&self->plugin_context, module_path);
+          return TRUE;
         }
     }
+  return FALSE;
+}
+
+gboolean
+cfg_load_module_with_args(GlobalConfig *cfg, const gchar *module_name, CfgArgs *args)
+{
+  _sync_plugin_module_path_with_global_define(cfg);
+  return plugin_load_module(&cfg->plugin_context, module_name, args);
 }
 
 gboolean
 cfg_load_module(GlobalConfig *cfg, const gchar *module_name)
 {
-  _sync_plugin_module_path_with_global_define(cfg);
-  return plugin_load_module(&cfg->plugin_context, module_name, NULL);
-}
-
-void
-cfg_load_candidate_modules(GlobalConfig *self)
-{
-  gboolean autoload_enabled = atoi(cfg_args_get(self->globals, "autoload-compiled-modules") ? : "1");
-
-  if (self->use_plugin_discovery &&
-      autoload_enabled)
-    {
-      _sync_plugin_module_path_with_global_define(self);
-      plugin_load_candidate_modules(&self->plugin_context);
-    }
+  return cfg_load_module_with_args(cfg, module_name, NULL);
 }
 
 void
@@ -222,6 +219,32 @@ cfg_load_forced_modules(GlobalConfig *self)
           exit(1);
         }
     }
+}
+
+static gboolean
+_is_module_autoload_enabled(GlobalConfig *self)
+{
+  return atoi(cfg_args_get(self->globals, "autoload-compiled-modules") ? : "1");
+}
+
+void
+cfg_discover_candidate_modules(GlobalConfig *self)
+{
+  if (self->use_plugin_discovery && _is_module_autoload_enabled(self))
+    {
+      if (_sync_plugin_module_path_with_global_define(self) || !plugin_has_discovery_run(&self->plugin_context))
+        plugin_discover_candidate_modules(&self->plugin_context);
+    }
+}
+
+gboolean
+cfg_is_module_available(GlobalConfig *self, const gchar *module_name)
+{
+  cfg_discover_candidate_modules(self);
+  if (!_is_module_autoload_enabled(self))
+    return cfg_load_module(self, module_name);
+
+  return plugin_is_module_available(&self->plugin_context, module_name);
 }
 
 Plugin *
@@ -297,6 +320,13 @@ cfg_shutdown(GlobalConfig *cfg)
 }
 
 gboolean
+cfg_is_shutting_down(GlobalConfig *cfg)
+{
+  MainLoop *main_loop = main_loop_get_instance();
+  return main_loop_is_terminating(main_loop);
+}
+
+gboolean
 cfg_init(GlobalConfig *cfg)
 {
   gint regerr;
@@ -346,38 +376,56 @@ cfg_deinit(GlobalConfig *cfg)
   return cfg_tree_stop(&cfg->tree);
 }
 
+void
+cfg_set_version_without_validation(GlobalConfig *self, gint version)
+{
+  self->user_version = version;
+}
+
 gboolean
 cfg_set_version(GlobalConfig *self, gint version)
 {
-  self->user_version = version;
-  if (cfg_is_config_version_older(self, 0x0300))
+  if (self->user_version != 0)
+    {
+      msg_warning("WARNING: you have multiple @version directives in your configuration, only the first one is considered",
+                  cfg_format_config_version_tag(self),
+                  cfg_format_version_tag("new-version", version));
+      return TRUE;
+    }
+  cfg_set_version_without_validation(self, version);
+  if (cfg_is_config_version_older(self, VERSION_VALUE_3_0))
     {
       msg_error("ERROR: compatibility with configurations below 3.0 was dropped in " VERSION_3_13
-                ", please update your configuration accordingly");
+                ", please update your configuration accordingly",
+                cfg_format_config_version_tag(self));
       return FALSE;
     }
 
-  if (cfg_is_config_version_older(self, VERSION_VALUE))
+  if (cfg_is_config_version_older(self, VERSION_VALUE_LAST_SEMANTIC_CHANGE))
     {
       msg_warning("WARNING: Configuration file format is too old, syslog-ng is running in compatibility mode. "
-                  "Please update it to use the " VERSION_CURRENT " format at your time of convenience. "
+                  "Please update it to use the " VERSION_PRODUCT_CURRENT " format at your time of convenience. "
                   "To upgrade the configuration, please review the warnings about incompatible changes printed "
                   "by syslog-ng, and once completed change the @version header at the top of the configuration "
-                  "file.");
+                  "file",
+                  cfg_format_config_version_tag(self));
     }
-  else if (version_convert_from_user(self->user_version) > VERSION_VALUE)
+  else if (version_convert_from_user(self->user_version) > VERSION_VALUE_CURRENT)
     {
       msg_warning("WARNING: Configuration file format is newer than the current version, please specify the "
-                  "current version number ("  VERSION_CURRENT_VER_ONLY ") in the @version directive. "
-                  "syslog-ng will operate at its highest supported version in this mode");
-      self->user_version = VERSION_VALUE;
+                  "current version number ("  VERSION_STR_CURRENT ") in the @version directive. "
+                  "syslog-ng will operate at its highest supported version in this mode",
+                  cfg_format_config_version_tag(self));
+      self->user_version = VERSION_VALUE_CURRENT;
     }
 
-  if (cfg_is_config_version_older(self, 0x0303))
+  if (cfg_is_config_version_older(self, VERSION_VALUE_3_3))
     {
       msg_warning("WARNING: global: the default value of log_fifo_size() has changed to 10000 in " VERSION_3_3
-                  " to reflect log_iw_size() changes for tcp()/udp() window size changes");
+                  " to reflect log_iw_size() changes for tcp()/udp() window size changes",
+                  cfg_format_config_version_tag(self));
     }
+
   return TRUE;
 }
 
@@ -386,7 +434,7 @@ cfg_allow_config_dups(GlobalConfig *self)
 {
   const gchar *s;
 
-  if (cfg_is_config_version_older(self, 0x0303))
+  if (cfg_is_config_version_older(self, VERSION_VALUE_3_3))
     return TRUE;
 
   s = cfg_args_get(self->globals, "allow-config-dups");
@@ -461,10 +509,21 @@ cfg_new(gint version)
 GlobalConfig *
 cfg_new_snippet(void)
 {
-  GlobalConfig *self = cfg_new(VERSION_VALUE);
+  GlobalConfig *self = cfg_new(VERSION_VALUE_CURRENT);
 
   self->use_plugin_discovery = FALSE;
   self->enable_forced_modules = FALSE;
+  return self;
+}
+
+/* This function creates a GlobalConfig instance that shares the set of
+ * available plugins as a master one.  */
+GlobalConfig *
+cfg_new_subordinate(GlobalConfig *master)
+{
+  GlobalConfig *self = cfg_new_snippet();
+
+  plugin_context_copy_candidates(&self->plugin_context, &master->plugin_context);
   return self;
 }
 
@@ -476,6 +535,7 @@ cfg_set_global_paths(GlobalConfig *self)
   cfg_args_set(self->globals, "syslog-ng-root", get_installation_path_for(SYSLOG_NG_PATH_PREFIX));
   cfg_args_set(self->globals, "syslog-ng-data", get_installation_path_for(SYSLOG_NG_PATH_DATADIR));
   cfg_args_set(self->globals, "syslog-ng-include", get_installation_path_for(SYSLOG_NG_PATH_CONFIG_INCLUDEDIR));
+  cfg_args_set(self->globals, "syslog-ng-sysconfdir", get_installation_path_for(SYSLOG_NG_PATH_SYSCONFDIR));
   cfg_args_set(self->globals, "scl-root", get_installation_path_for(SYSLOG_NG_PATH_SCLDIR));
   cfg_args_set(self->globals, "module-path", resolvedConfigurablePaths.initial_module_path);
   cfg_args_set(self->globals, "module-install-dir", resolvedConfigurablePaths.initial_module_path);
@@ -510,17 +570,39 @@ cfg_run_parser(GlobalConfig *self, CfgLexer *lexer, CfgParser *parser, gpointer 
   return res;
 }
 
+gboolean
+cfg_run_parser_with_main_context(GlobalConfig *self, CfgLexer *lexer, CfgParser *parser, gpointer *result, gpointer arg,
+                                 const gchar *desc)
+{
+  gboolean ret_val;
+
+  cfg_lexer_push_context(lexer, main_parser.context, main_parser.keywords, desc);
+  ret_val = cfg_run_parser(self, lexer, parser, result, arg);
+
+  return ret_val;
+}
+
 static void
 cfg_dump_processed_config(GString *preprocess_output, gchar *output_filename)
 {
   FILE *output_file;
 
-  output_file = fopen(output_filename,"w+");
-  if (output_file)
+  if (strcmp(output_filename, "-")==0)
     {
-      fprintf(output_file, "%s", preprocess_output->str);
-      fclose(output_file);
+      fprintf(stdout, "%s", preprocess_output->str);
+      return;
     }
+
+  output_file = fopen(output_filename, "w+");
+  if (!output_file)
+    {
+      msg_error("Error opening preprocess-into file",
+                evt_tag_str(EVT_TAG_FILENAME, output_filename),
+                evt_tag_error(EVT_TAG_OSERROR));
+      return;
+    }
+  fprintf(output_file, "%s", preprocess_output->str);
+  fclose(output_file);
 }
 
 static GString *
@@ -538,8 +620,18 @@ _load_file_into_string(const gchar *fname)
   return content;
 }
 
+static void
+_cfg_file_path_free(gpointer data)
+{
+  CfgFilePath *self = (CfgFilePath *)data;
+
+  g_free(self->file_path);
+  g_free(self->path_type);
+  g_free(self);
+}
+
 gboolean
-cfg_read_config(GlobalConfig *self, const gchar *fname, gboolean syntax_only, gchar *preprocess_into)
+cfg_read_config(GlobalConfig *self, const gchar *fname, gchar *preprocess_into)
 {
   FILE *cfg_file;
   gint res;
@@ -590,6 +682,7 @@ cfg_free(GlobalConfig *self)
 
   if (self->bad_hostname_compiled)
     regfree(&self->bad_hostname);
+  g_free(self->recv_time_zone);
   if (self->source_mangle_callback_list)
     g_list_free(self->source_mangle_callback_list);
   g_free(self->bad_hostname_re);
@@ -607,6 +700,8 @@ cfg_free(GlobalConfig *self)
     g_string_free(self->preprocess_config, TRUE);
   if (self->original_config)
     g_string_free(self->original_config, TRUE);
+
+  g_list_free_full(self->file_list, _cfg_file_path_free);
 
   g_free(self);
 }
@@ -684,20 +779,14 @@ cfg_get_user_version(const GlobalConfig *cfg)
   return cfg->user_version;
 }
 
-gint
-cfg_get_parsed_version(const GlobalConfig *cfg)
+void register_source_mangle_callback(GlobalConfig *src, mangle_callback cb)
 {
-  return cfg->parsed_version;
+  src->source_mangle_callback_list = g_list_append(src->source_mangle_callback_list, cb);
 }
 
-void register_source_mangle_callback(GlobalConfig *src,mangle_callback cb)
+void uregister_source_mangle_callback(GlobalConfig *src, mangle_callback cb)
 {
-  src->source_mangle_callback_list = g_list_append(src->source_mangle_callback_list,cb);
-}
-
-void uregister_source_mangle_callback(GlobalConfig *src,mangle_callback cb)
-{
-  src->source_mangle_callback_list = g_list_remove(src->source_mangle_callback_list,cb);
+  src->source_mangle_callback_list = g_list_remove(src->source_mangle_callback_list, cb);
 }
 
 const gchar *

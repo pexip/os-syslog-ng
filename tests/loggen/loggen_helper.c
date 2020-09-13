@@ -72,8 +72,37 @@ connect_to_server(struct sockaddr *dest_addr, int dest_addr_len, int sock_type)
       close(sock);
       return -1;
     }
-  DEBUG("server connection established (%d)\n",sock);
+  DEBUG("server connection established (%d)\n", sock);
   return sock;
+}
+
+struct addrinfo *
+resolve_address_using_getaddrinfo(int sock_type, const char *target, const char *port, int use_ipv6)
+{
+  struct addrinfo hints;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = use_ipv6 ? AF_INET6 : AF_INET;
+  hints.ai_socktype = sock_type;
+  hints.ai_flags = AI_V4MAPPED | AI_ADDRCONFIG;
+  hints.ai_protocol = 0;
+
+  struct addrinfo *res;
+  int addrinfo_err = getaddrinfo(target, port, &hints, &res);
+
+  if (addrinfo_err == 0)
+    return res;
+
+  DEBUG("name lookup failed (%s:%s): %s (AI_ADDRCONFIG)\n", target, port, gai_strerror(addrinfo_err));
+
+  hints.ai_flags &= ~AI_ADDRCONFIG;
+  addrinfo_err = getaddrinfo(target, port, &hints, &res);
+  if (addrinfo_err != 0)
+    {
+      ERROR("name lookup error (%s:%s): %s\n", target, port, gai_strerror(addrinfo_err));
+      return NULL;
+    }
+
+  return res;
 }
 
 int
@@ -88,25 +117,15 @@ connect_ip_socket(int sock_type, const char *target, const char *port, int use_i
       return -1;
     }
 
-  DEBUG("server IP = %s:%s\n",target,port);
+  DEBUG("server IP = %s:%s\n", target, port);
 #if SYSLOG_NG_HAVE_GETADDRINFO
-  struct addrinfo hints;
-  struct addrinfo *res;
-  memset(&hints, 0, sizeof(hints));
-  hints.ai_family = use_ipv6 ? AF_INET6 : AF_INET;
-  hints.ai_socktype = sock_type;
-#ifdef AI_ADDRCONFIG
-  hints.ai_flags = AI_ADDRCONFIG;
-#endif
-  hints.ai_protocol = 0;
-  if (getaddrinfo(target, port, &hints, &res) != 0)
-    {
-      ERROR("name lookup error (%s:%s)\n",target, port);
-      return -1;
-    }
+  struct addrinfo *addr_info = resolve_address_using_getaddrinfo(sock_type, target, port, use_ipv6);
 
-  dest_addr = res->ai_addr;
-  dest_addr_len = res->ai_addrlen;
+  if (!addr_info)
+    return -1;
+
+  dest_addr = addr_info->ai_addr;
+  dest_addr_len = addr_info->ai_addrlen;
 #else
   struct hostent *he;
   struct servent *se;
@@ -115,7 +134,7 @@ connect_ip_socket(int sock_type, const char *target, const char *port, int use_i
   he = gethostbyname(target);
   if (!he)
     {
-      ERROR("name lookup error (%s)\n",target);
+      ERROR("name lookup error (%s)\n", target);
       return -1;
     }
   s_in.sin_family = AF_INET;
@@ -131,7 +150,13 @@ connect_ip_socket(int sock_type, const char *target, const char *port, int use_i
   dest_addr_len = sizeof(s_in);
 #endif
 
-  return connect_to_server(dest_addr, dest_addr_len, sock_type);
+  int socket = connect_to_server(dest_addr, dest_addr_len, sock_type);
+
+#if SYSLOG_NG_HAVE_GETADDRINFO
+  freeaddrinfo(addr_info);
+#endif
+
+  return socket;
 }
 
 int connect_unix_domain_socket(int sock_type, const char *path)
@@ -146,7 +171,7 @@ int connect_unix_domain_socket(int sock_type, const char *path)
       return -1;
     }
 
-  DEBUG("unix domain socket: %s\n",path);
+  DEBUG("unix domain socket: %s\n", path);
   saun.sun_family = AF_UNIX;
 
   gsize max_target_path_size = sizeof(saun.sun_path);
@@ -186,7 +211,7 @@ double
 time_val_diff_in_sec(struct timeval *t1, struct timeval *t2)
 {
   struct timeval res;
-  time_val_diff_in_timeval(&res,t1,t2);
+  time_val_diff_in_timeval(&res, t1, t2);
   return (double)res.tv_sec + (double)res.tv_usec/USEC_PER_SEC;
 }
 
@@ -234,6 +259,8 @@ open_ssl_connection(int sock_fd)
       return NULL;
     }
 
+  SSL_CTX_set_mode(ctx, SSL_MODE_AUTO_RETRY);
+
   SSL *ssl = NULL;
   if (NULL == (ssl = SSL_new(ctx)))
     {
@@ -242,7 +269,7 @@ open_ssl_connection(int sock_fd)
     }
 
   SSL_set_fd (ssl, sock_fd);
-  if (-1 == SSL_connect(ssl))
+  if (SSL_connect(ssl) <= 0)
     {
       ERROR("SSL connect failed\n");
       ERR_print_errors_fp(stderr);

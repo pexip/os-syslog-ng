@@ -1,0 +1,42 @@
+#
+# build.manifest
+#
+#   This file controls package building on various distros when using dbld.
+#
+#   Syntax:
+#
+#       OS  env-list  cmdline-options
+#
+#   OS              -- either Linux distribution name (e.g.  ubuntu, centos
+#                      etc), or a distro + version combination separated by
+#                      a dash (e.g.  ubuntu-bionic, centos-7, etc). If used
+#                      without version number, it denotes a wildcard (e.g.
+#                      applied to any versions of the distro).
+#
+#   env-list        -- comma separated list of environment variables
+#
+#   cmdline-options -- extra command line options to supply to the build
+#                      command.
+#
+#   The build command depends on the packaging system that specific Linux
+#   distribution uses, e.g. rpmbuild for Fedora/CentOS, dpkg-buildpackage
+#   for Debian based distros). env-list and cmdline-options can be used to
+#   customize a build in cases where an optional feature is not available
+#   there.
+#
+
+# kafka support needs librdkafka >= 1.0.0, which is only available on ubuntu-bionic
+# on Debian we don't build java and use Python3 _after_ buster
+debian-stretch		python2,nojava,nokafka
+debian-buster		python2,nojava,nokafka
+debian-testing		python3,nojava
+debian-sid		python3,nojava
+
+# on ubuntu, we fetch java from OBS and start using Python3 at focal onwards.
+ubuntu-xenial		python2,nokafka,nojava
+ubuntu-bionic		python2
+ubuntu-focal		python3
+
+centos-6		python2,nokafka,nomongodb		CFLAGS=-D__be16=guint16,PYTHON_LIBS=-lpython2.6,PYTHON_CFLAGS=-I/usr/include/python2.6
+centos-7		python2,nokafka
+fedora			python3

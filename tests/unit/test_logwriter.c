@@ -27,9 +27,9 @@
 #include "template/templates.h"
 #include "apphook.h"
 #include "cfg.h"
-#include "timeutils.h"
 #include "plugin.h"
 #include "logqueue-fifo.h"
+#include "timeutils/misc.h"
 
 #include <criterion/criterion.h>
 #include <time.h>
@@ -106,24 +106,21 @@ LogMessage *
 init_msg(const gchar *msg_string, gboolean use_syslog_protocol)
 {
   LogMessage *msg;
-  GSockAddr *sa;
 
   if (use_syslog_protocol)
     parse_options.flags |= LP_SYSLOG_PROTOCOL;
   else
     parse_options.flags &= ~LP_SYSLOG_PROTOCOL;
-  sa = g_sockaddr_inet_new("10.10.10.10", 1010);
-  msg = log_msg_new(msg_string, strlen(msg_string), sa, &parse_options);
-  g_sockaddr_unref(sa);
+  msg = log_msg_new(msg_string, strlen(msg_string), &parse_options);
   log_msg_set_value_by_name(msg, "APP.VALUE", "value", 5);
   log_msg_set_match(msg, 0, "whole-match", 11);
   log_msg_set_match(msg, 1, "first-match", 11);
 
   /* fix some externally or automatically defined values */
   log_msg_set_value(msg, LM_V_HOST_FROM, "kismacska", 9);
-  msg->timestamps[LM_TS_RECVD].tv_sec = 1139684315;
-  msg->timestamps[LM_TS_RECVD].tv_usec = 639000;
-  msg->timestamps[LM_TS_RECVD].zone_offset = get_local_timezone_ofs(1139684315);
+  msg->timestamps[LM_TS_RECVD].ut_sec = 1139684315;
+  msg->timestamps[LM_TS_RECVD].ut_usec = 639000;
+  msg->timestamps[LM_TS_RECVD].ut_gmtoff = get_local_timezone_ofs(1139684315);
   return msg;
 }
 
@@ -206,7 +203,7 @@ Test(logwriter, test_logwriter)
 
   nr_of_cases = sizeof(test_cases) / sizeof(test_cases[0]);
   for (i = 0; i < nr_of_cases; i++)
-         _assert_logwriter_output(test_cases[i]);
+    _assert_logwriter_output(test_cases[i]);
 
   app_shutdown();
 }

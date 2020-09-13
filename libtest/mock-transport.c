@@ -27,6 +27,9 @@
 
 #include <string.h>
 #include <errno.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 typedef enum data_type
 {
@@ -59,6 +62,7 @@ struct _LogTransportMock
   GArray *write_buffer;
   gint write_buffer_index;
   gint current_value_ndx;
+  gsize write_chunk_limit;
   /* position within the current I/O chunk */
   gint current_iov_pos;
   gboolean input_is_a_stream;
@@ -79,7 +83,6 @@ static GArray *
 clone_write_buffer(GArray *orig_write_buffer)
 {
   GArray *write_buffer = g_array_new(TRUE, TRUE, sizeof(data_t));
-  g_array_set_clear_func(write_buffer, destroy_write_buffer_element);
   g_array_append_vals(write_buffer, orig_write_buffer->data, orig_write_buffer->len);
   for (int i = 0; i < write_buffer->len; i++)
     {
@@ -180,6 +183,20 @@ log_transport_mock_read_chunk_from_write_buffer(LogTransportMock *self, gchar *b
   return written_len;
 }
 
+void
+log_transport_mock_set_write_chunk_limit(LogTransportMock *self, gsize chunk_limit)
+{
+  self->write_chunk_limit = chunk_limit;
+}
+
+void
+log_transport_mock_empty_write_buffer(LogTransportMock *self)
+{
+  g_array_set_size(self->write_buffer, 0);
+  self->write_buffer_index = 0;
+  self->current_value_ndx = 0;
+}
+
 gssize
 log_transport_mock_read_method(LogTransport *s, gpointer buf, gsize count, LogTransportAuxData *aux)
 {
@@ -247,20 +264,55 @@ log_transport_mock_write_method(LogTransport *s, const gpointer buf, gsize count
 {
   LogTransportMock *self = (LogTransportMock *)s;
   data_t data;
+
+  if (self->write_chunk_limit && self->write_chunk_limit < count)
+    count = self->write_chunk_limit;
+
   data.type = DATA_STRING;
-  data.iov = (struct iovec_const)
-  {
-    .iov_base = g_strndup(buf, count), .iov_len = count
-  };
+  data.iov.iov_base = g_strndup(buf, count);
+  data.iov.iov_len = count;
   g_array_append_val(self->write_buffer, data);
 
   return count;
+}
+
+gssize
+log_transport_mock_writev_method(LogTransport *s, struct iovec *iov, gint iov_count)
+{
+  LogTransportMock *self = (LogTransportMock *)s;
+
+  gssize sum = 0;
+  for (gint i = 0; i < iov_count; i++)
+    {
+      data_t value;
+
+      value.type = DATA_STRING;
+      value.iov.iov_len = iov[i].iov_len;
+
+      if (self->write_chunk_limit &&
+          sum + iov[i].iov_len > self->write_chunk_limit)
+        value.iov.iov_len = self->write_chunk_limit - sum;
+
+      value.iov.iov_base = g_strndup(iov[i].iov_base, value.iov.iov_len);
+
+      g_array_append_val(self->write_buffer, value);
+      sum += value.iov.iov_len;
+      if (value.iov.iov_len != iov[i].iov_len)
+        break;
+    }
+  return sum;
 }
 
 void
 log_transport_mock_free_method(LogTransport *s)
 {
   LogTransportMock *self = (LogTransportMock *)s;
+
+  for (int i = 0; i < self->write_buffer->len; i++)
+    {
+      data_t *data = &g_array_index(self->write_buffer, data_t, i);
+      destroy_write_buffer_element(data);
+    }
   g_array_free(self->write_buffer, TRUE);
   g_array_free(self->value, TRUE);
   log_transport_free_method(s);
@@ -309,6 +361,7 @@ log_transport_mock_init(LogTransportMock *self, const gchar *read_buffer1, gssiz
   log_transport_init_instance(&self->super, 0);
   self->super.read = log_transport_mock_read_method;
   self->super.write = log_transport_mock_write_method;
+  self->super.writev = log_transport_mock_writev_method;
   self->super.free_fn = log_transport_mock_free_method;
 
   buffer = read_buffer1;
@@ -329,7 +382,6 @@ log_transport_mock_new(void)
 {
   LogTransportMock *self = g_new0(LogTransportMock, 1);
   self->write_buffer = g_array_new(TRUE, TRUE, sizeof(data_t));
-  g_array_set_clear_func(self->write_buffer, destroy_write_buffer_element);
   self->value = g_array_new(TRUE, TRUE, sizeof(data_t));
   return self;
 }

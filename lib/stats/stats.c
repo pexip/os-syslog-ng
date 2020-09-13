@@ -26,9 +26,9 @@
 #include "stats/stats-log.h"
 #include "stats/stats-query.h"
 #include "stats/stats-registry.h"
-#include "stats/stats-syslog.h"
 #include "stats/stats.h"
-#include "timeutils.h"
+#include "timeutils/cache.h"
+#include "timeutils/misc.h"
 
 #include <string.h>
 #include <iv.h>
@@ -115,7 +115,7 @@ typedef struct _StatsTimerState
 } StatsTimerState;
 
 static gboolean
-stats_prune_counter(StatsCluster *sc, StatsTimerState *st)
+stats_prune_cluster(StatsCluster *sc, StatsTimerState *st)
 {
   gboolean expired;
 
@@ -126,6 +126,7 @@ stats_prune_counter(StatsCluster *sc, StatsTimerState *st)
       if ((st->oldest_counter) == 0 || st->oldest_counter > tstamp)
         st->oldest_counter = tstamp;
       st->dropped_counters++;
+      stats_query_deindex_cluster(sc);
     }
   return expired;
 }
@@ -137,7 +138,7 @@ stats_format_and_prune_cluster(StatsCluster *sc, gpointer user_data)
 
   if (st->stats_event)
     stats_log_format_cluster(sc, st->stats_event);
-  return stats_prune_counter(sc, st);
+  return stats_prune_cluster(sc, st);
 }
 
 void
@@ -174,9 +175,8 @@ stats_publish_and_prune_counters(StatsOptions *options)
 static void
 stats_timer_rearm(StatsOptions *options, struct iv_timer *timer)
 {
-  gint freq;
+  glong freq = options->log_freq;
 
-  freq = options->log_freq;
   if (!freq)
     freq = options->lifetime <= 1 ? 1 : options->lifetime / 2;
   if (freq > 0)
@@ -231,16 +231,15 @@ void
 stats_reinit(StatsOptions *options)
 {
   stats_options = options;
-  stats_syslog_reinit();
   stats_timer_reinit(options);
 }
 
 void
 stats_init(void)
 {
+  stats_cluster_init();
   stats_registry_init();
   stats_query_init();
-  stats_register_control_commands();
 }
 
 void
@@ -248,7 +247,7 @@ stats_destroy(void)
 {
   stats_query_deinit();
   stats_registry_deinit();
-  stats_unregister_control_commands();
+  stats_cluster_deinit();
 }
 
 void
@@ -280,10 +279,9 @@ stats_check_dynamic_clusters_limit(guint number_of_clusters)
 }
 
 gint
-stats_number_of_dynamic_clusters_limit()
+stats_number_of_dynamic_clusters_limit(void)
 {
   if (!stats_options)
     return -1;
   return stats_options->max_dynamic;
 }
-

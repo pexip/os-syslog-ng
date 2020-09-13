@@ -37,11 +37,11 @@
 #define OLD_LMM_REF_MATCH 0x0001
 
 static void
-_setup_ts_processed(LogStamp *timestamps, const LogStamp *processed)
+_setup_ts_processed(UnixTime *timestamps, const UnixTime *processed)
 {
   if (processed != NULL)
     timestamps[LM_TS_PROCESSED] = *processed;
-  else if (timestamps[LM_TS_PROCESSED].zone_offset == LOGSTAMP_ZONE_OFFSET_UNSET)
+  else if (!unix_time_is_set(&timestamps[LM_TS_PROCESSED]))
     timestamps[LM_TS_PROCESSED] = timestamps[LM_TS_RECVD];
 }
 
@@ -50,9 +50,9 @@ _serialize_message(LogMessageSerializationState *state)
 {
   LogMessage *msg = state->msg;
   SerializeArchive *sa = state->sa;
-  LogStamp timestamps[LM_TS_MAX];
+  UnixTime timestamps[LM_TS_MAX];
 
-  memcpy(&timestamps, msg->timestamps, LM_TS_MAX*sizeof(LogStamp));
+  memcpy(&timestamps, msg->timestamps, LM_TS_MAX*sizeof(UnixTime));
   _setup_ts_processed(timestamps, state->processed);
 
   serialize_write_uint8(sa, state->version);
@@ -69,12 +69,21 @@ _serialize_message(LogMessageSerializationState *state)
   serialize_write_uint8(sa, msg->num_sdata);
   serialize_write_uint8(sa, msg->alloc_sdata);
   serialize_write_uint32_array(sa, (guint32 *) msg->sdata, msg->num_sdata);
-  nv_table_serialize(state, msg->payload);
+
+  NVTable *payload;
+
+  if (state->flags & LMSF_COMPACTION)
+    payload = nv_table_compact(msg->payload);
+  else
+    payload = nv_table_ref(msg->payload);
+
+  nv_table_serialize(state, payload);
+  nv_table_unref(payload);
   return TRUE;
 }
 
 gboolean
-log_msg_serialize_with_ts_processed(LogMessage *self, SerializeArchive *sa, const LogStamp *processed)
+log_msg_serialize_with_ts_processed(LogMessage *self, SerializeArchive *sa, const UnixTime *processed, guint32 flags)
 {
   LogMessageSerializationState state = { 0 };
 
@@ -82,13 +91,14 @@ log_msg_serialize_with_ts_processed(LogMessage *self, SerializeArchive *sa, cons
   state.msg = self;
   state.sa = sa;
   state.processed = processed;
+  state.flags = flags;
   return _serialize_message(&state);
 }
 
 gboolean
-log_msg_serialize(LogMessage *self, SerializeArchive *sa)
+log_msg_serialize(LogMessage *self, SerializeArchive *sa, guint32 flags)
 {
-  return log_msg_serialize_with_ts_processed(self, sa, NULL);
+  return log_msg_serialize_with_ts_processed(self, sa, NULL, flags);
 }
 
 static gboolean
@@ -279,7 +289,7 @@ log_msg_read_matches_details(LogMessage *self, SerializeArchive *sa)
               !serialize_read_uint16(sa, &ofs) ||
               !serialize_read_uint16(sa, &len))
             return FALSE;
-          log_msg_set_match_indirect(self,i,builtin_value,type,ofs,len);
+          log_msg_set_match_indirect(self, i, builtin_value, type, ofs, len);
         }
       else
         {
@@ -305,7 +315,7 @@ log_msg_read_values(LogMessage *self, SerializeArchive *sa)
     goto error;
   while (name[0])
     {
-      log_msg_set_value(self,log_msg_get_value_handle(name),value,-1);
+      log_msg_set_value(self, log_msg_get_value_handle(name), value, -1);
       name = value = NULL;
       if (!serialize_read_cstring(sa, &name, NULL) ||
           !serialize_read_cstring(sa, &value, NULL))
@@ -333,7 +343,7 @@ log_msg_read_sd_param(SerializeArchive *sa, gchar *sd_element_name, LogMessage *
 
   if (name_len != 0 && value_len != 0)
     {
-      strncpy(sd_param_name, sd_element_name,256);
+      strncpy(sd_param_name, sd_element_name, 256);
       strncpy(sd_param_name + strlen(sd_element_name), name, name_len);
       log_msg_set_value(self, log_msg_get_value_handle(sd_param_name), value, value_len);
       *has_more = TRUE;
@@ -398,7 +408,7 @@ log_msg_read_sd_element(SerializeArchive *sa, LogMessage *self, gboolean *has_mo
       g_free(sd_id);
       return TRUE;
     }
-  strcpy(sd_element_root,logmsg_sd_prefix);
+  strcpy(sd_element_root, logmsg_sd_prefix);
   strncpy(sd_element_root + logmsg_sd_prefix_len, sd_id, sd_id_len);
   sd_element_root[logmsg_sd_prefix_len + sd_id_len]='.';
 
@@ -494,7 +504,7 @@ _deserialize_message_version_1x(LogMessageSerializationState *state)
   g_free(msgid);
   if (!serialize_read_uint8(sa, &msg->num_matches))
     return FALSE;
-  if(!log_msg_read_matches_details(msg,sa))
+  if(!log_msg_read_matches_details(msg, sa))
     return FALSE;
   if (!log_msg_read_values(msg, sa) ||
       !log_msg_read_sd_data(msg, sa))

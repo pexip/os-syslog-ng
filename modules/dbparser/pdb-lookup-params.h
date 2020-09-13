@@ -24,23 +24,27 @@
 #ifndef PATTERNDB_PDB_LOOKUP_PARAMS_H_INCLUDED
 #define PATTERNDB_PDB_LOOKUP_PARAMS_H_INCLUDED
 
+#include <template/templates.h>
+#include "logmsg/logmsg.h"
+
 typedef struct _PDBLookupParams PDBLookupParams;
 struct _PDBLookupParams
 {
   LogMessage *msg;
   NVHandle program_handle;
+  LogTemplate *program_template;
   NVHandle message_handle;
   const gchar *message_string;
   gssize message_len;
 };
 
-static inline void
-pdb_lookup_params_init(PDBLookupParams *lookup, LogMessage *msg)
-{
-  lookup->msg = msg;
-  lookup->program_handle = LM_V_PROGRAM;
-  lookup->message_handle = LM_V_MESSAGE;
-  lookup->message_len = 0;
-}
+void pdb_lookup_params_init(PDBLookupParams *lookup, LogMessage *msg, LogTemplate *program_template);
 
+static inline void
+pdb_lookup_params_override_message(PDBLookupParams *lookup, const gchar *message, gssize message_len)
+{
+  lookup->message_handle = LM_V_NONE;
+  lookup->message_string = message;
+  lookup->message_len = message_len;
+}
 #endif

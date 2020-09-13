@@ -25,6 +25,7 @@
 #include "mainloop-worker.h"
 #include "mainloop-io-worker.h"
 #include "mainloop-call.h"
+#include "mainloop-control.h"
 #include "apphook.h"
 #include "cfg.h"
 #include "stats/stats-registry.h"
@@ -40,6 +41,9 @@
 #include "plugin.h"
 #include "resolved-configurable-paths.h"
 #include "scratch-buffers.h"
+#include "timeutils/misc.h"
+#include "stats/stats-control.h"
+#include "signal-handler.h"
 
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -128,6 +132,7 @@ struct _MainLoop
    * would be gone.
    */
   gboolean _is_terminating;
+  gboolean last_config_reload_successful;
 
   /* signal handling */
   struct iv_signal sighup_poll;
@@ -137,7 +142,7 @@ struct _MainLoop
   struct iv_signal sigusr1_poll;
 
   struct iv_event exit_requested;
-  struct iv_event reload_config_requested;
+  struct iv_task revert_config;
 
   struct iv_timer exit_timer;
 
@@ -205,10 +210,55 @@ main_loop_initialize_state(GlobalConfig *cfg, const gchar *persist_filename)
   return success;
 }
 
-static inline gboolean
+gboolean
 main_loop_is_terminating(MainLoop *self)
 {
   return self->_is_terminating;
+}
+
+gboolean
+main_loop_was_last_reload_successful(MainLoop *self)
+{
+  return self->last_config_reload_successful;
+}
+
+static void
+main_loop_reload_config_finished(MainLoop *self)
+{
+  app_config_changed();
+  self->new_config = NULL;
+  self->old_config = NULL;
+}
+
+static void
+main_loop_reload_config_revert(gpointer user_data)
+{
+  MainLoop *self = (MainLoop *) user_data;
+
+  cfg_persist_config_move(self->new_config, self->old_config);
+  cfg_deinit(self->new_config);
+  if (!cfg_init(self->old_config))
+    {
+      /* hmm. hmmm, error reinitializing old configuration, we're hosed.
+       * Best is to kill ourselves in the hope that the supervisor
+       * restarts us.
+       */
+      kill(getpid(), SIGQUIT);
+      g_assert_not_reached();
+    }
+  persist_config_free(self->old_config->persist);
+  self->old_config->persist = NULL;
+  cfg_free(self->new_config);
+  self->current_configuration = self->old_config;
+
+  main_loop_reload_config_finished(self);
+}
+
+static void
+_revert_config(gpointer user_data)
+{
+  MainLoop *self = (MainLoop *) user_data;
+  main_loop_worker_sync_call(main_loop_reload_config_revert, self);
 }
 
 /* called to apply the new configuration once all I/O worker threads have finished */
@@ -231,81 +281,86 @@ main_loop_reload_config_apply(gpointer user_data)
   cfg_deinit(self->old_config);
   cfg_persist_config_move(self->old_config, self->new_config);
 
-  if (cfg_init(self->new_config))
-    {
-      msg_verbose("New configuration initialized");
-      persist_config_free(self->new_config->persist);
-      self->new_config->persist = NULL;
-      cfg_free(self->old_config);
-      self->current_configuration = self->new_config;
-      service_management_clear_status();
-    }
-  else
+  self->last_config_reload_successful = cfg_init(self->new_config);
+  if (!self->last_config_reload_successful)
     {
       msg_error("Error initializing new configuration, reverting to old config");
       service_management_publish_status("Error initializing new configuration, using the old config");
-      cfg_persist_config_move(self->new_config, self->old_config);
-      cfg_deinit(self->new_config);
-      if (!cfg_init(self->old_config))
-        {
-          /* hmm. hmmm, error reinitializing old configuration, we're hosed.
-           * Best is to kill ourselves in the hope that the supervisor
-           * restarts us.
-           */
-          kill(getpid(), SIGQUIT);
-          g_assert_not_reached();
-        }
-      persist_config_free(self->old_config->persist);
-      self->old_config->persist = NULL;
-      cfg_free(self->new_config);
-      self->current_configuration = self->old_config;
-      goto finish;
+      iv_task_register(&self->revert_config);
+      return;
     }
 
-  /* this is already running with the new config in place */
-  app_post_config_loaded();
+  msg_verbose("New configuration initialized");
+  persist_config_free(self->new_config->persist);
+  self->new_config->persist = NULL;
+  cfg_free(self->old_config);
+  self->current_configuration = self->new_config;
+  service_management_clear_status();
   msg_notice("Configuration reload request received, reloading configuration");
 
-finish:
-  self->new_config = NULL;
-  self->old_config = NULL;
-
-  return;
+  /* this is already running with the new config in place */
+  main_loop_reload_config_finished(self);
 }
 
 
 /* initiate configuration reload */
-void
-main_loop_reload_config_initiate(gpointer user_data)
+gboolean
+main_loop_reload_config_prepare(MainLoop *self, GError **error)
 {
-  MainLoop *self = (MainLoop *) user_data;
+  g_return_val_if_fail(error == NULL || (*error) == NULL, FALSE);
 
+  self->last_config_reload_successful = FALSE;
   if (main_loop_is_terminating(self))
-    return;
+    {
+      g_set_error(error, MAIN_LOOP_ERROR, MAIN_LOOP_ERROR_RELOAD_FAILED,
+                  "Unable to trigger a reload while a termination is in progress");
+      return FALSE;
+    }
   if (is_reloading_scheduled)
     {
-      msg_notice("Error initiating reload, reload is already ongoing");
-      return;
+      g_set_error(error, MAIN_LOOP_ERROR, MAIN_LOOP_ERROR_RELOAD_FAILED,
+                  "Unable to trigger a reload while another reload attempt is in progress");
+      return FALSE;
     }
 
   service_management_publish_status("Reloading configuration");
 
   self->old_config = self->current_configuration;
-  app_pre_config_loaded();
   self->new_config = cfg_new(0);
-  if (!cfg_read_config(self->new_config, resolvedConfigurablePaths.cfgfilename, FALSE, NULL))
+  if (!cfg_read_config(self->new_config, resolvedConfigurablePaths.cfgfilename, NULL))
     {
       cfg_free(self->new_config);
       self->new_config = NULL;
       self->old_config = NULL;
-      msg_error("Error parsing configuration",
-                evt_tag_str(EVT_TAG_FILENAME, resolvedConfigurablePaths.cfgfilename));
       service_management_publish_status("Error parsing new configuration, using the old config");
+      g_set_error(error, MAIN_LOOP_ERROR, MAIN_LOOP_ERROR_RELOAD_FAILED,
+                  "Syntax error parsing configuration file");
+      return FALSE;
+    }
+  is_reloading_scheduled = TRUE;
+  return TRUE;
+}
+
+void
+main_loop_reload_config_commence(MainLoop *self)
+{
+  g_assert(is_reloading_scheduled == TRUE);
+  main_loop_worker_sync_call(main_loop_reload_config_apply, self);
+}
+
+void
+main_loop_reload_config(MainLoop *self)
+{
+  GError *error = NULL;
+
+  if (!main_loop_reload_config_prepare(self, &error))
+    {
+      msg_error("Error reloading configuration",
+                evt_tag_str("reason", error->message));
+      g_clear_error(&error);
       return;
     }
-
-  is_reloading_scheduled = TRUE;
-  main_loop_worker_sync_call(main_loop_reload_config_apply, self);
+  main_loop_reload_config_commence(self);
 }
 
 static void
@@ -422,7 +477,7 @@ sig_hup_handler(gpointer user_data)
 {
   MainLoop *self = (MainLoop *) user_data;
 
-  main_loop_reload_config_initiate(self);
+  main_loop_reload_config(self);
 }
 
 static void
@@ -431,6 +486,15 @@ sig_term_handler(gpointer user_data)
   MainLoop *self = (MainLoop *) user_data;
 
   main_loop_exit_initiate(self);
+}
+
+static void
+sig_int_handler(gpointer user_data)
+{
+  MainLoop *self = (MainLoop *) user_data;
+
+  main_loop_exit_initiate(self);
+  signal_handler_exec_external_handler(SIGINT);
 }
 
 static void
@@ -447,6 +511,7 @@ sig_child_handler(gpointer user_data)
     {
       pid = waitpid(-1, &status, WNOHANG);
       child_manager_sigchild(pid, status);
+      signal_handler_exec_external_handler(SIGCHLD);
     }
   while (pid > 0);
 }
@@ -454,7 +519,7 @@ sig_child_handler(gpointer user_data)
 static void
 sig_usr1_handler(gpointer user_data)
 {
-  app_reopen();
+  app_reopen_files();
 }
 
 static void
@@ -485,7 +550,7 @@ setup_signals(MainLoop *self)
   _register_signal_handler(&self->sighup_poll, SIGHUP, sig_hup_handler, self);
   _register_signal_handler(&self->sigchild_poll, SIGCHLD, sig_child_handler, self);
   _register_signal_handler(&self->sigterm_poll, SIGTERM, sig_term_handler, self);
-  _register_signal_handler(&self->sigint_poll, SIGINT, sig_term_handler, self);
+  _register_signal_handler(&self->sigint_poll, SIGINT, sig_int_handler, self);
   _register_signal_handler(&self->sigusr1_poll, SIGUSR1, sig_usr1_handler, self);
 }
 
@@ -506,7 +571,6 @@ static void
 main_loop_init_events(MainLoop *self)
 {
   _register_event(&self->exit_requested, main_loop_exit_initiate, self);
-  _register_event(&self->reload_config_requested, main_loop_reload_config_initiate, self);
 }
 
 void
@@ -515,14 +579,6 @@ main_loop_exit(MainLoop *self)
   iv_event_post(&self->exit_requested);
   return;
 }
-
-void
-main_loop_reload_config(MainLoop *self)
-{
-  iv_event_post(&self->reload_config_requested);
-  return;
-}
-
 
 void
 main_loop_init(MainLoop *self, MainLoopOptions *options)
@@ -538,6 +594,10 @@ main_loop_init(MainLoop *self, MainLoopOptions *options)
   main_loop_init_events(self);
   setup_signals(self);
 
+  IV_TASK_INIT(&self->revert_config);
+  self->revert_config.handler = _revert_config;
+  self->revert_config.cookie = self;
+
   self->current_configuration = cfg_new(0);
 }
 
@@ -549,8 +609,7 @@ main_loop_read_and_init_config(MainLoop *self)
 {
   MainLoopOptions *options = self->options;
 
-  if (!cfg_read_config(self->current_configuration, resolvedConfigurablePaths.cfgfilename, options->syntax_only,
-                       options->preprocess_into))
+  if (!cfg_read_config(self->current_configuration, resolvedConfigurablePaths.cfgfilename, options->preprocess_into))
     {
       return 1;
     }
@@ -564,7 +623,9 @@ main_loop_read_and_init_config(MainLoop *self)
     {
       return 2;
     }
-  self->control_server = control_init(self, resolvedConfigurablePaths.ctlfilename);
+  self->control_server = control_init(resolvedConfigurablePaths.ctlfilename);
+  main_loop_register_control_commands(self);
+  stats_register_control_commands();
   return 0;
 }
 
@@ -580,11 +641,9 @@ main_loop_deinit(MainLoop *self)
 {
   main_loop_free_config(self);
 
-  if (self->control_server)
-    control_server_free(self->control_server);
+  control_deinit(self->control_server);
 
   iv_event_unregister(&self->exit_requested);
-  iv_event_unregister(&self->reload_config_requested);
   main_loop_call_deinit();
   main_loop_io_worker_deinit();
   main_loop_worker_deinit();
@@ -607,6 +666,7 @@ main_loop_run(MainLoop *self)
       cfg_load_module(self->current_configuration, "mod-python");
       debugger_start(self, self->current_configuration);
     }
+  app_running();
   iv_main();
   service_management_publish_status("Shutting down...");
 }
@@ -624,7 +684,14 @@ main_loop_thread_resource_init(void)
   main_thread_handle = get_thread_id();
 }
 
-void main_loop_thread_resource_deinit(void)
+void
+main_loop_thread_resource_deinit(void)
 {
   g_cond_free(thread_halt_cond);
+}
+
+GQuark
+main_loop_error_quark(void)
+{
+  return g_quark_from_static_string("main-loop-error-quark");
 }

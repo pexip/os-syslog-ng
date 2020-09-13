@@ -39,6 +39,10 @@
 #include <time.h>
 #include <string.h>
 #include <stdlib.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <glib/gstdio.h>
 
 #include "test_patterndb.h"
@@ -145,7 +149,7 @@ _construct_message_with_nvpair(const gchar *program, const gchar *message, const
   log_msg_set_value(msg, LM_V_PID, MYPID, strlen(MYPID));
   if (name)
     log_msg_set_value_by_name(msg, name, value, -1);
-  msg->timestamps[LM_TS_STAMP].tv_sec = msg->timestamps[LM_TS_RECVD].tv_sec;
+  msg->timestamps[LM_TS_STAMP].ut_sec = msg->timestamps[LM_TS_RECVD].ut_sec;
 
   return msg;
 }
@@ -371,6 +375,22 @@ Test(pattern_db, test_correllation_rule_with_action_condition)
   assert_msg_matches_and_has_tag(patterndb, "correllated-message-with-action-condition", ".classifier.violation", TRUE);
 
   assert_msg_matches_and_output_message_nvpair_equals(patterndb, "correllated-message-with-action-condition", 1,
+                                                      "MESSAGE",
+                                                      "generated-message-on-condition");
+
+  _destroy_pattern_db(patterndb, filename);
+  g_free(filename);
+}
+
+Test(pattern_db, test_correllation_rule_with_action_condition_filter)
+{
+  gchar *filename;
+  PatternDB *patterndb = _create_pattern_db(pdb_ruletest_skeleton, &filename);
+
+  /* tag assigned based on "class" */
+  assert_msg_matches_and_has_tag(patterndb, "correllated-message-with-action-condition", ".classifier.violation", TRUE);
+
+  assert_msg_matches_and_output_message_nvpair_equals(patterndb, "correllated-message-with-action-condition-filter", 1,
                                                       "MESSAGE",
                                                       "generated-message-on-condition");
 
@@ -668,6 +688,104 @@ Test(pattern_db, test_tag_outside_of_rule_skeleton)
 
   _destroy_pattern_db(patterndb, filename);
   g_free(filename);
+}
+
+const gchar *dirs[] =
+{
+  "pathutils_get_filenames",
+  "pathutils_get_filenames/testdir",
+  "pathutils_get_filenames/testdir2"
+};
+const gchar *files[] =
+{
+  "pathutils_get_filenames/test.file",
+  "pathutils_get_filenames/test2.file",
+  "pathutils_get_filenames/testdir/test.file",
+  "pathutils_get_filenames/testdir2/test23.file",
+  "pathutils_get_filenames/testdir2/test22.file"
+};
+size_t dirs_len = G_N_ELEMENTS(dirs);
+size_t files_len = G_N_ELEMENTS(files);
+
+void
+test_pdb_get_filenames_setup(void)
+{
+  for (gint i = 0; i < dirs_len; ++i)
+    g_assert(mkdir(dirs[i], S_IRUSR | S_IWUSR | S_IXUSR) >= 0);
+
+  for (gint i = 0; i < files_len; ++i)
+    {
+      int fd = open(files[i], O_CREAT | O_RDWR, 0644);
+      g_assert(fd >= 0);
+      g_assert(close(fd) == 0);
+    }
+}
+
+void
+test_pdb_get_filenames_teardown(void)
+{
+  for (gint i = 0; i < files_len; ++i)
+    g_assert(g_remove(files[i]) == 0);
+  for (gint i = dirs_len - 1; i >= 0; --i)
+    g_assert(g_remove(dirs[i]) == 0);
+}
+
+Test(test_pathutils, test_pdb_get_filenames, .init = test_pdb_get_filenames_setup,
+     .fini = test_pdb_get_filenames_teardown)
+{
+  GError *error;
+  const gchar *expected[] =
+  {
+    "pathutils_get_filenames/test2.file",
+    "pathutils_get_filenames/testdir2/test22.file",
+    "pathutils_get_filenames/testdir2/test23.file"
+  };
+  guint expected_len = G_N_ELEMENTS(expected);
+  GPtrArray *filenames = pdb_get_filenames("pathutils_get_filenames", TRUE, "*test2*", &error);
+
+  cr_assert(filenames);
+  cr_assert(filenames->len == expected_len);
+
+  pdb_sort_filenames(filenames);
+
+  for (guint i = 0; i < filenames->len; ++i)
+    cr_assert_str_eq(g_ptr_array_index(filenames, i), expected[i]);
+
+  g_ptr_array_free(filenames, TRUE);
+}
+
+Test(pattern_db, match_in_program)
+{
+  gchar *filename;
+  PatternDB *patterndb = _create_pattern_db(pdb_test_match_in_program, &filename);
+
+  LogMessage *msg = _construct_message("sshd 5", "almafa");
+  _process(patterndb, msg);
+  assert_log_message_value(msg, log_msg_get_value_handle("num"), "5");
+
+  _destroy_pattern_db(patterndb, filename);
+  log_msg_unref(msg);
+  g_free(filename);
+}
+
+Test(pattern_db, test_program_template)
+{
+  gchar *filename;
+  PatternDB *patterndb = _create_pattern_db(pdb_test_program_template, &filename);
+
+  LogTemplate *template = log_template_new(configuration, NULL);
+  cr_assert(log_template_compile(template, "sshd 5", NULL));
+  pattern_db_set_program_template(patterndb, template);
+
+  LogMessage *msg = _construct_message("somethingelsethatdoesnotmatch", "almafa kortefa");
+  _process(patterndb, msg);
+  assert_log_message_value(msg, log_msg_get_value_handle("num"), "5");
+  assert_log_message_value(msg, log_msg_get_value_handle("str"), "kortefa");
+
+  _destroy_pattern_db(patterndb, filename);
+  log_msg_unref(msg);
+  g_free(filename);
+  log_template_unref(template);
 }
 
 void setup(void)

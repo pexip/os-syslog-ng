@@ -35,6 +35,21 @@
 #include <errno.h>
 #include <string.h>
 
+/* helper functions available for all modules */
+
+void
+_append_args_with_separator(gint argc, GString *argv[], GString *result, gchar separator)
+{
+  gint i;
+
+  for (i = 0; i < argc; i++)
+    {
+      g_string_append_len(result, argv[i]->str, argv[i]->len);
+      if (i < argc - 1)
+        g_string_append_c(result, separator);
+    }
+}
+
 /* in order to avoid having to declare all construct functions, we
  * include them all here. If it causes compilation times to increase
  * drastically, we should probably make them into separate compilation
@@ -49,6 +64,8 @@
 #include "tf-template.c"
 #include "context-funcs.c"
 #include "fname-funcs.c"
+#include "tf-iterate.c"
+#include "tf-map.c"
 
 static Plugin basicfuncs_plugins[] =
 {
@@ -73,6 +90,8 @@ static Plugin basicfuncs_plugins[] =
   TEMPLATE_FUNCTION_PLUGIN(tf_replace_delimiter, "replace-delimiter"),
   TEMPLATE_FUNCTION_PLUGIN(tf_string_padding, "padding"),
   TEMPLATE_FUNCTION_PLUGIN(tf_binary, "binary"),
+  TEMPLATE_FUNCTION_PLUGIN(tf_implode, "implode"),
+  TEMPLATE_FUNCTION_PLUGIN(tf_explode, "explode"),
 
   /* fname-funcs */
   TEMPLATE_FUNCTION_PLUGIN(tf_dirname, "dirname"),
@@ -86,6 +105,7 @@ static Plugin basicfuncs_plugins[] =
   TEMPLATE_FUNCTION_PLUGIN(tf_list_slice, "list-slice"),
   TEMPLATE_FUNCTION_PLUGIN(tf_list_count, "list-count"),
   TEMPLATE_FUNCTION_PLUGIN(tf_list_append, "list-append"),
+  TEMPLATE_FUNCTION_PLUGIN(tf_list_search, "list-search"),
 
   /* numeric-funcs */
   TEMPLATE_FUNCTION_PLUGIN(tf_num_plus, "+"),
@@ -97,17 +117,26 @@ static Plugin basicfuncs_plugins[] =
   TEMPLATE_FUNCTION_PLUGIN(tf_num_min, "min"),
   TEMPLATE_FUNCTION_PLUGIN(tf_num_max, "max"),
   TEMPLATE_FUNCTION_PLUGIN(tf_num_average, "average"),
+  TEMPLATE_FUNCTION_PLUGIN(tf_num_round, "round"),
+  TEMPLATE_FUNCTION_PLUGIN(tf_num_ceil, "ceil"),
+  TEMPLATE_FUNCTION_PLUGIN(tf_num_floor, "floor"),
 
   /* ip-funcs */
   TEMPLATE_FUNCTION_PLUGIN(tf_ipv4_to_int, "ipv4-to-int"),
   TEMPLATE_FUNCTION_PLUGIN(tf_indent_multi_line, "indent-multi-line"),
+  TEMPLATE_FUNCTION_PLUGIN(tf_dns_resolve_ip, "dns-resolve-ip"),
 
   /* misc funcs */
   TEMPLATE_FUNCTION_PLUGIN(tf_env, "env"),
   TEMPLATE_FUNCTION_PLUGIN(tf_template, "template"),
   TEMPLATE_FUNCTION_PLUGIN(tf_urlencode, "url-encode"),
   TEMPLATE_FUNCTION_PLUGIN(tf_urldecode, "url-decode"),
-  TEMPLATE_FUNCTION_PLUGIN(tf_base64encode, "base64-encode")
+  TEMPLATE_FUNCTION_PLUGIN(tf_base64encode, "base64-encode"),
+
+  /* functional */
+  TEMPLATE_FUNCTION_PLUGIN(tf_iterate, "iterate"),
+  TEMPLATE_FUNCTION_PLUGIN(tf_map, "map"),
+
 };
 
 gboolean

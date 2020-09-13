@@ -1,0 +1,1 @@
+rm_conffile /etc/syslog-ng/conf.d/00load-sql.conf 3.4.0~

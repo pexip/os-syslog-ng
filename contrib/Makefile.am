@@ -84,7 +84,22 @@ EXTRA_DIST += \
 	contrib/systemd/syslog-ng@.service \
 	contrib/systemd/syslog-ng@default \
 	\
-	contrib/valgrind/syslog-ng.supp
+	contrib/scripts/config-graph-json-to-dot.py \
+	\
+	contrib/valgrind/syslog-ng.supp \
+	\
+	contrib/config_option_database/syslog-ng-cfg-db.py \
+	contrib/config_option_database/requirements.txt \
+	contrib/config_option_database/__init__.py \
+	contrib/config_option_database/utils/BisonGraph.py \
+	contrib/config_option_database/utils/ConfigOptions.py \
+	contrib/config_option_database/utils/MergeYm.py \
+	contrib/config_option_database/utils/OptionParser.py \
+	contrib/config_option_database/utils/Yacc2Graph.py \
+	contrib/config_option_database/utils/__init__.py \
+	contrib/config_option_database/utils/test/test_BisonGraph.py \
+	contrib/config_option_database/utils/test/test_OptionParser.py \
+	contrib/config_option_database/utils/test/test_Yacc2Graph.py
 
 if ENABLE_SYSTEMD_UNIT_INSTALL
 systemdsystemunit_DATA = contrib/systemd/syslog-ng@.service

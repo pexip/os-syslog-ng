@@ -80,12 +80,12 @@ int init_file_reader(int nr_threads)
           source[i] = fopen(read_file_name, "r");
           if (!source[i])
             {
-              ERROR("unable to open file (%s)\n",read_file_name);
+              ERROR("unable to open file (%s)\n", read_file_name);
               return -1;
             }
         }
 
-      DEBUG("file (%s) opened for reading\n",read_file_name);
+      DEBUG("file (%s) opened for reading\n", read_file_name);
     }
   return 1;
 }
@@ -364,7 +364,8 @@ read_next_message_from_file(char *buf, int buflen, int syslog_proto, int thread_
             {
               /* Restart reading from the beginning of the file */
               rewind(source[thread_index]);
-              temp = fgets(buf, buflen, source[thread_index]);
+              if (!fgets(buf, buflen, source[thread_index]))
+                return -1;
             }
           else
             return -1;

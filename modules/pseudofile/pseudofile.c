@@ -161,7 +161,7 @@ pseudofile_dd_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_opti
   PseudoFileDestDriver *self = (PseudoFileDestDriver *) s;
   GString *formatted_message = scratch_buffers_alloc();
   gboolean success;
-  time_t now = msg->timestamps[LM_TS_RECVD].tv_sec;
+  time_t now = msg->timestamps[LM_TS_RECVD].ut_sec;
 
   if (_is_output_suspended(self, now))
     goto finish;
@@ -186,6 +186,13 @@ pseudofile_dd_init(LogPipe *s)
   GlobalConfig *cfg = log_pipe_get_config(s);
 
   log_template_options_init(&self->template_options, cfg);
+
+  if (!self->template)
+    {
+      msg_error("The template() option for pseudofile() is mandatory", log_pipe_location_tag(s));
+      return FALSE;
+    }
+
   return log_dest_driver_init_method(s);
 }
 

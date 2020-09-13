@@ -32,9 +32,9 @@
 #include "template/user-function.h"
 #include "apphook.h"
 #include "cfg.h"
-#include "timeutils.h"
 #include "plugin.h"
 #include "scratch-buffers.h"
+#include "hostname.h"
 
 #include <time.h>
 #include <stdlib.h>
@@ -146,9 +146,14 @@ Test(template, test_macros)
 
   assert_template_format("$FACILITY", "local3");
   assert_template_format("$FACILITY_NUM", "19");
+
+  assert_template_format("$SEVERITY", "err");
+  assert_template_format("$SEVERITY_NUM", "3");
+
   assert_template_format("$PRIORITY", "err");
   assert_template_format("$LEVEL", "err");
   assert_template_format("$LEVEL_NUM", "3");
+
   assert_template_format("$TAG", "9b");
   assert_template_format("$TAGS", "alma,korte,citrom,\"tag,containing,comma\"");
   assert_template_format("$PRI", "155");
@@ -229,10 +234,26 @@ Test(template, test_macros)
   assert_template_format("$MESSAGE", "árvíztűrőtükörfúrógép");
   assert_template_format("$SOURCEIP", "10.11.12.13");
   assert_template_format("$RCPTID", "555");
+  assert_template_format("$DESTIP", "127.0.0.5");
+  assert_template_format("$DESTPORT", "6514");
+  assert_template_format("$PROTO", "33");
 
   assert_template_format("$SEQNUM", "999");
   assert_template_format("$CONTEXT_ID", "test-context-id");
   assert_template_format("$UNIQID", "cafebabe@000000000000022b");
+}
+
+Test(template, test_loghost_macro)
+{
+  const gchar *fqdn = get_local_hostname_fqdn();
+  const gchar *short_name = get_local_hostname_short();
+
+  /* by default $LOGHOST is using fqdn as the template options we are using uses use_fqdn by default */
+  cr_assert_not(configuration->template_options.use_fqdn);
+  configuration->template_options.use_fqdn = TRUE;
+  assert_template_format("$LOGHOST", fqdn);
+  configuration->template_options.use_fqdn = FALSE;
+  assert_template_format("$LOGHOST", short_name);
 }
 
 Test(template, test_nvpairs)
@@ -325,4 +346,37 @@ Test(template, test_template_function_args)
                          "17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 "
                          "33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 "
                          "49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64");
+}
+
+Test(template, test_single_values_and_literal_strings_are_considered_trivial)
+{
+  LogTemplate *template;
+  LogMessage *msg = create_sample_message();
+
+  template = compile_template("literal", FALSE);
+  cr_assert(log_template_is_trivial(template));
+  cr_assert_str_eq(log_template_get_trivial_value(template, msg, NULL), "literal");
+  log_template_unref(template);
+
+  template = compile_template("$1", FALSE);
+  cr_assert(log_template_is_trivial(template));
+  cr_assert_str_eq(log_template_get_trivial_value(template, msg, NULL), "first-match");
+  log_template_unref(template);
+
+  template = compile_template("$MSG", FALSE);
+  cr_assert(log_template_is_trivial(template));
+  cr_assert_str_eq(log_template_get_trivial_value(template, msg, NULL), "árvíztűrőtükörfúrógép");
+  log_template_unref(template);
+
+  template = compile_template("$HOST", FALSE);
+  cr_assert(log_template_is_trivial(template));
+  cr_assert_str_eq(log_template_get_trivial_value(template, msg, NULL), "bzorp");
+  log_template_unref(template);
+
+  template = compile_template("${APP.VALUE}", FALSE);
+  cr_assert(log_template_is_trivial(template));
+  cr_assert_str_eq(log_template_get_trivial_value(template, msg, NULL), "value");
+  log_template_unref(template);
+
+  log_msg_unref(msg);
 }

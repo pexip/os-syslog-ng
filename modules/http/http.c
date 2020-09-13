@@ -24,15 +24,30 @@
 #include "http-worker.h"
 
 /* HTTPDestinationDriver */
+void
+http_dd_insert_response_handler(LogDriver *d, HttpResponseHandler *response_handler)
+{
+  HTTPDestinationDriver *self = (HTTPDestinationDriver *) d;
+  http_response_handlers_insert(self->response_handlers, response_handler);
+}
 
 void
-http_dd_set_urls(LogDriver *d, GList *urls)
+http_dd_set_urls(LogDriver *d, GList *url_strings)
 {
   HTTPDestinationDriver *self = (HTTPDestinationDriver *) d;
 
   http_load_balancer_drop_all_targets(self->load_balancer);
-  for (GList *l = urls; l; l = l->next)
-    http_load_balancer_add_target(self->load_balancer, l->data);
+  for (GList *l = url_strings; l; l = l->next)
+    {
+      const gchar *url_string = (const gchar *) l->data;
+      gchar **urls = g_strsplit(url_string, " ", -1);
+
+      for (gint url = 0; urls[url]; url++)
+        {
+          http_load_balancer_add_target(self->load_balancer, urls[url]);
+        }
+      g_strfreev(urls);
+    }
 }
 
 void
@@ -123,14 +138,6 @@ http_dd_set_ca_dir(LogDriver *d, const gchar *ca_dir)
 }
 
 void
-http_dd_set_use_system_cert_store(LogDriver *d, gboolean enable)
-{
-  HTTPDestinationDriver *self = (HTTPDestinationDriver *) d;
-
-  self->use_system_cert_store = enable;
-}
-
-void
 http_dd_set_ca_file(LogDriver *d, const gchar *ca_file)
 {
   HTTPDestinationDriver *self = (HTTPDestinationDriver *) d;
@@ -167,6 +174,15 @@ http_dd_set_cipher_suite(LogDriver *d, const gchar *ciphers)
 }
 
 void
+http_dd_set_proxy(LogDriver *d, const gchar *proxy)
+{
+  HTTPDestinationDriver *self = (HTTPDestinationDriver *) d;
+
+  g_free(self->proxy);
+  self->proxy = g_strdup(proxy);
+}
+
+gboolean
 http_dd_set_ssl_version(LogDriver *d, const gchar *value)
 {
   HTTPDestinationDriver *self = (HTTPDestinationDriver *) d;
@@ -197,32 +213,38 @@ http_dd_set_ssl_version(LogDriver *d, const gchar *value)
       /* SSL 3 only */
       self->ssl_version = CURL_SSLVERSION_SSLv3;
     }
-#ifdef CURL_SSLVERSION_TLSv1_0
+#if SYSLOG_NG_HAVE_DECL_CURL_SSLVERSION_TLSV1_0
   else if (strcmp(value, "tlsv1_0") == 0)
     {
       /* TLS 1.0 only */
       self->ssl_version = CURL_SSLVERSION_TLSv1_0;
     }
 #endif
-#ifdef CURL_SSLVERSION_TLSv1_1
+#if SYSLOG_NG_HAVE_DECL_CURL_SSLVERSION_TLSV1_1
   else if (strcmp(value, "tlsv1_1") == 0)
     {
       /* TLS 1.1 only */
       self->ssl_version = CURL_SSLVERSION_TLSv1_1;
     }
 #endif
-#ifdef CURL_SSLVERSION_TLSv1_2
+#if SYSLOG_NG_HAVE_DECL_CURL_SSLVERSION_TLSV1_2
   else if (strcmp(value, "tlsv1_2") == 0)
     {
       /* TLS 1.2 only */
       self->ssl_version = CURL_SSLVERSION_TLSv1_2;
     }
 #endif
-  else
+#if SYSLOG_NG_HAVE_DECL_CURL_SSLVERSION_TLSV1_3
+  else if (strcmp(value, "tlsv1_3") == 0)
     {
-      msg_warning("curl: unsupported SSL version",
-                  evt_tag_str("ssl_version", value));
+      /* TLS 1.3 only */
+      self->ssl_version = CURL_SSLVERSION_TLSv1_3;
     }
+#endif
+  else
+    return FALSE;
+
+  return TRUE;
 }
 
 void
@@ -300,6 +322,12 @@ _format_stats_instance(LogThreadedDestDriver *s)
 }
 
 gboolean
+http_dd_deinit(LogPipe *s)
+{
+  return log_threaded_dest_driver_deinit_method(s);
+}
+
+gboolean
 http_dd_init(LogPipe *s)
 {
   HTTPDestinationDriver *self = (HTTPDestinationDriver *)s;
@@ -314,7 +342,17 @@ http_dd_init(LogPipe *s)
                   "It is recommended that you set persist-name() in this case as syslog-ng will be "
                   "using the first URL in urls() to register persistent data, such as the disk queue "
                   "name, which might change",
-                  evt_tag_str("url", self->load_balancer->targets[0].url));
+                  evt_tag_str("url", self->load_balancer->targets[0].url),
+                  log_pipe_location_tag(&self->super.super.super.super));
+    }
+  if (self->load_balancer->num_targets > self->super.num_workers)
+    {
+      msg_warning("WARNING: your http() driver instance uses less workers than urls. "
+                  "It is recommended to increase the number of workers to at least the number of servers, "
+                  "otherwise not all urls will be used for load-balancing",
+                  evt_tag_int("urls", self->load_balancer->num_targets),
+                  evt_tag_int("workers", self->super.num_workers),
+                  log_pipe_location_tag(&self->super.super.super.super));
     }
   /* we need to set up url before we call the inherited init method, so our stats key is correct */
   self->url = self->load_balancer->targets[0].url;
@@ -339,6 +377,7 @@ http_dd_free(LogPipe *s)
   g_string_free(self->delimiter, TRUE);
   g_string_free(self->body_prefix, TRUE);
   g_string_free(self->body_suffix, TRUE);
+  log_template_unref(self->body_template);
 
   curl_global_cleanup();
 
@@ -350,8 +389,11 @@ http_dd_free(LogPipe *s)
   g_free(self->cert_file);
   g_free(self->key_file);
   g_free(self->ciphers);
+  g_free(self->proxy);
   g_list_free_full(self->headers, g_free);
+  g_mutex_free(self->workers_lock);
   http_load_balancer_free(self->load_balancer);
+  http_response_handlers_free(self->response_handlers);
 
   log_threaded_dest_driver_free(s);
 }
@@ -362,12 +404,14 @@ http_dd_new(GlobalConfig *cfg)
   HTTPDestinationDriver *self = g_new0(HTTPDestinationDriver, 1);
 
   log_threaded_dest_driver_init_instance(&self->super, cfg);
+  log_template_options_defaults(&self->template_options);
 
   self->super.super.super.super.init = http_dd_init;
+  self->super.super.super.super.deinit = http_dd_deinit;
   self->super.super.super.super.free_fn = http_dd_free;
   self->super.super.super.super.generate_persist_name = _format_persist_name;
   self->super.format_stats_instance = _format_stats_instance;
-  self->super.stats_source = SCS_HTTP;
+  self->super.stats_source = stats_register_type("http");
   self->super.worker.construct = http_dw_new;
 
   curl_global_init(CURL_GLOBAL_ALL);
@@ -380,11 +424,14 @@ http_dd_new(GlobalConfig *cfg)
   self->body_prefix = g_string_new("");
   self->body_suffix = g_string_new("");
   self->delimiter = g_string_new("\n");
+  self->workers_lock = g_mutex_new();
   self->load_balancer = http_load_balancer_new();
   curl_version_info_data *curl_info = curl_version_info(CURLVERSION_NOW);
   if (!self->user_agent)
     self->user_agent = g_strdup_printf("syslog-ng %s/libcurl %s",
                                        SYSLOG_NG_VERSION, curl_info->version);
+
+  self->response_handlers = http_response_handlers_new();
 
   return &self->super.super.super;
 }

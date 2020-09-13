@@ -138,7 +138,7 @@ _create_message_to_be_serialized(const gchar *raw_msg, const int raw_msg_len)
   parse_options.flags |= LP_SYSLOG_PROTOCOL;
   NVHandle test_handle = log_msg_get_value_handle("aaa");
 
-  LogMessage *msg = log_msg_new(raw_msg, raw_msg_len, NULL, &parse_options);
+  LogMessage *msg = log_msg_new(raw_msg, raw_msg_len, &parse_options);
   log_msg_set_value(msg, test_handle, "test_value", -1);
 
   NVHandle indirect_handle = log_msg_get_value_handle("indirect_1");
@@ -167,7 +167,7 @@ _serialize_message_for_test(GString *stream, const gchar *raw_msg)
   SerializeArchive *sa = serialize_string_archive_new(stream);
 
   LogMessage *msg = _create_message_to_be_serialized(raw_msg, strlen(raw_msg));
-  log_msg_serialize(msg, sa);
+  log_msg_serialize(msg, sa, 0);
   log_msg_unref(msg);
   return sa;
 }
@@ -204,25 +204,25 @@ Test(logmsg_serialize, serialize)
 }
 
 static LogMessage *
-_create_message_to_be_serialized_with_ts_processed(const gchar *raw_msg, const int raw_msg_len, LogStamp *processed)
+_create_message_to_be_serialized_with_ts_processed(const gchar *raw_msg, const int raw_msg_len, UnixTime *processed)
 {
   LogMessage *msg = _create_message_to_be_serialized(RAW_MSG, strlen(RAW_MSG));
 
-  msg->timestamps[LM_TS_PROCESSED].tv_sec = processed->tv_sec;
-  msg->timestamps[LM_TS_PROCESSED].tv_usec = processed->tv_usec;
-  msg->timestamps[LM_TS_PROCESSED].zone_offset = processed->zone_offset;
+  msg->timestamps[LM_TS_PROCESSED].ut_sec = processed->ut_sec;
+  msg->timestamps[LM_TS_PROCESSED].ut_usec = processed->ut_usec;
+  msg->timestamps[LM_TS_PROCESSED].ut_gmtoff = processed->ut_gmtoff;
 
   return msg;
 }
 
 static void
-_check_processed_timestamp(LogMessage *msg, LogStamp *processed)
+_check_processed_timestamp(LogMessage *msg, UnixTime *processed)
 {
-  cr_assert_eq(msg->timestamps[LM_TS_PROCESSED].tv_sec, processed->tv_sec,
+  cr_assert_eq(msg->timestamps[LM_TS_PROCESSED].ut_sec, processed->ut_sec,
                "tv_sec value does not match");
-  cr_assert_eq(msg->timestamps[LM_TS_PROCESSED].tv_usec, processed->tv_usec,
+  cr_assert_eq(msg->timestamps[LM_TS_PROCESSED].ut_usec, processed->ut_usec,
                "tv_usec value does not match");
-  cr_assert_eq(msg->timestamps[LM_TS_PROCESSED].zone_offset, processed->zone_offset,
+  cr_assert_eq(msg->timestamps[LM_TS_PROCESSED].ut_gmtoff, processed->ut_gmtoff,
                "zone_offset value does not match");
 }
 
@@ -232,18 +232,18 @@ Test(logmsg_serialize, simple_serialization)
   GString *stream = g_string_sized_new(512);
   SerializeArchive *sa = serialize_string_archive_new(stream);
 
-  log_msg_serialize(msg, sa);
+  log_msg_serialize(msg, sa, 0);
 
   log_msg_unref(msg);
   msg = log_msg_new_empty();
 
   log_msg_deserialize(msg, sa);
 
-  LogStamp ls =
+  UnixTime ls =
   {
-    .tv_sec = msg->timestamps[LM_TS_RECVD].tv_sec,
-    .tv_usec = msg->timestamps[LM_TS_RECVD].tv_usec,
-    .zone_offset = msg->timestamps[LM_TS_RECVD].zone_offset
+    .ut_sec = msg->timestamps[LM_TS_RECVD].ut_sec,
+    .ut_usec = msg->timestamps[LM_TS_RECVD].ut_usec,
+    .ut_gmtoff = msg->timestamps[LM_TS_RECVD].ut_gmtoff
   };
 
   _check_processed_timestamp(msg, &ls);
@@ -259,14 +259,14 @@ Test(logmsg_serialize, given_ts_processed)
   GString *stream = g_string_sized_new(512);
   SerializeArchive *sa = serialize_string_archive_new(stream);
 
-  LogStamp ls =
+  UnixTime ls =
   {
-    .tv_sec = 11,
-    .tv_usec = 12,
-    .zone_offset = 13
+    .ut_sec = 11,
+    .ut_usec = 12,
+    .ut_gmtoff = 13
   };
 
-  log_msg_serialize_with_ts_processed(msg, sa, &ls);
+  log_msg_serialize_with_ts_processed(msg, sa, &ls, 0);
 
   log_msg_unref(msg);
   msg = log_msg_new_empty();
@@ -282,18 +282,18 @@ Test(logmsg_serialize, given_ts_processed)
 
 Test(logmsg_serialize, existing_ts_processed)
 {
-  LogStamp ls =
+  UnixTime ls =
   {
-    .tv_sec = 1,
-    .tv_usec = 2,
-    .zone_offset = 3
+    .ut_sec = 1,
+    .ut_usec = 2,
+    .ut_gmtoff = 3
   };
 
   LogMessage *msg = _create_message_to_be_serialized_with_ts_processed(RAW_MSG, strlen(RAW_MSG), &ls);
   GString *stream = g_string_sized_new(512);
   SerializeArchive *sa = serialize_string_archive_new(stream);
 
-  log_msg_serialize(msg, sa);
+  log_msg_serialize(msg, sa, 0);
 
   log_msg_unref(msg);
   msg = log_msg_new_empty();
@@ -309,22 +309,22 @@ Test(logmsg_serialize, existing_ts_processed)
 
 Test(logmsg_serialize, existing_and_given_ts_processed)
 {
-  LogStamp ls =
+  UnixTime ls =
   {
-    .tv_sec = 1,
-    .tv_usec = 2,
-    .zone_offset = 3
+    .ut_sec = 1,
+    .ut_usec = 2,
+    .ut_gmtoff = 3
   };
 
   LogMessage *msg = _create_message_to_be_serialized_with_ts_processed(RAW_MSG, strlen(RAW_MSG), &ls);
   GString *stream = g_string_sized_new(512);
   SerializeArchive *sa = serialize_string_archive_new(stream);
 
-  ls.tv_sec = 11;
-  ls.tv_usec = 12;
-  ls.zone_offset = 13;
+  ls.ut_sec = 11;
+  ls.ut_usec = 12;
+  ls.ut_gmtoff = 13;
 
-  log_msg_serialize_with_ts_processed(msg, sa, &ls);
+  log_msg_serialize_with_ts_processed(msg, sa, &ls, 0);
 
   log_msg_unref(msg);
   msg = log_msg_new_empty();
@@ -368,9 +368,28 @@ Test(logmsg_serialize, serialization_performance)
   for (int i = 0; i < iterations; i++)
     {
       g_string_truncate(stream, 0);
-      log_msg_serialize(msg, sa);
+      log_msg_serialize(msg, sa, 0);
     }
-  stop_stopwatch_and_display_result(iterations, "serializing %d times took", iterations);
+  stop_stopwatch_and_display_result(iterations, "serializing (without compaction) %d times took", iterations);
+  serialize_archive_free(sa);
+  log_msg_unref(msg);
+  g_string_free(stream, TRUE);
+}
+
+Test(logmsg_serialize, serialization_with_compaction_performance)
+{
+  LogMessage *msg = _create_message_to_be_serialized(RAW_MSG, strlen(RAW_MSG));
+  GString *stream = g_string_sized_new(512);
+  const int iterations = 100000;
+
+  SerializeArchive *sa = serialize_string_archive_new(stream);
+  start_stopwatch();
+  for (int i = 0; i < iterations; i++)
+    {
+      g_string_truncate(stream, 0);
+      log_msg_serialize(msg, sa, LMSF_COMPACTION);
+    }
+  stop_stopwatch_and_display_result(iterations, "serializing (with compaction) %d times took", iterations);
   serialize_archive_free(sa);
   log_msg_unref(msg);
   g_string_free(stream, TRUE);
@@ -391,7 +410,7 @@ Test(logmsg_serialize, deserialization_performance)
       log_msg_deserialize(msg, sa);
       log_msg_unref(msg);
     }
-  stop_stopwatch_and_display_result(iterations, "serializing %d times took", iterations);
+  stop_stopwatch_and_display_result(iterations, "deserializing %d times took", iterations);
   serialize_archive_free(sa);
   g_string_free(stream, TRUE);
 }

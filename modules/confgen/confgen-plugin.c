@@ -35,8 +35,21 @@
 static void
 confgen_set_args_as_env(gpointer k, gpointer v, gpointer user_data)
 {
+  if (!v)
+    {
+      msg_debug("confgen: Skipping empty argument",
+                evt_tag_str("name", (gchar *) k));
+      return;
+    }
+
   gchar buf[1024];
   g_snprintf(buf, sizeof(buf), "confgen_%s", (gchar *)k);
+
+  msg_debug("confgen: Passing argument to confgen script",
+            evt_tag_str("name", (gchar *) k),
+            evt_tag_str("value", (gchar *) v),
+            evt_tag_str("env_name", buf));
+
   setenv(buf, (gchar *)v, 1);
 }
 
@@ -67,19 +80,20 @@ _read_program_output(FILE *out, GString *result)
 }
 
 gboolean
-confgen_exec_generate(CfgBlockGenerator *s, GlobalConfig *cfg, CfgArgs *args, GString *result, const gchar *reference)
+confgen_exec_generate(CfgBlockGenerator *s, GlobalConfig *cfg, gpointer args, GString *result, const gchar *reference)
 {
   ConfgenExec *self = (ConfgenExec *) s;
   FILE *out;
   gchar buf[256];
   gint res;
+  CfgArgs *cfgargs = (CfgArgs *)args;
 
   g_snprintf(buf, sizeof(buf), "%s confgen %s", cfg_lexer_lookup_context_name_by_type(self->super.context),
              self->super.name);
 
-  cfg_args_foreach(args, confgen_set_args_as_env, NULL);
+  cfg_args_foreach(cfgargs, confgen_set_args_as_env, NULL);
   out = popen(self->exec, "r");
-  cfg_args_foreach(args, confgen_unset_args_from_env, NULL);
+  cfg_args_foreach(cfgargs, confgen_unset_args_from_env, NULL);
 
   if (!out)
     {

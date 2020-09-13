@@ -27,6 +27,7 @@
 #include "loggen_helper.h"
 #include "file_reader.h"
 #include "logline_generator.h"
+#include "reloc.h"
 
 #include <stdio.h>
 #include <sys/time.h>
@@ -103,6 +104,9 @@ generate_message(char *buffer, int buffer_size, int thread_id, unsigned long seq
   else
     str_len = generate_log_line(buffer, buffer_size, syslog_proto, thread_id, seq);
 
+  if (str_len < 0)
+    return -1;
+
   g_mutex_lock(message_counter_lock);
   sent_messages_num++;
   raw_message_length += str_len;
@@ -120,11 +124,11 @@ gboolean is_plugin_already_loaded(GPtrArray *plugin_array, const gchar *name)
 {
   for (int i=0; i < plugin_array->len; i++)
     {
-      PluginInfo *loaded_plugin = g_ptr_array_index(plugin_array,i);
+      PluginInfo *loaded_plugin = g_ptr_array_index(plugin_array, i);
       if (!loaded_plugin)
         continue;
 
-      if (strcmp(name,loaded_plugin->name) == 0)
+      if (strcmp(name, loaded_plugin->name) == 0)
         {
           return TRUE;
         }
@@ -136,13 +140,13 @@ gboolean is_plugin_already_loaded(GPtrArray *plugin_array, const gchar *name)
 static int
 enumerate_plugins(const gchar *plugin_path, GPtrArray *plugin_array, GOptionContext *ctx)
 {
-  GDir *dir;
   const gchar *fname;
 
-  dir = g_dir_open(plugin_path, 0, NULL);
+  GDir *dir = g_dir_open(plugin_path, 0, NULL);
   if (!dir)
     {
       ERROR("unable to open plugin directory %s (err=%s)\n", plugin_path, strerror(errno));
+      ERROR("hint: you can use the %s environmental variable to specify plugin path\n", "SYSLOGNG_PREFIX");
       return 0;
     }
 
@@ -154,11 +158,13 @@ enumerate_plugins(const gchar *plugin_path, GPtrArray *plugin_array, GOptionCont
   GModule *module = NULL;
   while ((fname = g_dir_read_name(dir)))
     {
-      if (!g_str_has_suffix(fname,G_MODULE_SUFFIX))
+      if (!g_str_has_suffix(fname, G_MODULE_SUFFIX))
         continue;
 
-      gchar *full_lib_path = g_build_filename(plugin_path,fname,NULL);
+      gchar *full_lib_path = g_build_filename(plugin_path, fname, NULL);
       module = g_module_open(full_lib_path, G_MODULE_BIND_LAZY);
+      g_free(full_lib_path);
+
       if (!module)
         {
           ERROR("error opening plugin module %s (%s)\n", fname, g_module_error());
@@ -183,7 +189,7 @@ enumerate_plugins(const gchar *plugin_path, GPtrArray *plugin_array, GOptionCont
       if (plugin->set_generate_message)
         plugin->set_generate_message(generate_message);
       else
-        ERROR("plugin (%s) doesn't have set_generate_message function\n",plugin->name);
+        ERROR("plugin (%s) doesn't have set_generate_message function\n", plugin->name);
 
       g_ptr_array_add(plugin_array, (gpointer) plugin);
 
@@ -195,11 +201,15 @@ enumerate_plugins(const gchar *plugin_path, GPtrArray *plugin_array, GOptionCont
       DEBUG("%s in %s is a loggen plugin\n", plugin->name, fname);
     }
 
+  g_dir_close(dir);
+
   if (plugin_array->len == 0)
     {
       ERROR("no loggen plugin found in %s\n", plugin_path);
+      ERROR("hint: you can use the %s environmental variable to specify plugin path\n", "SYSLOGNG_PREFIX");
     }
 
+  DEBUG("%d plugin successfuly loaded\n", plugin_array->len);
   return plugin_array->len;
 }
 
@@ -211,7 +221,7 @@ stop_plugins(GPtrArray *plugin_array)
 
   for (int i=0; i < plugin_array->len; i++)
     {
-      PluginInfo *plugin = g_ptr_array_index(plugin_array,i);
+      PluginInfo *plugin = g_ptr_array_index(plugin_array, i);
       if (!plugin)
         continue;
 
@@ -220,7 +230,7 @@ stop_plugins(GPtrArray *plugin_array)
         plugin->stop_plugin((gpointer)&global_plugin_option);
     }
 
-  DEBUG("all plugins have been stoped\n");
+  DEBUG("all plugins have been stopped\n");
 }
 
 static void
@@ -232,7 +242,7 @@ init_logline_generator(GPtrArray *plugin_array)
   gboolean require_framing = FALSE;
   for (int i=0; i < plugin_array->len; i++)
     {
-      PluginInfo *plugin = g_ptr_array_index(plugin_array,i);
+      PluginInfo *plugin = g_ptr_array_index(plugin_array, i);
       if (!plugin)
         continue;
 
@@ -271,7 +281,7 @@ init_csv_statistics(void)
       printf("ThreadId;Time;Rate;Count\n");
       for (int j=0; j < global_plugin_option.active_connections; j++)
         {
-          fprintf(stderr,"%d;%lu.%06lu;%.2lf;%lu\n",j,(long) 0,(long) 0,(double) 0, (long)0);
+          fprintf(stderr, "%d;%lu.%06lu;%.2lf;%lu\n", j, (long) 0, (long) 0, (double) 0, (long)0);
         }
     }
 }
@@ -289,7 +299,7 @@ start_plugins(GPtrArray *plugin_array)
   int number_of_active_plugins = 0;
   for (int i=0; i < plugin_array->len; i++)
     {
-      PluginInfo *plugin = g_ptr_array_index(plugin_array,i);
+      PluginInfo *plugin = g_ptr_array_index(plugin_array, i);
       if (!plugin)
         continue;
 
@@ -306,13 +316,15 @@ start_plugins(GPtrArray *plugin_array)
 
   for (int i=0; i < plugin_array->len; i++)
     {
-      PluginInfo *plugin = g_ptr_array_index(plugin_array,i);
+      PluginInfo *plugin = g_ptr_array_index(plugin_array, i);
       if (!plugin)
         continue;
 
       if (plugin->start_plugin && plugin->is_plugin_activated())
         {
-          plugin->start_plugin((gpointer)&global_plugin_option);
+          if (!plugin->start_plugin((gpointer)&global_plugin_option))
+            return 0;
+
           break;
         }
     }
@@ -363,12 +375,12 @@ print_statistic(struct timeval *start_time)
           count = thread_stat_count[j];
           g_mutex_unlock(message_counter_lock);
 
-          fprintf(stderr,"%d;%lu.%06lu;%.2lf;%"G_GINT64_FORMAT"\n",
+          fprintf(stderr, "%d;%lu.%06lu;%.2lf;%"G_GINT64_FORMAT"\n",
                   j,
                   (long) diff_tv.tv_sec,
                   (long) diff_tv.tv_usec,
                   msg_count_diff,
-                  thread_stat_count[j]
+                  count
                  );
         }
     }
@@ -385,7 +397,7 @@ void wait_all_plugin_to_finish(GPtrArray *plugin_array)
 
   for (int i=0; i < plugin_array->len; i++)
     {
-      PluginInfo *plugin = g_ptr_array_index(plugin_array,i);
+      PluginInfo *plugin = g_ptr_array_index(plugin_array, i);
       if (!plugin)
         continue;
 
@@ -411,25 +423,60 @@ void wait_all_plugin_to_finish(GPtrArray *plugin_array)
             (gint64)raw_message_length/count,
             (double)raw_message_length/(total_runtime_sec*1024) );
   else
-    fprintf(stderr, "Total runtime = %g, count = %ld\n",total_runtime_sec, count);
+    fprintf(stderr, "Total runtime = %g, count = %ld\n", total_runtime_sec, count);
 }
 
 static void
 signal_callback_handler(int signum)
 {
-  ERROR("Send error Broken pipe, results may be skewed. %d\n",signum);
+  ERROR("Send error Broken pipe, results may be skewed. %d\n", signum);
+}
+
+static void
+rate_change_handler(int signum)
+{
+  switch(signum)
+    {
+    case SIGUSR1:
+      global_plugin_option.rate *= 2;
+      break;
+    case SIGUSR2:
+    {
+      int proposed_new_rate = global_plugin_option.rate / 2;
+      global_plugin_option.rate = proposed_new_rate > 0 ? proposed_new_rate: 1;
+      break;
+    }
+    default:
+      break;
+    }
+}
+
+static void
+setup_rate_change_signals(void)
+{
+  struct sigaction sa;
+  sa.sa_handler = rate_change_handler;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = SA_RESTART;
+
+  sigaction(SIGUSR1, &sa, NULL);
+  sigaction(SIGUSR2, &sa, NULL);
 }
 
 int
 main(int argc, char *argv[])
 {
+  g_thread_init(NULL);
+
   GPtrArray *plugin_array = g_ptr_array_new();
   GOptionContext *ctx = g_option_context_new(" target port");
 
   signal(SIGPIPE, signal_callback_handler);
+  setup_rate_change_signals();
 
-  int plugin_num = enumerate_plugins(SYSLOG_NG_PATH_LOGGEN_PLUGIN_DIR, plugin_array, ctx);
-  DEBUG("%d plugin successfuly loaded\n",plugin_num);
+  const gchar *plugin_path = get_installation_path_for(SYSLOG_NG_PATH_LOGGENPLUGINDIR);
+  enumerate_plugins(plugin_path, plugin_array, ctx);
+  reloc_deinit();
 
   /* create sub group for file reader functions */
   GOptionGroup *group = g_option_group_new("file-reader", "file-reader", "Show options", NULL, NULL);
@@ -440,7 +487,7 @@ main(int argc, char *argv[])
   if (!g_option_context_parse(ctx, &argc, &argv, &error))
     {
       ERROR("option parsing failed: %s\n", error->message);
-      g_ptr_array_free(plugin_array,TRUE);
+      g_ptr_array_free(plugin_array, TRUE);
       if (error)
         g_error_free(error);
       return 1;
@@ -449,20 +496,28 @@ main(int argc, char *argv[])
   /* debug option defined by --debug command line option */
   set_debug_level(debug);
 
-  if (argc < 3)
+  if (argc>=3)
     {
-      ERROR("please specify target and port at least\n");
-      g_ptr_array_free(plugin_array,TRUE);
-      return 1;
+      global_plugin_option.target = g_strdup(argv[1]);
+      global_plugin_option.port = g_strdup(argv[2]);
+    }
+  else if (argc>=2)
+    {
+      global_plugin_option.target = g_strdup(argv[1]);
+      global_plugin_option.port = NULL;
+    }
+  else
+    {
+      global_plugin_option.target = NULL;
+      global_plugin_option.port = NULL;
+      DEBUG("no port and address specified");
     }
 
-  global_plugin_option.target = g_strdup(argv[1]);
-  global_plugin_option.port = g_strdup(argv[2]);
-  DEBUG("target=%s port=%s\n",global_plugin_option.target,global_plugin_option.port);
+  DEBUG("target=%s port=%s\n", global_plugin_option.target, global_plugin_option.port);
 
   if (global_plugin_option.message_length > MAX_MESSAGE_LENGTH)
     {
-      ERROR("warning: defined message length (%d) is too big. truncated to (%d)\n",global_plugin_option.message_length,
+      ERROR("warning: defined message length (%d) is too big. truncated to (%d)\n", global_plugin_option.message_length,
             MAX_MESSAGE_LENGTH);
       global_plugin_option.message_length = MAX_MESSAGE_LENGTH;
     }
@@ -491,7 +546,8 @@ main(int argc, char *argv[])
     g_mutex_free(message_counter_lock);
   g_free((gpointer)global_plugin_option.target);
   g_free((gpointer)global_plugin_option.port);
-  g_ptr_array_free(plugin_array,TRUE);
+  g_option_context_free(ctx);
+  g_ptr_array_free(plugin_array, TRUE);
   g_free(thread_stat_count_last);
   g_free(thread_stat_count);
   return 0;

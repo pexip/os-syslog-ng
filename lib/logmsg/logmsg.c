@@ -27,7 +27,8 @@
 #include "str-repr/encode.h"
 #include "messages.h"
 #include "logpipe.h"
-#include "timeutils.h"
+#include "timeutils/cache.h"
+#include "timeutils/misc.h"
 #include "logmsg/nvtable.h"
 #include "stats/stats-registry.h"
 #include "stats/stats-cluster-single.h"
@@ -37,7 +38,8 @@
 #include "rcptid.h"
 #include "template/macros.h"
 #include "host-id.h"
-#include "ack_tracker.h"
+#include "ack-tracker/ack_tracker.h"
+#include "apphook.h"
 
 #include <glib/gprintf.h>
 #include <sys/types.h>
@@ -46,6 +48,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <syslog.h>
 
 /*
  * Reference/ACK counting for LogMessage structures
@@ -196,6 +199,7 @@ const gchar *builtin_value_names[] =
   "MSGID",
   "SOURCE",
   "LEGACY_MSGHDR",
+  "__RESERVED_LM_V_MAX",
   NULL,
 };
 
@@ -506,6 +510,12 @@ _log_name_value_updates(LogMessage *self)
   return (self->flags & LF_INTERNAL) == 0;
 }
 
+static inline gboolean
+_value_invalidates_legacy_header(NVHandle handle)
+{
+  return handle == LM_V_PROGRAM || handle == LM_V_PID;
+}
+
 void
 log_msg_set_value(LogMessage *self, NVHandle handle, const gchar *value, gssize value_len)
 {
@@ -551,6 +561,7 @@ log_msg_set_value(LogMessage *self, NVHandle handle, const gchar *value, gssize 
         {
           /* can't grow the payload, it has reached the maximum size */
           msg_info("Cannot store value for this log message, maximum size has been reached",
+                   evt_tag_int("maximum_payload", NV_TABLE_MAX_BYTES),
                    evt_tag_str("name", name),
                    evt_tag_printf("value", "%.32s%s", value, value_len > 32 ? "..." : ""));
           break;
@@ -563,14 +574,35 @@ log_msg_set_value(LogMessage *self, NVHandle handle, const gchar *value, gssize 
 
   if (new_entry)
     log_msg_update_sdata(self, handle, name, name_len);
-  if (handle == LM_V_PROGRAM || handle == LM_V_PID)
+
+  if (_value_invalidates_legacy_header(handle))
     log_msg_unset_value(self, LM_V_LEGACY_MSGHDR);
 }
 
 void
 log_msg_unset_value(LogMessage *self, NVHandle handle)
 {
-  nv_table_unset_value(self->payload, handle);
+  while (!nv_table_unset_value(self->payload, handle))
+    {
+      /* error allocating string in payload, reallocate */
+      guint32 old_size = self->payload->size;
+      if (!nv_table_realloc(self->payload, &self->payload))
+        {
+          /* can't grow the payload, it has reached the maximum size */
+          const gchar *name = log_msg_get_value_name(handle, NULL);
+          msg_info("Cannot unset value for this log message, maximum size has been reached",
+                   evt_tag_int("maximum_payload", NV_TABLE_MAX_BYTES),
+                   evt_tag_str("name", name));
+          break;
+        }
+      guint32 new_size = self->payload->size;
+      self->allocated_bytes += (new_size - old_size);
+      stats_counter_add(count_allocated_bytes, new_size-old_size);
+      stats_counter_inc(count_payload_reallocs);
+    }
+
+  if (_value_invalidates_legacy_header(handle))
+    log_msg_unset_value(self, LM_V_LEGACY_MSGHDR);
 }
 
 void
@@ -990,13 +1022,13 @@ log_msg_append_format_sdata(const LogMessage *self, GString *result,  guint32 se
         }
       /* if message hasn't sequenceId and the cur_elem is the meta block Append the sequenceId for the result
          if seq_num isn't 0 */
-      if (!has_seq_num && seq_num!=0 && strncmp(sdata_elem,"meta.",5) == 0)
+      if (!has_seq_num && seq_num!=0 && strncmp(sdata_elem, "meta.", 5) == 0)
         {
           gchar sequence_id[16];
           g_snprintf(sequence_id, sizeof(sequence_id), "%d", seq_num);
           g_string_append_c(result, ' ');
-          g_string_append_len(result,"sequenceId=\"",12);
-          g_string_append_len(result,sequence_id,strlen(sequence_id));
+          g_string_append_len(result, "sequenceId=\"", 12);
+          g_string_append_len(result, sequence_id, strlen(sequence_id));
           g_string_append_c(result, '"');
           has_seq_num = TRUE;
         }
@@ -1025,9 +1057,9 @@ log_msg_append_format_sdata(const LogMessage *self, GString *result,  guint32 se
       gchar sequence_id[16];
       g_snprintf(sequence_id, sizeof(sequence_id), "%d", seq_num);
       g_string_append_c(result, '[');
-      g_string_append_len(result,"meta sequenceId=\"",17);
-      g_string_append_len(result,sequence_id,strlen(sequence_id));
-      g_string_append_len(result, "\"]",2);
+      g_string_append_len(result, "meta sequenceId=\"", 17);
+      g_string_append_len(result, sequence_id, strlen(sequence_id));
+      g_string_append_len(result, "\"]", 2);
     }
 }
 
@@ -1061,7 +1093,35 @@ log_msg_print_tags(const LogMessage *self, GString *result)
   log_msg_tags_foreach(self, log_msg_append_tags_callback, args);
 }
 
+void
+log_msg_set_saddr(LogMessage *self, GSockAddr *saddr)
+{
+  log_msg_set_saddr_ref(self, g_sockaddr_ref(saddr));
+}
 
+void
+log_msg_set_saddr_ref(LogMessage *self, GSockAddr *saddr)
+{
+  if (log_msg_chk_flag(self, LF_STATE_OWN_SADDR))
+    g_sockaddr_unref(self->saddr);
+  self->saddr = saddr;
+  self->flags |= LF_STATE_OWN_SADDR;
+}
+
+void
+log_msg_set_daddr(LogMessage *self, GSockAddr *daddr)
+{
+  log_msg_set_daddr_ref(self, g_sockaddr_ref(daddr));
+}
+
+void
+log_msg_set_daddr_ref(LogMessage *self, GSockAddr *daddr)
+{
+  if (log_msg_chk_flag(self,  LF_STATE_OWN_DADDR))
+    g_sockaddr_unref(self->daddr);
+  self->daddr = daddr;
+  self->flags |= LF_STATE_OWN_DADDR;
+}
 
 /**
  * log_msg_init:
@@ -1072,26 +1132,26 @@ log_msg_print_tags(const LogMessage *self, GString *result)
  * first. It is used internally by the log_msg_new function.
  **/
 static void
-log_msg_init(LogMessage *self, GSockAddr *saddr)
+log_msg_init(LogMessage *self)
 {
   GTimeVal tv;
 
   /* ref is set to 1, ack is set to 0 */
   self->ack_and_ref_and_abort_and_suspended = LOGMSG_REFCACHE_REF_TO_VALUE(1);
   cached_g_current_time(&tv);
-  self->timestamps[LM_TS_RECVD].tv_sec = tv.tv_sec;
-  self->timestamps[LM_TS_RECVD].tv_usec = tv.tv_usec;
-  self->timestamps[LM_TS_RECVD].zone_offset = get_local_timezone_ofs(self->timestamps[LM_TS_RECVD].tv_sec);
+  self->timestamps[LM_TS_RECVD].ut_sec = tv.tv_sec;
+  self->timestamps[LM_TS_RECVD].ut_usec = tv.tv_usec;
+  self->timestamps[LM_TS_RECVD].ut_gmtoff = get_local_timezone_ofs(self->timestamps[LM_TS_RECVD].ut_sec);
   self->timestamps[LM_TS_STAMP] = self->timestamps[LM_TS_RECVD];
-  self->timestamps[LM_TS_PROCESSED].tv_sec = 0;
-  self->timestamps[LM_TS_PROCESSED].tv_usec = 0;
-  self->timestamps[LM_TS_PROCESSED].zone_offset = LOGSTAMP_ZONE_OFFSET_UNSET;
+  unix_time_unset(&self->timestamps[LM_TS_PROCESSED]);
 
   self->sdata = NULL;
-  self->saddr = g_sockaddr_ref(saddr);
+  self->saddr = NULL;
+  self->daddr = NULL;
 
   self->original = NULL;
   self->flags |= LF_STATE_OWN_MASK;
+  self->pri = LOG_USER | LOG_NOTICE;
 
   self->rcptid = rcptid_generate_id();
   log_msg_set_host_id(self);
@@ -1124,11 +1184,12 @@ log_msg_clear(LogMessage *self)
     }
   self->num_sdata = 0;
 
-  if (log_msg_chk_flag(self, LF_STATE_OWN_SADDR) && self->saddr)
-    {
-      g_sockaddr_unref(self->saddr);
-    }
+  if (log_msg_chk_flag(self, LF_STATE_OWN_SADDR))
+    g_sockaddr_unref(self->saddr);
   self->saddr = NULL;
+  if (log_msg_chk_flag(self, LF_STATE_OWN_DADDR))
+    g_sockaddr_unref(self->daddr);
+  self->daddr = NULL;
 
   self->flags |= LF_STATE_OWN_MASK;
 }
@@ -1262,29 +1323,18 @@ _determine_payload_size(gint length, MsgFormatOptions *parse_options)
  * log_msg_new:
  * @msg: message to parse
  * @length: length of @msg
- * @saddr: sender address
  * @flags: parse flags (LP_*)
  *
  * This function allocates, parses and returns a new LogMessage instance.
  **/
 LogMessage *
 log_msg_new(const gchar *msg, gint length,
-            GSockAddr *saddr,
             MsgFormatOptions *parse_options)
 {
   LogMessage *self = log_msg_alloc(_determine_payload_size(length, parse_options));
 
-  log_msg_init(self, saddr);
-
-  if (G_LIKELY(parse_options->format_handler))
-    {
-      msg_trace("Initial message parsing follows");
-      parse_options->format_handler->parse(parse_options, (guchar *) msg, length, self);
-    }
-  else
-    {
-      log_msg_set_value(self, LM_V_MESSAGE, "Error parsing message, format module is not loaded", -1);
-    }
+  log_msg_init(self);
+  msg_format_parse(parse_options, (guchar *) msg, length, self);
   return self;
 }
 
@@ -1293,7 +1343,7 @@ log_msg_new_empty(void)
 {
   LogMessage *self = log_msg_alloc(256);
 
-  log_msg_init(self, NULL);
+  log_msg_init(self);
   return self;
 }
 
@@ -1371,6 +1421,8 @@ log_msg_free(LogMessage *self)
     g_free(self->sdata);
   if (log_msg_chk_flag(self, LF_STATE_OWN_SADDR))
     g_sockaddr_unref(self->saddr);
+  if (log_msg_chk_flag(self, LF_STATE_OWN_DADDR))
+    g_sockaddr_unref(self->daddr);
 
   if (self->original)
     log_msg_unref(self->original);
@@ -1804,14 +1856,8 @@ log_msg_registry_foreach(GHFunc func, gpointer user_data)
   nv_registry_foreach(logmsg_registry, func, user_data);
 }
 
-void
-log_msg_global_init(void)
-{
-  log_msg_registry_init();
-}
-
-void
-log_msg_stats_global_init(void)
+static void
+log_msg_register_stats(void)
 {
   stats_lock();
   StatsClusterKey sc_key;
@@ -1828,6 +1874,18 @@ log_msg_stats_global_init(void)
   stats_register_counter(1, &sc_key, SC_TYPE_SINGLE_VALUE, &count_allocated_bytes);
   stats_unlock();
 }
+
+void
+log_msg_global_init(void)
+{
+  log_msg_registry_init();
+
+  /* NOTE: we always initialize counters as they are on stats-level(0),
+   * however we need to defer that as the stats subsystem may not be
+   * operational yet */
+  register_application_hook(AH_RUNNING, (ApplicationHookFunc) log_msg_register_stats, NULL);
+}
+
 
 const gchar *
 log_msg_get_handle_name(NVHandle handle, gssize *length)
@@ -1851,14 +1909,16 @@ log_msg_lookup_time_stamp_name(const gchar *name)
   return -1;
 }
 
-gssize log_msg_get_size(LogMessage *self)
+gssize
+log_msg_get_size(LogMessage *self)
 {
-  if(!self) return 0;
+  if (!self)
+    return 0;
 
   return
     sizeof(LogMessage) + // msg.static fields
     + self->alloc_sdata * sizeof(self->sdata[0]) +
-    sizeof(GSockAddr) + sizeof (GSockAddrFuncs) + // msg.saddr + msg.saddr.sa_func
+    g_sockaddr_len(self->saddr) + g_sockaddr_len(self->daddr) +
     ((self->num_tags) ? sizeof(self->tags[0]) * self->num_tags : 0) +
     nv_table_get_memory_consumption(self->payload); // msg.payload (nvtable)
 }

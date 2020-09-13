@@ -30,6 +30,7 @@
 #include "cfg.h"
 #include "atomic.h"
 #include "messages.h"
+#include "signal-slot-connector/signal-slot-connector.h"
 
 /* notify code values */
 #define NC_CLOSE       1
@@ -39,7 +40,6 @@
 #define NC_FILE_EOF    5
 #define NC_REOPEN_REQUIRED 6
 #define NC_FILE_DELETED 7
-#define NC_LAST_MSG_SENT 8
 
 /* indicates that the LogPipe was initialized */
 #define PIF_INITIALIZED       0x0001
@@ -225,6 +225,7 @@ struct _LogPipe
   StatsCounterItem *discarded_messages;
   const gchar *persist_name;
   gchar *plugin_name;
+  SignalSlotConnector *signal_slot_connector;
 
   gboolean (*pre_init)(LogPipe *self);
   gboolean (*init)(LogPipe *self);
@@ -232,6 +233,7 @@ struct _LogPipe
   void (*post_deinit)(LogPipe *self);
 
   const gchar *(*generate_persist_name)(const LogPipe *self);
+  GList *(*arcs)(LogPipe *self);
 
   /* clone this pipe when used in multiple locations in the processing
    * pipe-line. If it contains state, it should behave as if it was
@@ -241,6 +243,7 @@ struct _LogPipe
 
   void (*free_fn)(LogPipe *self);
   void (*notify)(LogPipe *self, gint notify_code, gpointer user_data);
+  GList *info;
 };
 
 /*
@@ -336,6 +339,7 @@ log_pipe_forward_msg(LogPipe *self, LogMessage *msg, const LogPathOptions *path_
 static inline void
 log_pipe_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options)
 {
+  LogPathOptions local_path_options;
   g_assert((s->flags & PIF_INITIALIZED) != 0);
 
   if (G_UNLIKELY(pipe_single_step_hook))
@@ -349,7 +353,7 @@ log_pipe_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options)
 
   if (G_UNLIKELY(s->flags & (PIF_HARD_FLOW_CONTROL)))
     {
-      LogPathOptions local_path_options = *path_options;
+      local_path_options = *path_options;
 
       local_path_options.flow_control_requested = 1;
       path_options = &local_path_options;
@@ -400,4 +404,11 @@ log_pipe_get_persist_name(const LogPipe *self);
 
 void log_pipe_free_method(LogPipe *s);
 
+static inline GList *
+log_pipe_get_arcs(LogPipe *s)
+{
+  return s->arcs(s);
+}
+
+void log_pipe_add_info(LogPipe *self, const gchar *info);
 #endif
