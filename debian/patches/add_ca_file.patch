@@ -1,3 +1,14 @@
+Add support for ca-file when configuring a TLS transport.
+
+Invoke SSL_CTX_load_verify_locations, thus:
+
+  SSL_CTX_load_verify_locations(ctx, path-to-ca-file, path-to-ca-dir)
+
+passing NULL for the unused parameter.
+
+The verify locations are additive so this is safe to call multiple
+times.
+
 --- a/lib/tlscontext.c
 +++ b/lib/tlscontext.c
 @@ -48,6 +48,7 @@
@@ -12,7 +23,7 @@
          goto error;
      }
  
-+  if (_is_file_accessible(self, self->ca_file) && !SSL_CTX_load_verify_locations(self->ssl_ctx, NULL, self->ca_file))
++  if (_is_file_accessible(self, self->ca_file) && !SSL_CTX_load_verify_locations(self->ssl_ctx, self->ca_file, NULL))
 +    goto error;
 +
    if (_is_file_accessible(self, self->ca_dir) && !SSL_CTX_load_verify_locations(self->ssl_ctx, NULL, self->ca_dir))

@@ -1,3 +1,9 @@
+syslog-ng (3.19.1-5pexip3) pexip; urgency=medium
+
+  * debian/patches/add_ca_file.patch: pass file using correct argument
+
+ -- John-Mark Bell <jmb@pexip.com>  Fri, 05 Feb 2021 16:23:22 +0000
+
 syslog-ng (3.19.1-5pexip2) pexip; urgency=medium
 
   * Rebuild in buster environment
