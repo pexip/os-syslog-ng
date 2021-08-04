@@ -1,3 +1,9 @@
+syslog-ng (3.19.1-5pexip4) pexip; urgency=medium
+
+  * Force removal of old config file on upgrade
+
+ -- Huw Jones <huw@pexip.com>  Wed, 04 Aug 2021 11:59:49 +0100
+
 syslog-ng (3.19.1-5pexip3) pexip; urgency=medium
 
   * debian/patches/add_ca_file.patch: pass file using correct argument

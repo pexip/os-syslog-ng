@@ -1,1 +1,2 @@
 rm_conffile /etc/logrotate.d/syslog-ng 3.8.1-10pexip3~
+rm_conffile /etc/init/syslog-ng.conf
