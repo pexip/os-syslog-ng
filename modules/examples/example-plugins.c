@@ -27,11 +27,13 @@
 
 extern CfgParser msg_generator_parser;
 
-#if SYSLOG_NG_HAVE_GETRANDOM
+#ifdef SYSLOG_NG_HAVE_GETRANDOM
 extern CfgParser threaded_random_generator_parser;
 #endif
 
 extern CfgParser threaded_diskq_source_parser;
+
+extern CfgParser http_test_slots_parser;
 
 static Plugin example_plugins[] =
 {
@@ -40,7 +42,7 @@ static Plugin example_plugins[] =
     .name = "example_msg_generator",
     .parser = &msg_generator_parser,
   },
-#if SYSLOG_NG_HAVE_GETRANDOM
+#ifdef SYSLOG_NG_HAVE_GETRANDOM
   {
     .type = LL_CONTEXT_SOURCE,
     .name = "example_random_generator",
@@ -52,6 +54,11 @@ static Plugin example_plugins[] =
     .name = "example_diskq_source",
     .parser = &threaded_diskq_source_parser,
   },
+  {
+    .type = LL_CONTEXT_INNER_DEST,
+    .name = "http_test_slots",
+    .parser = &http_test_slots_parser
+  }
 };
 
 gboolean

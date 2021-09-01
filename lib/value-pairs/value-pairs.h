@@ -30,6 +30,7 @@
 #include "value-pairs/transforms.h"
 #include "type-hinting.h"
 #include "template/templates.h"
+#include "atomic.h"
 
 typedef struct _ValuePairs ValuePairs;
 

@@ -1,9 +1,8 @@
 #!/bin/bash
 
-set -e
+. /dbld/functions.sh
 
 cd /source
-VERSION=`cat VERSION`
 SYSLOGNG_DIR=syslog-ng-${VERSION}
 SYSLOGNG_TARBALL=${SYSLOGNG_DIR}.tar.gz
 
@@ -12,7 +11,7 @@ SYSLOGNG_TARBALL=${SYSLOGNG_DIR}.tar.gz
 rm -rf /build/dist-build
 mkdir /build/dist-build
 cd /build/dist-build
-/source/configure --enable-manpages --with-docbook=/usr/share/xml/docbook/stylesheet/docbook-xsl/manpages/docbook.xsl
+/source/configure --enable-manpages
 make dist
 mv ${SYSLOGNG_TARBALL} /build
 

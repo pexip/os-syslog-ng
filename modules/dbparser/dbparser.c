@@ -45,6 +45,7 @@ struct _LogDBParser
   time_t db_file_mtime;
   gboolean db_file_reloading;
   gboolean drop_unmatched;
+  LogTemplate *program_template;
 };
 
 static void
@@ -145,7 +146,10 @@ log_db_parser_init(LogPipe *s)
       log_db_parser_reload_database(self);
     }
   if (self->db)
-    pattern_db_set_emit_func(self->db, log_db_parser_emit, self);
+    {
+      pattern_db_set_emit_func(self->db, log_db_parser_emit, self);
+      pattern_db_set_program_template(self->db, self->program_template);
+    }
   iv_validate_now();
   IV_TIMER_INIT(&self->tick);
   self->tick.cookie = self;
@@ -183,7 +187,7 @@ log_db_parser_process(LogParser *s, LogMessage **pmsg, const LogPathOptions *pat
   gboolean matched = FALSE;
 
   if (G_UNLIKELY(!self->db_file_reloading && (self->db_file_last_check == 0
-                                              || self->db_file_last_check < (*pmsg)->timestamps[LM_TS_RECVD].tv_sec - 5)))
+                                              || self->db_file_last_check < (*pmsg)->timestamps[LM_TS_RECVD].ut_sec - 5)))
     {
       /* first check if we need to reload without doing a lock, then grab
        * the lock, recheck the condition to rule out parallel database
@@ -192,9 +196,9 @@ log_db_parser_process(LogParser *s, LogMessage **pmsg, const LogPathOptions *pat
       g_static_mutex_lock(&self->lock);
 
       if (!self->db_file_reloading && (self->db_file_last_check == 0
-                                       || self->db_file_last_check < (*pmsg)->timestamps[LM_TS_RECVD].tv_sec - 5))
+                                       || self->db_file_last_check < (*pmsg)->timestamps[LM_TS_RECVD].ut_sec - 5))
         {
-          self->db_file_last_check = (*pmsg)->timestamps[LM_TS_RECVD].tv_sec;
+          self->db_file_last_check = (*pmsg)->timestamps[LM_TS_RECVD].ut_sec;
           self->db_file_reloading = TRUE;
           g_static_mutex_unlock(&self->lock);
 
@@ -257,11 +261,20 @@ log_db_parser_clone(LogPipe *s)
   return &cloned->super.super.super;
 }
 
+void
+log_db_parser_set_program_template_ref(LogParser *s, LogTemplate *program_template)
+{
+  LogDBParser *self = (LogDBParser *) s;
+  log_template_unref(self->program_template);
+  self->program_template = program_template;
+}
+
 static void
 log_db_parser_free(LogPipe *s)
 {
   LogDBParser *self = (LogDBParser *) s;
 
+  log_template_unref(self->program_template);
   g_static_mutex_free(&self->lock);
 
   if (self->db)
@@ -285,7 +298,7 @@ log_db_parser_new(GlobalConfig *cfg)
   self->super.super.process = log_db_parser_process;
   self->db_file = g_strdup(get_installation_path_for(PATH_PATTERNDB_FILE));
   g_static_mutex_init(&self->lock);
-  if (cfg_is_config_version_older(cfg, 0x0303))
+  if (cfg_is_config_version_older(cfg, VERSION_VALUE_3_3))
     {
       msg_warning_once("WARNING: The default behaviour for injecting messages in db-parser() has changed in " VERSION_3_3
                        " from internal to pass-through, use an explicit inject-mode(internal) option for old behaviour");

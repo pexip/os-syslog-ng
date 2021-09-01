@@ -36,6 +36,8 @@
 #include "ml-batched-timer.h"
 #include "str-format.h"
 #include "scratch-buffers.h"
+#include "timeutils/format.h"
+#include "timeutils/misc.h"
 
 #include <unistd.h>
 #include <assert.h>
@@ -90,7 +92,7 @@ struct _LogWriter
   gboolean work_result;
   gint pollable_state;
   LogProtoClient *proto, *pending_proto;
-  gboolean watches_running:1, suspended:1, working:1, waiting_for_throttle:1;
+  gboolean watches_running:1, suspended:1, waiting_for_throttle:1;
   gboolean pending_proto_present;
   GCond *pending_proto_cond;
   GStaticMutex pending_proto_lock;
@@ -119,7 +121,8 @@ struct _LogWriter
  *
  **/
 
-static gboolean log_writer_flush(LogWriter *self, LogWriterFlushMode flush_mode);
+static gboolean log_writer_process_out(LogWriter *self);
+static gboolean log_writer_process_in(LogWriter *self);
 static void log_writer_broken(LogWriter *self, gint notify_code);
 static void log_writer_start_watches(LogWriter *self);
 static void log_writer_stop_watches(LogWriter *self);
@@ -183,12 +186,17 @@ log_writer_set_queue(LogWriter *self, LogQueue *queue)
 }
 
 static void
-log_writer_work_perform(gpointer s)
+log_writer_work_perform(gpointer s, GIOCondition cond)
 {
   LogWriter *self = (LogWriter *) s;
 
   g_assert((self->super.flags & PIF_INITIALIZED) != 0);
-  self->work_result = log_writer_flush(self, LW_FLUSH_NORMAL);
+  g_assert((cond == G_IO_OUT) || (cond == G_IO_IN));
+
+  if (cond == G_IO_OUT)
+    self->work_result = log_writer_process_out(self);
+  else if (cond == G_IO_IN)
+    self->work_result = log_writer_process_in(self);
 }
 
 static void
@@ -237,7 +245,7 @@ log_writer_work_finished(gpointer s)
 }
 
 static void
-log_writer_io_flush_output(gpointer s)
+log_writer_io_handler(gpointer s, GIOCondition cond)
 {
   LogWriter *self = (LogWriter *) s;
 
@@ -246,7 +254,7 @@ log_writer_io_flush_output(gpointer s)
   log_writer_stop_watches(self);
   if ((self->options->options & LWO_THREADED))
     {
-      main_loop_io_worker_job_submit(&self->io_job);
+      main_loop_io_worker_job_submit(&self->io_job, cond);
     }
   else
     {
@@ -261,10 +269,22 @@ log_writer_io_flush_output(gpointer s)
 
       if (!main_loop_worker_job_quit())
         {
-          log_writer_work_perform(s);
+          log_writer_work_perform(s, cond);
           log_writer_work_finished(s);
         }
     }
+}
+
+static void
+log_writer_io_handle_out(gpointer s)
+{
+  log_writer_io_handler(s, G_IO_OUT);
+}
+
+static void
+log_writer_io_handle_in(gpointer s)
+{
+  log_writer_io_handler(s, G_IO_IN);
 }
 
 static void
@@ -315,29 +335,15 @@ log_writer_update_fd_callbacks(LogWriter *self, GIOCondition cond)
   main_loop_assert_main_thread();
   if (self->pollable_state > 0)
     {
-      if (self->flags & LW_DETECT_EOF && (cond & G_IO_IN) == 0)
-        {
-          /* if output is enabled, and we're in DETECT_EOF mode, and input is
-           * not needed by the log protocol, install the eof check callback to
-           * destroy the connection if an EOF is received. */
-
-          iv_fd_set_handler_in(&self->fd_watch, log_writer_io_check_eof);
-        }
-      else if (cond & G_IO_IN)
-        {
-          /* in case the protocol requested G_IO_IN, it means that it needs to
-           * invoke read in the flush code, so just install the flush_output
-           * handler for input */
-
-          iv_fd_set_handler_in(&self->fd_watch, log_writer_io_flush_output);
-        }
+      if (cond & G_IO_IN)
+        iv_fd_set_handler_in(&self->fd_watch, log_writer_io_handle_in);
+      else if (self->flags & LW_DETECT_EOF)
+        iv_fd_set_handler_in(&self->fd_watch, log_writer_io_check_eof);
       else
-        {
-          /* otherwise we're not interested in input */
-          iv_fd_set_handler_in(&self->fd_watch, NULL);
-        }
+        iv_fd_set_handler_in(&self->fd_watch, NULL);
+
       if (cond & G_IO_OUT)
-        iv_fd_set_handler_out(&self->fd_watch, log_writer_io_flush_output);
+        iv_fd_set_handler_out(&self->fd_watch, log_writer_io_handle_out);
       else
         iv_fd_set_handler_out(&self->fd_watch, NULL);
 
@@ -359,12 +365,19 @@ log_writer_update_fd_callbacks(LogWriter *self, GIOCondition cond)
 }
 
 static void
+log_writer_stop_suspend_timer(LogWriter *self)
+{
+  if (iv_timer_registered(&self->suspend_timer))
+    iv_timer_unregister(&self->suspend_timer);
+}
+
+static void
 log_writer_arm_suspend_timer(LogWriter *self, void (*handler)(void *), glong timeout_msec)
 {
   main_loop_assert_main_thread();
 
-  if (iv_timer_registered(&self->suspend_timer))
-    iv_timer_unregister(&self->suspend_timer);
+  log_writer_stop_suspend_timer(self);
+
   iv_validate_now();
   self->suspend_timer.handler = handler;
   self->suspend_timer.expires = iv_now;
@@ -521,8 +534,7 @@ log_writer_stop_watches(LogWriter *self)
     {
       if (iv_timer_registered(&self->reopen_timer))
         iv_timer_unregister(&self->reopen_timer);
-      if (iv_timer_registered(&self->suspend_timer))
-        iv_timer_unregister(&self->suspend_timer);
+
       if (iv_fd_registered(&self->fd_watch))
         iv_fd_unregister(&self->fd_watch);
       if (iv_task_registered(&self->immed_io_task))
@@ -532,6 +544,9 @@ log_writer_stop_watches(LogWriter *self)
 
       self->watches_running = FALSE;
     }
+
+  log_writer_stop_suspend_timer(self);
+  log_writer_stop_idle_timer(self);
 }
 
 static void
@@ -650,7 +665,7 @@ _is_message_a_repetition(LogMessage *msg, LogMessage *last)
 static gboolean
 _is_time_within_the_suppress_timeout(LogWriter *self, LogMessage *msg)
 {
-  return self->last_msg->timestamps[LM_TS_RECVD].tv_sec >= msg->timestamps[LM_TS_RECVD].tv_sec - self->options->suppress;
+  return self->last_msg->timestamps[LM_TS_RECVD].ut_sec >= msg->timestamps[LM_TS_RECVD].ut_sec - self->options->suppress;
 }
 
 /**
@@ -892,7 +907,7 @@ void
 log_writer_format_log(LogWriter *self, LogMessage *lm, GString *result)
 {
   LogTemplate *template = NULL;
-  LogStamp *stamp;
+  UnixTime *stamp;
   guint32 seq_num;
   static NVHandle meta_seqid = 0;
 
@@ -932,8 +947,8 @@ log_writer_format_log(LogWriter *self, LogMessage *lm, GString *result)
       g_string_append_c(result, '1');
       g_string_append_c(result, ' ');
 
-      log_stamp_append_format(stamp, result, TS_FMT_ISO,
-                              time_zone_info_get_offset(self->options->template_options.time_zone_info[LTZ_SEND], stamp->tv_sec),
+      append_format_unix_time(stamp, result, TS_FMT_ISO,
+                              time_zone_info_get_offset(self->options->template_options.time_zone_info[LTZ_SEND], stamp->ut_sec),
                               self->options->template_options.frac_digits);
       g_string_append_c(result, ' ');
 
@@ -1010,8 +1025,8 @@ log_writer_format_log(LogWriter *self, LogMessage *lm, GString *result)
 
           if (self->flags & LW_FORMAT_FILE)
             {
-              log_stamp_format(stamp, result, self->options->template_options.ts_format,
-                               time_zone_info_get_offset(self->options->template_options.time_zone_info[LTZ_SEND], stamp->tv_sec),
+              format_unix_time(stamp, result, self->options->template_options.ts_format,
+                               time_zone_info_get_offset(self->options->template_options.time_zone_info[LTZ_SEND], stamp->ut_sec),
                                self->options->template_options.frac_digits);
             }
           else if (self->flags & LW_FORMAT_PROTO)
@@ -1021,8 +1036,8 @@ log_writer_format_log(LogWriter *self, LogMessage *lm, GString *result)
               g_string_append_c(result, '>');
 
               /* always use BSD timestamp by default, the use can override this using a custom template */
-              log_stamp_append_format(stamp, result, TS_FMT_BSD,
-                                      time_zone_info_get_offset(self->options->template_options.time_zone_info[LTZ_SEND], stamp->tv_sec),
+              append_format_unix_time(stamp, result, TS_FMT_BSD,
+                                      time_zone_info_get_offset(self->options->template_options.time_zone_info[LTZ_SEND], stamp->ut_sec),
                                       self->options->template_options.frac_digits);
             }
           g_string_append_c(result, ' ');
@@ -1077,7 +1092,6 @@ static void
 log_writer_broken(LogWriter *self, gint notify_code)
 {
   log_writer_stop_watches(self);
-  log_writer_stop_idle_timer(self);
   log_pipe_notify(self->control, notify_code, self);
 }
 
@@ -1113,7 +1127,7 @@ log_writer_flush_finalize(LogWriter *self)
   return FALSE;
 }
 
-gboolean
+static gboolean
 log_writer_write_message(LogWriter *self, LogMessage *msg, LogPathOptions *path_options, gboolean *write_error)
 {
   gboolean consumed = FALSE;
@@ -1221,7 +1235,7 @@ log_writer_process_handshake(LogWriter *self)
  * LW_FLUSH_FORCE     - flush the buffer immediately please
  *
  */
-gboolean
+static gboolean
 log_writer_flush(LogWriter *self, LogWriterFlushMode flush_mode)
 {
   gboolean write_error = FALSE;
@@ -1266,6 +1280,27 @@ log_writer_flush(LogWriter *self, LogWriterFlushMode flush_mode)
   return log_writer_flush_finalize(self);
 }
 
+static gboolean
+log_writer_forced_flush(LogWriter *self)
+{
+  return log_writer_flush(self, LW_FLUSH_FORCE);
+}
+
+static gboolean
+log_writer_process_in(LogWriter *self)
+{
+  if (!self->proto)
+    return FALSE;
+
+  return (log_proto_client_process_in(self->proto) == LPS_SUCCESS);
+}
+
+static gboolean
+log_writer_process_out(LogWriter *self)
+{
+  return log_writer_flush(self, LW_FLUSH_NORMAL);
+}
+
 static void
 log_writer_reopen_timeout(void *cookie)
 {
@@ -1279,6 +1314,7 @@ log_writer_idle_timeout(void *cookie)
 {
   LogWriter *self = (LogWriter *) cookie;
 
+  g_assert(!self->io_job.working);
   msg_notice("Destination timeout has elapsed, closing connection",
              evt_tag_int("fd", log_proto_client_get_fd(self->proto)));
 
@@ -1293,7 +1329,7 @@ log_writer_init_watches(LogWriter *self)
 
   IV_TASK_INIT(&self->immed_io_task);
   self->immed_io_task.cookie = self;
-  self->immed_io_task.handler = log_writer_io_flush_output;
+  self->immed_io_task.handler = log_writer_io_handle_out;
 
   IV_TIMER_INIT(&self->suspend_timer);
   self->suspend_timer.cookie = self;
@@ -1324,7 +1360,7 @@ log_writer_init_watches(LogWriter *self)
 
   main_loop_io_worker_job_init(&self->io_job);
   self->io_job.user_data = self;
-  self->io_job.work = (void (*)(void *)) log_writer_work_perform;
+  self->io_job.work = (void (*)(void *, GIOCondition)) log_writer_work_perform;
   self->io_job.completion = (void (*)(void *)) log_writer_work_finished;
   self->io_job.engage = (void (*)(void *)) log_pipe_ref;
   self->io_job.release = (void (*)(void *)) log_pipe_unref;
@@ -1380,6 +1416,8 @@ log_writer_init(LogPipe *s)
       log_writer_postpone_mark_timer(self);
     }
 
+  log_pipe_add_info(s, "writer");
+
   return TRUE;
 }
 
@@ -1410,13 +1448,12 @@ log_writer_deinit(LogPipe *s)
   main_loop_assert_main_thread();
 
   log_queue_reset_parallel_push(self->queue);
-  log_writer_flush(self, LW_FLUSH_FORCE);
+  log_writer_forced_flush(self);
   /* FIXME: by the time we arrive here, it must be guaranteed that no
    * _queue() call is running in a different thread, otherwise we'd need
    * some kind of locking. */
 
   log_writer_stop_watches(self);
-  log_writer_stop_idle_timer(self);
 
   iv_event_unregister(&self->queue_filled);
 
@@ -1491,6 +1528,7 @@ log_writer_set_proto(LogWriter *self, LogProtoClient *proto)
       flow_control_funcs.user_data = self;
 
       log_proto_client_set_client_flow_control(self->proto, &flow_control_funcs);
+      log_proto_client_set_options(self->proto, &self->options->proto_options.super);
     }
 }
 
@@ -1505,7 +1543,7 @@ log_writer_set_pending_proto(LogWriter *self, LogProtoClient *proto, gboolean pr
  * the destination LogProtoClient instance. It needs to be ran in the main
  * thread as it reregisters the watches associated with the main
  * thread. */
-void
+static void
 log_writer_reopen_deferred(gpointer s)
 {
   gpointer *args = (gpointer *) s;
@@ -1535,7 +1573,6 @@ log_writer_reopen_deferred(gpointer s)
     }
 
   log_writer_stop_watches(self);
-  log_writer_stop_idle_timer(self);
 
   if (self->partial_write)
     {

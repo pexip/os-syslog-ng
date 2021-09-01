@@ -26,7 +26,7 @@
 #define MSG_FORMAT_H_INCLUDED
 
 #include "syslog-ng.h"
-#include "timeutils.h"
+#include "timeutils/zoneinfo.h"
 #include "logproto/logproto-server.h"
 
 #include <regex.h>
@@ -56,6 +56,7 @@ enum
   /* for the date part of a message, only skip it, don't fully parse - recommended for keep_timestamp(no) */
   LP_NO_PARSE_DATE = 0x0400,
   LP_STORE_RAW_MESSAGE = 0x0800,
+  LP_GUESS_TIMEZONE = 0x1000,
 };
 
 typedef struct _MsgFormatHandler MsgFormatHandler;
@@ -83,6 +84,8 @@ struct _MsgFormatHandler
                                      const LogProtoServerOptions *proto_options);
   void (*parse)(const MsgFormatOptions *options, const guchar *data, gsize length, LogMessage *msg);
 };
+
+void msg_format_parse(MsgFormatOptions *options, const guchar *data, gsize length, LogMessage *msg);
 
 void msg_format_options_defaults(MsgFormatOptions *options);
 void msg_format_options_init(MsgFormatOptions *parse_options, GlobalConfig *cfg);

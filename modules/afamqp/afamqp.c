@@ -28,7 +28,9 @@
 #include "logmsg/nvtable.h"
 #include "logqueue.h"
 #include "scratch-buffers.h"
-#include "logthrdestdrv.h"
+#include "logthrdest/logthrdestdrv.h"
+#include "timeutils/misc.h"
+#include "compat/amqp-compat.h"
 
 #include <amqp.h>
 #include <amqp_framing.h>
@@ -52,11 +54,15 @@ typedef struct
   gchar *host;
   gint port;
 
+  gint auth_method;
   gchar *user;
   gchar *password;
 
   gint max_channel;
   gint frame_size;
+  gint offered_heartbeat;
+  gint heartbeat;
+  struct iv_timer heartbeat_timer;
 
   LogTemplateOptions template_options;
   ValuePairs *vp;
@@ -77,6 +83,21 @@ typedef struct
 /*
  * Configuration
  */
+
+gboolean
+afamqp_dd_set_auth_method(LogDriver *d, const gchar *auth_method)
+{
+  AMQPDestDriver *self = (AMQPDestDriver *) d;
+
+  if (strcasecmp(auth_method, "plain") == 0)
+    self->auth_method = AMQP_SASL_METHOD_PLAIN;
+  else if (strcasecmp(auth_method, "external") == 0)
+    self->auth_method = AMQP_SASL_METHOD_EXTERNAL;
+  else
+    return FALSE;
+
+  return TRUE;
+}
 
 void
 afamqp_dd_set_user(LogDriver *d, const gchar *user)
@@ -245,6 +266,15 @@ afamqp_dd_set_frame_size(LogDriver *d, gint frame_size)
   self->frame_size = frame_size;
 }
 
+void
+afamqp_dd_set_offered_heartbeat(LogDriver *d, gint offered_heartbeat)
+{
+  AMQPDestDriver *self = (AMQPDestDriver *) d;
+
+  self->offered_heartbeat = offered_heartbeat;
+}
+
+
 /*
  * Utilities
  */
@@ -303,6 +333,8 @@ afamqp_dd_disconnect(LogThreadedDestDriver *s)
     {
       _amqp_connection_disconnect(self);
     }
+  if (iv_timer_registered(&self->heartbeat_timer))
+    iv_timer_unregister(&self->heartbeat_timer);
 }
 
 static gboolean
@@ -417,8 +449,7 @@ afamqp_dd_socket_init(AMQPDestDriver *self)
 
             }
         }
-      amqp_ssl_socket_set_verify_peer(self->sockfd, self->peer_verify);
-      amqp_ssl_socket_set_verify_hostname(self->sockfd, self->peer_verify);
+      amqp_compat_set_verify(self->sockfd, self->peer_verify);
     }
   else
     self->sockfd = amqp_tcp_socket_new(self->conn);
@@ -427,12 +458,49 @@ afamqp_dd_socket_init(AMQPDestDriver *self)
 }
 
 static gboolean
-afamqp_dd_connect(AMQPDestDriver *self, gboolean reconnect)
+afamqp_dd_login(AMQPDestDriver *self)
+{
+  const gchar *identity;
+  amqp_rpc_reply_t ret;
+
+  switch (self->auth_method)
+    {
+    case AMQP_SASL_METHOD_PLAIN:
+      ret = amqp_login(self->conn, self->vhost, self->max_channel, self->frame_size,
+                       self->offered_heartbeat, self->auth_method, self->user, self->password);
+      break;
+
+
+    case AMQP_SASL_METHOD_EXTERNAL:
+      // The identity is generally not needed for external authentication, but must be set to
+      // something non-empty otherwise the API call will fail, so just default it to something
+      // meaningless
+      identity = (self->user && self->user[0] != '\0') ? self->user : ".";
+      ret = amqp_login(self->conn, self->vhost, self->max_channel, self->frame_size,
+                       self->offered_heartbeat, self->auth_method, identity);
+      break;
+
+    default:
+      g_assert_not_reached();
+      return FALSE;
+    }
+
+  self->heartbeat = amqp_get_heartbeat(self->conn);
+
+  msg_debug("Amqp heartbeat negotiation",
+            evt_tag_str("driver", self->super.super.super.id),
+            evt_tag_int("heartbeat", self->heartbeat));
+
+  return afamqp_is_ok(self, "Error during AMQP login", ret);
+}
+
+static gboolean
+afamqp_dd_connect(AMQPDestDriver *self)
 {
   int sockfd_ret;
   amqp_rpc_reply_t ret;
 
-  if (reconnect && self->conn)
+  if (self->conn)
     {
       ret = amqp_get_rpc_reply(self->conn);
       if (ret.reply_type == AMQP_RESPONSE_NORMAL)
@@ -463,9 +531,7 @@ afamqp_dd_connect(AMQPDestDriver *self, gboolean reconnect)
       goto exception_amqp_dd_connect_failed_init;
     }
 
-  ret = amqp_login(self->conn, self->vhost, self->max_channel, self->frame_size, 0,
-                   AMQP_SASL_METHOD_PLAIN, self->user, self->password);
-  if (!afamqp_is_ok(self, "Error during AMQP login", ret))
+  if (!afamqp_dd_login(self))
     {
       goto exception_amqp_dd_connect_failed_init;
     }
@@ -491,6 +557,13 @@ afamqp_dd_connect(AMQPDestDriver *self, gboolean reconnect)
 
   msg_debug ("Connecting to AMQP succeeded",
              evt_tag_str("driver", self->super.super.super.id));
+
+  if (self->heartbeat)
+    {
+      iv_validate_now();
+      self->heartbeat_timer.expires = iv_now;
+      iv_timer_register(&self->heartbeat_timer);
+    }
 
   return TRUE;
 
@@ -596,26 +669,43 @@ afamqp_worker_publish(AMQPDestDriver *self, LogMessage *msg)
   return success;
 }
 
-static worker_insert_result_t
+static LogThreadedResult
 afamqp_worker_insert(LogThreadedDestDriver *s, LogMessage *msg)
 {
   AMQPDestDriver *self = (AMQPDestDriver *)s;
 
-  if (!afamqp_dd_connect(self, TRUE))
-    return WORKER_INSERT_RESULT_NOT_CONNECTED;
+  if (!afamqp_dd_connect(self))
+    return LTR_NOT_CONNECTED;
 
   if (!afamqp_worker_publish (self, msg))
-    return WORKER_INSERT_RESULT_ERROR;
+    return LTR_ERROR;
 
-  return WORKER_INSERT_RESULT_SUCCESS;
+  return LTR_SUCCESS;
 }
 
 static void
-afamqp_worker_thread_init(LogThreadedDestDriver *d)
+_handle_heartbeat(void *cookie)
 {
-  AMQPDestDriver *self = (AMQPDestDriver *)d;
+  AMQPDestDriver *self = (AMQPDestDriver *) cookie;
 
-  afamqp_dd_connect(self, FALSE);
+  amqp_frame_t frame;
+  struct timeval tv = {0, 0};
+  gint status;
+  while (AMQP_STATUS_OK == (status = amqp_simple_wait_frame_noblock(self->conn, &frame, &tv)));
+  if (AMQP_STATUS_TIMEOUT != status)
+    {
+      msg_error("Unexpected error while reading from amqp server",
+                log_pipe_location_tag((LogPipe *)self),
+                evt_tag_str("error", amqp_error_string2(status)));
+      log_threaded_dest_worker_disconnect(&self->super.worker.instance);
+      return;
+    }
+
+  iv_validate_now();
+  self->heartbeat_timer.expires = iv_now;
+  timespec_add_msec(&self->heartbeat_timer.expires, self->heartbeat*1000);
+
+  iv_timer_register(&self->heartbeat_timer);
 }
 
 /*
@@ -631,7 +721,7 @@ afamqp_dd_init(LogPipe *s)
   if (!log_threaded_dest_driver_init_method(s))
     return FALSE;
 
-  if (!self->user || !self->password)
+  if (self->auth_method == AMQP_SASL_METHOD_PLAIN && (!self->user || !self->password))
     {
       msg_error("Error initializing AMQP destination: username and password MUST be set!",
                 evt_tag_str("driver", self->super.super.super.id));
@@ -678,7 +768,7 @@ static gboolean
 afamqp_dd_worker_connect(LogThreadedDestDriver *s)
 {
   AMQPDestDriver *self = (AMQPDestDriver *)s;
-  return afamqp_dd_connect(self, FALSE);
+  return afamqp_dd_connect(self);
 }
 
 /*
@@ -696,17 +786,17 @@ afamqp_dd_new(GlobalConfig *cfg)
   self->super.super.super.super.free_fn = afamqp_dd_free;
   self->super.super.super.super.generate_persist_name = afamqp_dd_format_persist_name;
 
-  self->super.worker.thread_init = afamqp_worker_thread_init;
   self->super.worker.connect = afamqp_dd_worker_connect;
   self->super.worker.disconnect = afamqp_dd_disconnect;
   self->super.worker.insert = afamqp_worker_insert;
 
   self->super.format_stats_instance = afamqp_dd_format_stats_instance;
-  self->super.stats_source = SCS_AMQP;
+  self->super.stats_source = stats_register_type("amqp");
 
   self->routing_key_template = log_template_new(cfg, NULL);
 
   LogDriver *driver = &self->super.super.super;
+  afamqp_dd_set_auth_method(driver, "plain");
   afamqp_dd_set_vhost(driver, "/");
   afamqp_dd_set_host(driver, "127.0.0.1");
   afamqp_dd_set_port(driver, 5672);
@@ -724,6 +814,9 @@ afamqp_dd_new(GlobalConfig *cfg)
   log_template_options_defaults(&self->template_options);
   afamqp_dd_set_value_pairs(&self->super.super.super, value_pairs_new_default(cfg));
   afamqp_dd_set_peer_verify((LogDriver *) self, TRUE);
+  IV_TIMER_INIT(&self->heartbeat_timer);
+  self->heartbeat_timer.cookie = self;
+  self->heartbeat_timer.handler = _handle_heartbeat;
 
   return (LogDriver *) self;
 }

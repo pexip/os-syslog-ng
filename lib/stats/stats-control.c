@@ -21,37 +21,66 @@
  * COPYING for details.
  *
  */
+
 #include "stats/stats-control.h"
 #include "stats/stats-csv.h"
 #include "stats/stats-counter.h"
+#include "stats/stats-registry.h"
+#include "stats/stats-query-commands.h"
 #include "control/control-commands.h"
+#include "control/control-server.h"
 
-static GString *
-control_connection_send_stats(GString *command, gpointer user_data)
+static void
+_reset_counter(StatsCluster *sc, gint type, StatsCounterItem *counter, gpointer user_data)
+{
+  stats_counter_set(counter, 0);
+}
+
+static inline void
+_reset_counter_if_needed(StatsCluster *sc, gint type, StatsCounterItem *counter, gpointer user_data)
+{
+  if (stats_counter_read_only(counter))
+    return;
+
+  switch (type)
+    {
+    case SC_TYPE_QUEUED:
+    case SC_TYPE_MEMORY_USAGE:
+      return;
+    default:
+      _reset_counter(sc, type, counter, user_data);
+    }
+}
+
+static void
+_reset_counters(void)
+{
+  stats_lock();
+  stats_foreach_counter(_reset_counter_if_needed, NULL);
+  stats_unlock();
+}
+
+static void
+control_connection_send_stats(ControlConnection *cc, GString *command, gpointer user_data)
 {
   gchar *stats = stats_generate_csv();
   GString *result = g_string_new(stats);
   g_free(stats);
-  return result;
+  control_connection_send_reply(cc, result);
 }
 
-static GString *
-control_connection_reset_stats(GString *command, gpointer user_data)
+static void
+control_connection_reset_stats(ControlConnection *cc, GString *command, gpointer user_data)
 {
-  GString *result = g_string_new("The statistics of syslog-ng have been reset to 0.");
-  stats_reset_counters();
-  return result;
+  GString *result = g_string_new("OK The statistics of syslog-ng have been reset to 0.");
+  _reset_counters();
+  control_connection_send_reply(cc, result);
 }
 
 void
 stats_register_control_commands(void)
 {
-  control_register_command("STATS", NULL, control_connection_send_stats, NULL);
-  control_register_command("RESET_STATS", NULL, control_connection_reset_stats, NULL);
-}
-
-void
-stats_unregister_control_commands(void)
-{
-  reset_control_command_list();
+  control_register_command("STATS", control_connection_send_stats, NULL);
+  control_register_command("RESET_STATS", control_connection_reset_stats, NULL);
+  control_register_command("QUERY", process_query_command, NULL);
 }

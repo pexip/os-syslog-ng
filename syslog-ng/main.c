@@ -33,12 +33,12 @@
 #include "logqueue.h"
 #include "gprocess.h"
 #include "control/control.h"
-#include "timeutils.h"
 #include "logsource.h"
 #include "mainloop.h"
 #include "plugin.h"
 #include "reloc.h"
 #include "resolved-configurable-paths.h"
+#include "timeutils/cache.h"
 
 #include <sys/types.h>
 #include <stdio.h>
@@ -137,7 +137,7 @@ version(void)
       installer_version = g_strdup(SYSLOG_NG_VERSION);
     }
   printf(SYSLOG_NG_PACKAGE_NAME " " SYSLOG_NG_COMBINED_VERSION "\n"
-         "Config version: " VERSION_CURRENT_VER_ONLY "\n"
+         "Config version: " VERSION_STR_LAST_SEMANTIC_CHANGE "\n"
          "Installer-Version: %s\n"
          "Revision: " SYSLOG_NG_SOURCE_REVISION "\n",
          installer_version);
@@ -213,6 +213,7 @@ main(int argc, char *argv[])
 
   z_mem_trace_init("syslog-ng.trace");
 
+  g_process_set_name("syslog-ng");
   g_process_set_argv_space(argc, (gchar **) argv);
 
   resolved_configurable_paths_init(&resolvedConfigurablePaths);
@@ -225,6 +226,7 @@ main(int argc, char *argv[])
   if (!g_option_context_parse(ctx, &argc, &argv, &error))
     {
       fprintf(stderr, "Error parsing command line arguments: %s\n", error ? error->message : "Invalid arguments");
+      g_error_free(error);
       g_option_context_free(ctx);
       return 1;
     }
@@ -260,9 +262,9 @@ main(int argc, char *argv[])
       debug_flag = TRUE;
     }
 
-  if (debug_flag)
+  if (debug_flag && !log_stderr)
     {
-      log_stderr = TRUE;
+      g_process_message("The -d/--debug option no longer implies -e/--stderr, if you want to redirect internal() source to stderr please also include -e/--stderr option");
     }
 
   gboolean exit_before_main_loop_run = main_loop_options.syntax_only || main_loop_options.preprocess_into;
@@ -270,17 +272,18 @@ main(int argc, char *argv[])
     {
       g_process_set_mode(G_PM_FOREGROUND);
     }
-  g_process_set_name("syslog-ng");
 
   /* in this case we switch users early while retaining a limited set of
    * credentials in order to initialize/reinitialize the configuration.
    */
   g_process_start();
   app_startup();
+
+  timeutils_setup_timezone_hook();
+
   main_loop_options.server_mode = ((SYSLOG_NG_ENABLE_FORCED_SERVER_MODE) == 1 ? TRUE : FALSE);
   main_loop_init(main_loop, &main_loop_options);
   rc = main_loop_read_and_init_config(main_loop);
-  app_finish_app_startup_after_cfg_init();
 
   if (rc)
     {
@@ -298,7 +301,7 @@ main(int argc, char *argv[])
   /* we are running as a non-root user from this point */
 
   app_post_daemonized();
-  app_post_config_loaded();
+  app_config_changed();
 
   if(startup_debug_flag)
     {

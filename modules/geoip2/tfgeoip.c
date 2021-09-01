@@ -44,7 +44,11 @@ tf_maxminddb_init(TFMaxMindDBState *state)
   state->database = g_new0(MMDB_s, 1);
 
   if (!mmdb_open_database(state->database_path, state->database))
-    return FALSE;
+    {
+      g_free(state->database);
+      state->database = NULL;
+      return FALSE;
+    }
 
   return TRUE;
 }
@@ -74,7 +78,10 @@ tf_geoip_maxminddb_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *p
     }
   g_option_context_free(ctx);
 
-  if (!state->database_path || argc != 2)
+  if (!state->database_path)
+    state->database_path = mmdb_default_database();
+
+  if (!state->database_path || argc < 1)
     {
       g_set_error(error, LOG_TEMPLATE_ERROR, LOG_TEMPLATE_ERROR_COMPILE,
                   "geoip2: format must be: $(geoip2 --database <db.mmdb> [ --field path.child ] ${HOST})\n");
@@ -104,7 +111,9 @@ tf_geoip_maxminddb_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *p
 
 error:
   g_free(state->database_path);
+  state->database_path = NULL;
   g_strfreev(state->entry_path);
+  state->entry_path = NULL;
   g_free(field);
   return FALSE;
 
@@ -121,22 +130,31 @@ tf_geoip_maxminddb_call(LogTemplateFunction *self, gpointer s, const LogTemplate
 
   if (!mmdb_result.found_entry)
     {
-      mmdb_problem_to_error(_gai_error, mmdb_error, "tflookup");
-      return;
+      goto error;
     }
 
   MMDB_entry_data_s entry_data;
   mmdb_error = MMDB_aget_value(&mmdb_result.entry, &entry_data, (const char *const* const)state->entry_path);
   if (mmdb_error != MMDB_SUCCESS)
     {
-      mmdb_problem_to_error(0, mmdb_error, "tfget_value");
-      return;
+      goto error;
     }
 
   if (entry_data.has_data)
     append_mmdb_entry_data_to_gstring(result, &entry_data);
 
   return;
+
+error:
+  if (_gai_error != 0)
+    msg_error("$(geoip2): getaddrinfo failed",
+              evt_tag_str("ip", args->argv[0]->str),
+              evt_tag_str("gai_error", gai_strerror(_gai_error)));
+
+  if (mmdb_error != MMDB_SUCCESS )
+    msg_error("$(geoip2): maxminddb error",
+              evt_tag_str("ip", args->argv[0]->str),
+              evt_tag_str("error", MMDB_strerror(mmdb_error)));
 }
 
 static void

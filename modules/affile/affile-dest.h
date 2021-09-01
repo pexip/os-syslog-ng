@@ -48,7 +48,6 @@ typedef struct _AFFileDestDriver
 
   gint overwrite_if_older;
   gboolean use_time_recvd;
-  gint time_reap;
 } AFFileDestDriver;
 
 AFFileDestDriver *affile_dd_new_instance(gchar *filename, GlobalConfig *cfg);
@@ -58,6 +57,7 @@ void affile_dd_set_create_dirs(LogDriver *s, gboolean create_dirs);
 void affile_dd_set_fsync(LogDriver *s, gboolean enable);
 void affile_dd_set_overwrite_if_older(LogDriver *s, gint overwrite_if_older);
 void affile_dd_set_local_time_zone(LogDriver *s, const gchar *local_time_zone);
+void affile_dd_set_time_reap(LogDriver *s, gint time_reap);
 void affile_dd_global_init(void);
 
 #endif

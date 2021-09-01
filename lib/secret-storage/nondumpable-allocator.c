@@ -50,16 +50,16 @@ nondumpable_setlogger(NonDumpableLogger _debug, NonDumpableLogger _fatal)
 
 #define logger_debug(summary, fmt, ...) \
 { \
- char reason[32] = { 0 }; \
- snprintf(reason, sizeof(reason), fmt, __VA_ARGS__); \
- logger_debug_fn(summary, reason);   \
+ gchar *reason = g_strdup_printf(fmt, __VA_ARGS__); \
+ logger_debug_fn(summary, reason); \
+ g_free(reason); \
 }
 
 #define logger_fatal(summary, fmt, ...) \
 { \
- char reason[32] = { 0 }; \
- snprintf(reason, sizeof(reason), fmt, __VA_ARGS__); \
- logger_fatal_fn(summary, reason);   \
+ gchar *reason = g_strdup_printf(fmt, __VA_ARGS__); \
+ logger_fatal_fn(summary, reason); \
+ g_free(reason); \
 }
 
 typedef struct
@@ -94,11 +94,11 @@ static gpointer
 _mmap(gsize len)
 {
   gpointer area = mmap(NULL, len, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
-  if (!area)
+  if (area == MAP_FAILED)
     {
       logger_fatal("secret storage: cannot mmap buffer",
                    "len: %"G_GSIZE_FORMAT", errno: %d\n", len, errno);
-      return NULL;
+      return MAP_FAILED;
     }
 
   if (!_exclude_memory_from_core_dump(area, len))
@@ -115,7 +115,7 @@ _mmap(gsize len)
   return area;
 err_munmap:
   munmap(area, len);
-  return NULL;
+  return MAP_FAILED;
 }
 
 static gsize
@@ -132,7 +132,7 @@ nondumpable_buffer_alloc(gsize len)
   gsize alloc_size = round_to_nearest(minimum_size, pagesize);
 
   Allocation *buffer = _mmap(alloc_size);
-  if (!buffer)
+  if (buffer == MAP_FAILED)
     return NULL;
 
   buffer->alloc_size = alloc_size;

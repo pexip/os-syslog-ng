@@ -43,6 +43,13 @@ dbld/build/
 dbld/release/
 dbld/install/
 dbld/rules.conf
+dbld/extra-files/
 debian/build-tree/
 debian/*.log
 debian/autoreconf.*
+build/
+tags
+TAGS
+GPATH
+GRTAGS
+GTAGS

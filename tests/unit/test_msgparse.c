@@ -29,9 +29,11 @@
 #include "serialize.h"
 #include "apphook.h"
 #include "gsockaddr.h"
-#include "timeutils.h"
+#include "timeutils/cache.h"
+#include "timeutils/misc.h"
 #include "cfg.h"
 #include "plugin.h"
+#include "fake-time.h"
 
 #include <time.h>
 #include <string.h>
@@ -47,6 +49,8 @@ struct sdata_pair
 struct sdata_pair ignore_sdata_pairs[] = { { NULL, NULL } };
 struct sdata_pair empty_sdata_pairs[] = { { NULL, NULL } };
 
+MsgFormatOptions parse_options;
+
 static unsigned long
 _absolute_value(signed long diff)
 {
@@ -56,39 +60,17 @@ _absolute_value(signed long diff)
     return diff;
 }
 
-static time_t
-_get_epoch_with_bsd_year(int ts_month, int d, int h, int m, int s)
-{
-  struct tm *tm;
-  time_t t;
-
-  time(&t);
-  tm = localtime(&t);
-
-  tm->tm_year = determine_year_for_month(ts_month, tm);
-
-  tm->tm_hour = h;
-  tm->tm_min = m;
-  tm->tm_sec = s;
-  tm->tm_mday = d;
-  tm->tm_mon = ts_month;
-  tm->tm_isdst = -1;
-  return mktime(tm);
-}
-
-
 static void
 _simulate_log_readers_effect_on_timezone_offset(LogMessage *message)
 {
-  if (message->timestamps[LM_TS_STAMP].zone_offset == -1)
-    message->timestamps[LM_TS_STAMP].zone_offset = get_local_timezone_ofs(message->timestamps[LM_TS_STAMP].tv_sec);
+  if (message->timestamps[LM_TS_STAMP].ut_gmtoff == -1)
+    message->timestamps[LM_TS_STAMP].ut_gmtoff = get_local_timezone_ofs(message->timestamps[LM_TS_STAMP].ut_sec);
 }
 
 static LogMessage *
 _parse_log_message(gchar *raw_message_str, gint parse_flags, gchar *bad_hostname_re)
 {
   LogMessage *message;
-  GSockAddr *addr = g_sockaddr_inet_new("10.10.10.10", 1010);
   regex_t bad_hostname;
 
   parse_options.flags = parse_flags;
@@ -101,7 +83,7 @@ _parse_log_message(gchar *raw_message_str, gint parse_flags, gchar *bad_hostname
       parse_options.bad_hostname = &bad_hostname;
     }
 
-  message = log_msg_new(raw_message_str, strlen(raw_message_str), addr, &parse_options);
+  message = log_msg_new(raw_message_str, strlen(raw_message_str), &parse_options);
 
   if (bad_hostname_re)
     {
@@ -149,7 +131,9 @@ setup(void)
   app_startup();
   setenv("TZ", "MET-1METDST", TRUE);
   tzset();
-  init_and_load_syslogformat_module();
+  init_parse_options_and_load_syslogformat(&parse_options);
+  /* Fri Feb  8 09:37:49 CET 2019 */
+  fake_time(1549615069);
 }
 
 void
@@ -165,7 +149,7 @@ void
 test_log_messages_can_be_parsed(struct msgparse_params *param)
 {
   LogMessage *parsed_message;
-  LogStamp *parsed_timestamp;
+  UnixTime *parsed_timestamp;
   time_t now;
   GString *sd_str;
 
@@ -175,19 +159,19 @@ test_log_messages_can_be_parsed(struct msgparse_params *param)
   if (param->expected_stamp_sec)
     {
       if (param->expected_stamp_sec != 1)
-        cr_assert_eq(parsed_timestamp->tv_sec, param->expected_stamp_sec,
+        cr_assert_eq(parsed_timestamp->ut_sec, param->expected_stamp_sec,
                      "Unexpected timestamp, value=%ld, expected=%ld, msg=%s",
-                     parsed_timestamp->tv_sec, param->expected_stamp_sec, param->msg);
+                     parsed_timestamp->ut_sec, param->expected_stamp_sec, param->msg);
 
-      cr_assert_eq(parsed_timestamp->tv_usec, param->expected_stamp_usec, "Unexpected microseconds");
-      cr_assert_eq(parsed_timestamp->zone_offset, param->expected_stamp_ofs, "Unexpected timezone offset");
+      cr_assert_eq(parsed_timestamp->ut_usec, param->expected_stamp_usec, "Unexpected microseconds");
+      cr_assert_eq(parsed_timestamp->ut_gmtoff, param->expected_stamp_ofs, "Unexpected timezone offset");
     }
   else
     {
-      time(&now);
-      cr_assert(_absolute_value(parsed_timestamp->tv_sec - now) <= 5,
+      now = cached_g_current_time_sec();
+      cr_assert(_absolute_value(parsed_timestamp->ut_sec - now) <= 5,
                 "Expected parsed message timestamp to be set to now; now='%d', timestamp->tv_sec='%d'",
-                (gint)now, (gint)parsed_timestamp->tv_sec);
+                (gint)now, (gint)parsed_timestamp->ut_sec);
     }
 
   cr_assert_eq(parsed_message->pri, param->expected_pri, "Unexpected message priority");
@@ -282,7 +266,7 @@ Test(msgparse, test_timestamp)
     {
       "<15>Jan  1 01:00:00 bzorp openvpn[2499]: PTHREAD support initialized", LP_EXPECT_HOSTNAME, NULL,
       15,             // pri
-      _get_epoch_with_bsd_year(0, 1, 1, 0, 0), 0, 3600,        // timestamp (sec/usec/zone)
+      1546300800, 0, 3600,        // timestamp (sec/usec/zone)
       "bzorp",        // host
       "openvpn",        // openvpn
       "PTHREAD support initialized", // msg
@@ -291,8 +275,7 @@ Test(msgparse, test_timestamp)
     {
       "<15>Jan 10 01:00:00 bzorp openvpn[2499]: PTHREAD support initialized", LP_EXPECT_HOSTNAME, NULL,
       15,             // pri
-      _get_epoch_with_bsd_year(0, 10, 1, 0, 0)
-      , 0, 3600,        // timestamp (sec/usec/zone)
+      1547078400, 0, 3600,        // timestamp (sec/usec/zone)
       "bzorp",        // host
       "openvpn",        // openvpn
       "PTHREAD support initialized", // msg
@@ -301,7 +284,7 @@ Test(msgparse, test_timestamp)
     {
       "<13>Jan  1 14:40:51 alma korte: message", 0, NULL,
       13,
-      _get_epoch_with_bsd_year(0, 1, 14, 40, 51), 0, 3600,
+      1546350051, 0, 3600,
       "",
       "alma",
       "korte: message",
@@ -392,6 +375,15 @@ Test(msgparse, test_timestamp)
       "<7>2006-10-29T02:00:00.156+02:00 bzorp openvpn[2499]: PTHREAD support initialized", LP_EXPECT_HOSTNAME, NULL,
       7,             // pri
       1162080000, 156000, 7200,    // timestamp (sec/usec/zone)
+      "bzorp",        // host
+      "openvpn",        // openvpn
+      "PTHREAD support initialized", // msg
+      NULL, "2499", NULL, ignore_sdata_pairs
+    },
+    {
+      "<7>1 - bzorp openvpn 2499 - - PTHREAD support initialized", LP_SYSLOG_PROTOCOL, NULL,
+      7,             // pri
+      1549615069, 123000, 3600,    // timestamp (sec/usec/zone)
       "bzorp",        // host
       "openvpn",        // openvpn
       "PTHREAD support initialized", // msg
@@ -558,8 +550,7 @@ Test(msgparse, test_timestamp_others)
     {
       "<190>NOV 22 00:00:33 192.168.33.8-1 CMDLOGGER[165319912]: cmd_logger_api.c(83) 13518 %% CLI:192.168.32.100:root:User  logged in", LP_EXPECT_HOSTNAME, NULL,
       190,
-      _get_epoch_with_bsd_year(10, 22, 0, 0, 33)
-      , 0, 3600,
+      1574377233, 0, 3600,
       "192.168.33.8-1",
       "CMDLOGGER",
       "cmd_logger_api.c(83) 13518 %% CLI:192.168.32.100:root:User  logged in",
@@ -631,7 +622,7 @@ Test(msgparse, test_expected_sd_pairs_1)
     { ".SDATA.exampleSDID@0.eventSource", "Application"},
     { ".SDATA.exampleSDID@0.eventID", "1011"},
     { ".SDATA.examplePriority@0.class", "high"},
-    {  NULL , NULL}
+    {  NULL, NULL }
   };
 
   struct msgparse_params params[] =
@@ -707,7 +698,7 @@ Test(msgparse, test_expected_sd_pairs_2)
   struct sdata_pair expected_sd_pairs_test_2[] =
   {
     { ".SDATA.exampleSDID@0.iut", "3"},
-    {  NULL , NULL}
+    {  NULL, NULL }
   };
 
   struct msgparse_params params[] =
@@ -746,7 +737,7 @@ Test(msgparse, test_expected_sd_pairs_3)
     { ".SDATA.origin.ip", "exchange.macartney.esbjerg"},
     { ".SDATA.meta.sequenceId", "191732"},
     { ".SDATA.EventData@18372.4.Data", "MSEXCHANGEOWAAPPPOOL.CONFIG\" -W \"\" -M 1 -AP \"MSEXCHANGEOWAAPPPOOL5244fileserver.macartney.esbjerg CDG 1 7 7 1 0 1 1 7 1 mail.macartney.esbjerg CDG 1 7 7 1 0 1 1 7 1 maindc.macartney.esbjerg CD- 1 6 6 0 0 1 1 6 1 " },
-    {  NULL , NULL}
+    {  NULL, NULL }
   };
 
   struct msgparse_params params[] =
@@ -775,7 +766,7 @@ Test(msgparse, test_expected_sd_pairs_4)
   struct sdata_pair expected_sd_pairs_test_4[] =
   {
     { ".SDATA.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.i", "ok_32"},
-    {  NULL , NULL}
+    {  NULL, NULL }
   };
 
   struct msgparse_params params[] =
@@ -815,13 +806,13 @@ Test(msgparse, test_expected_sd_pairs_too_long)
   struct sdata_pair expected_sd_pairs_test_5[] =
   {
     { ".SDATA.a.i", "]\"\\"},
-    {  NULL , NULL}
+    {  NULL, NULL }
   };
 
   struct sdata_pair expected_sd_pairs_test_5b[] =
   {
     { ".SDATA.a.i", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-    {  NULL , NULL}
+    {  NULL, NULL }
   };
 
   struct msgparse_params params[] =
@@ -877,7 +868,7 @@ Test(msgparse, test_unescaped_too_long_message_parts)
   struct sdata_pair expected_sd_pairs_test_6[] =
   {
     { ".SDATA.a.i", "ok"},
-    {  NULL , NULL}
+    {  NULL, NULL }
   };
 
   struct msgparse_params params[] =
@@ -976,7 +967,7 @@ Test(msgparse, test_expected_sd_pairs_tz_known)
 {
   struct sdata_pair expected_sd_pairs_test_7a[] =
   {
-    {  NULL , NULL}
+    {  NULL, NULL }
   };
 
   struct msgparse_params params[] =
@@ -1006,7 +997,7 @@ Test(msgparse, test_expected_sd_pairs_enterprise_id)
   struct sdata_pair expected_sd_pairs_test_8[] =
   {
     { ".SDATA.origin.enterpriseId", "1.3.6.1.4.1"},
-    {  NULL , NULL}
+    {  NULL, NULL }
   };
 
   struct msgparse_params params[] =
@@ -1035,7 +1026,7 @@ Test(msgparse, test_expected_sd_pairs_without_sd_param)
   struct sdata_pair expected_sd_pairs_test_9[] =
   {
     { ".SDATA.origin.enterpriseId", "1.3.6.1.4.1"},
-    {  NULL , NULL}
+    {  NULL, NULL }
   };
 
   struct msgparse_params params[] =
@@ -1069,7 +1060,7 @@ Test(msgparse, test_ip_in_host)
     {
       .msg = "<0>Jan 10 01:00:00 1.2.3.4 prg0",
       .parse_flags = LP_EXPECT_HOSTNAME,
-      .expected_stamp_sec =  _get_epoch_with_bsd_year(0, 10, 1, 0, 0),
+      .expected_stamp_sec =  1547078400,
       .expected_stamp_ofs = 3600,
       .expected_program = "prg0",
       .expected_host = "1.2.3.4"
@@ -1078,7 +1069,7 @@ Test(msgparse, test_ip_in_host)
     {
       .msg = "<0>Jan 10 01:00:00 0000:BABA:BA00:DAB:BABA:BABA:BABA:BAB0 prg0",
       .parse_flags = LP_EXPECT_HOSTNAME,
-      .expected_stamp_sec =  _get_epoch_with_bsd_year(0, 10, 1, 0, 0),
+      .expected_stamp_sec =  1547078400,
       .expected_stamp_ofs = 3600,
       .expected_program = "prg0",
       .expected_host = "0000:BABA:BA00:DAB:BABA:BABA:BABA:BAB0"
@@ -1087,7 +1078,7 @@ Test(msgparse, test_ip_in_host)
     {
       .msg = "<0>Jan 10 01:00:00 0001:BABA:BA00:DAB::BAB0 prg0",
       .parse_flags = LP_EXPECT_HOSTNAME,
-      .expected_stamp_sec =  _get_epoch_with_bsd_year(0, 10, 1, 0, 0),
+      .expected_stamp_sec = 1547078400,
       .expected_stamp_ofs = 3600,
       .expected_program = "prg0",
       .expected_host = "0001:BABA:BA00:DAB::BAB0"
@@ -1095,7 +1086,7 @@ Test(msgparse, test_ip_in_host)
     {
       .msg = "<0>Jan 10 01:00:00 0002:: prg0: msgtxt",
       .parse_flags = LP_EXPECT_HOSTNAME,
-      .expected_stamp_sec =  _get_epoch_with_bsd_year(0, 10, 1, 0, 0),
+      .expected_stamp_sec =  1547078400,
       .expected_stamp_ofs = 3600,
       .expected_program = "prg0",
       .expected_host = "0002::",
@@ -1105,7 +1096,7 @@ Test(msgparse, test_ip_in_host)
     {
       .msg = "<0>Jan 10 01:00:00 prg0", // No ip no msg
       .parse_flags = LP_EXPECT_HOSTNAME,
-      .expected_stamp_sec =  _get_epoch_with_bsd_year(0, 10, 1, 0, 0),
+      .expected_stamp_sec =  1547078400,
       .expected_stamp_ofs = 3600,
       .expected_program = "prg0",
       .expected_host = ""
@@ -1113,7 +1104,7 @@ Test(msgparse, test_ip_in_host)
     (struct msgparse_params)
     {
       .msg = "<0>Jan 10 01:00:00 prg0: msgtxt", // program name with message, no ip
-      .expected_stamp_sec =  _get_epoch_with_bsd_year(0, 10, 1, 0, 0),
+      .expected_stamp_sec =  1547078400,
       .expected_stamp_ofs = 3600,
       .expected_program = "prg0",
       .expected_msg = "msgtxt"
@@ -1122,7 +1113,7 @@ Test(msgparse, test_ip_in_host)
     {
       .msg = "<0>91: *Oct 07 03:10:04: mydevice.com %CRYPTO-4-RECVD_PKT_INV_SPI: decaps: rec'd IPSEC packet has invalid spi for destaddr=150.1.1.1, prot=50, spi=0x72662541(1919296833), srcaddr=150.3.1.3",
       .parse_flags = LP_EXPECT_HOSTNAME,
-      .expected_stamp_sec = _get_epoch_with_bsd_year(9, 7, 3, 10, 4),
+      .expected_stamp_sec = 1570410604,
       .expected_stamp_ofs = 7200,
       .expected_program = "%CRYPTO-4-RECVD_PKT_INV_SPI",
       .expected_host = "mydevice.com",

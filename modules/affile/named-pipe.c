@@ -97,6 +97,14 @@ _construct_dst_proto(FileOpener *self, LogTransport *transport, LogProtoClientOp
   return log_proto_text_client_new(transport, proto_options);
 }
 
+void
+pipe_sd_set_create_dirs(LogDriver *s, gboolean create_dirs)
+{
+  AFFileSourceDriver *self = (AFFileSourceDriver *) s;
+
+  self->file_opener_options.create_dirs = create_dirs;
+}
+
 FileOpener *
 file_opener_for_named_pipes_new(void)
 {
@@ -115,9 +123,9 @@ pipe_sd_new(gchar *filename, GlobalConfig *cfg)
 {
   AFFileSourceDriver *self = affile_sd_new_instance(filename, cfg);
 
-  self->file_reader_options.reader_options.super.stats_source = SCS_PIPE;
+  self->file_reader_options.reader_options.super.stats_source = stats_register_type("pipe");
 
-  if (cfg_is_config_version_older(cfg, 0x0302))
+  if (cfg_is_config_version_older(cfg, VERSION_VALUE_3_2))
     {
       msg_warning_once("WARNING: the expected message format is being changed for pipe() to improve "
                        "syslogd compatibity with " VERSION_3_2 ". If you are using custom "
@@ -139,7 +147,7 @@ pipe_dd_new(gchar *filename, GlobalConfig *cfg)
 {
   AFFileDestDriver *self = affile_dd_new_instance(filename, cfg);
 
-  self->writer_options.stats_source = SCS_PIPE;
+  self->writer_options.stats_source = stats_register_type("pipe");
   self->file_opener = file_opener_for_named_pipes_new();
   return &self->super.super;
 }

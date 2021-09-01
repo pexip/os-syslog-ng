@@ -28,6 +28,8 @@
 
 #include <fcntl.h>
 
+#include <string.h>
+
 #define DEFAULT_SD_OPEN_FLAGS (O_RDONLY | O_NOCTTY | O_NONBLOCK | O_LARGEFILE)
 
 static DirectoryMonitor *_add_directory_monitor(WildcardSourceDriver *self, const gchar *directory);
@@ -53,26 +55,17 @@ _check_required_options(WildcardSourceDriver *self)
 }
 
 static void
-_deleted_cb(FileReader *self, gpointer user_data)
-{
-  log_pipe_deinit(&self->super);
-  file_reader_remove_persist_state(self);
-}
-
-static void
-_stop_file_reader(FileReader *reader, gpointer user_data)
-{
-  msg_debug("Stop following file, because of deleted and eof",
-            evt_tag_str("filename", reader->filename->str));
-  file_reader_stop_follow_file(reader);
-}
-
-static void
 _remove_file_reader(FileReader *reader, gpointer user_data)
 {
   WildcardSourceDriver *self = (WildcardSourceDriver *) user_data;
 
-  _deleted_cb(reader, user_data);
+  msg_debug("Stop following file, because of deleted and eof",
+            evt_tag_str("filename", reader->filename->str));
+  file_reader_stop_follow_file(reader);
+
+  log_pipe_deinit(&reader->super);
+  file_reader_remove_persist_state(reader);
+
   log_pipe_ref(&reader->super);
   if (g_hash_table_remove(self->file_readers, reader->filename->str))
     {
@@ -83,6 +76,7 @@ _remove_file_reader(FileReader *reader, gpointer user_data)
       msg_error("Can't remove the file reader", evt_tag_str("Filename", reader->filename->str));
     }
   log_pipe_unref(&reader->super);
+
   gchar *full_path = pending_file_list_pop(self->waiting_list);
   if (full_path)
     {
@@ -113,8 +107,7 @@ _create_file_reader(WildcardSourceDriver *self, const gchar *full_path)
                                     &self->super,
                                     cfg);
 
-  wildcard_file_reader_on_deleted_file_finished(reader, _remove_file_reader, self);
-  wildcard_file_reader_on_deleted_file_eof(reader, _stop_file_reader, self);
+  wildcard_file_reader_on_deleted_file_eof(reader, _remove_file_reader, self);
 
   log_pipe_append(&reader->super.super, &self->super.super.super);
   if (!log_pipe_init(&reader->super.super))
@@ -254,7 +247,7 @@ _ensure_minimum_window_size(WildcardSourceDriver *self, GlobalConfig *cfg)
     }
 }
 
-static void
+static gboolean
 _init_reader_options(WildcardSourceDriver *self, GlobalConfig *cfg)
 {
   if (!self->window_size_initialized)
@@ -262,9 +255,9 @@ _init_reader_options(WildcardSourceDriver *self, GlobalConfig *cfg)
       self->file_reader_options.reader_options.super.init_window_size /= self->max_files;
       _ensure_minimum_window_size(self, cfg);
       self->window_size_initialized = TRUE;
-
     }
-  file_reader_options_init(&self->file_reader_options, cfg, self->super.super.group);
+
+  return file_reader_options_init(&self->file_reader_options, cfg, self->super.super.group);
 }
 
 static void
@@ -331,7 +324,9 @@ _init(LogPipe *s)
       return FALSE;
     }
 
-  _init_reader_options(self, cfg);
+  if (!_init_reader_options(self, cfg))
+    return FALSE;
+
   _init_opener_options(self, cfg);
 
   if (!_add_directory_monitor(self, self->base_dir))
@@ -445,13 +440,34 @@ wildcard_sd_new(GlobalConfig *cfg)
   file_opener_options_defaults_dont_change_permissions(&self->file_opener_options);
   self->file_reader_options.follow_freq = 1000;
   self->file_reader_options.reader_options.super.init_window_size = cfg->min_iw_size_per_reader * DEFAULT_MAX_FILES;
-  self->file_reader_options.reader_options.super.stats_source = SCS_FILE;
+  self->file_reader_options.reader_options.super.stats_source = stats_register_type("file");
   self->file_reader_options.restore_state = TRUE;
 
   self->max_files = DEFAULT_MAX_FILES;
   self->file_opener = file_opener_for_regular_source_files_new();
 
   self->waiting_list = pending_file_list_new();
+
+  return &self->super.super;
+}
+
+gboolean
+affile_is_legacy_wildcard_source(const gchar *filename)
+{
+  return strchr(filename, '*') != NULL || strchr(filename, '?') != NULL;
+}
+
+LogDriver *
+wildcard_sd_legacy_new(const gchar *filename, GlobalConfig *cfg)
+{
+  msg_warning_once("WARNING: Using wildcard characters in the file() source is deprecated, use wildcard-file() instead. "
+                   "The legacy wildcard file() source can only monitor up to " G_STRINGIFY(DEFAULT_MAX_FILES) " files, "
+                   "use wildcard-file(max-files()) to change this limit");
+
+  WildcardSourceDriver *self = (WildcardSourceDriver *) wildcard_sd_new(cfg);
+
+  self->base_dir = g_path_get_dirname(filename);
+  self->filename_pattern = g_path_get_basename(filename);
 
   return &self->super.super;
 }

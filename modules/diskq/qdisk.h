@@ -40,8 +40,8 @@
 typedef struct
 {
   gint64 ofs;
-  gint32 len;
-  gint32 count;
+  guint32 len;
+  guint32 count;
 }
 QDiskQueuePosition;
 
@@ -54,10 +54,10 @@ gint64 qdisk_get_empty_space(QDisk *self);
 gboolean qdisk_push_tail(QDisk *self, GString *record);
 gboolean qdisk_pop_head(QDisk *self, GString *record);
 gboolean qdisk_start(QDisk *self, const gchar *filename, GQueue *qout, GQueue *qbacklog, GQueue *qoverflow);
-void qdisk_init(QDisk *self, DiskQueueOptions *options, const gchar *file_id);
-void qdisk_deinit(QDisk *self);
+void qdisk_init_instance(QDisk *self, DiskQueueOptions *options, const gchar *file_id);
+void qdisk_stop(QDisk *self);
 void qdisk_reset_file_if_possible(QDisk *self);
-gboolean qdisk_initialized(QDisk *self);
+gboolean qdisk_started(QDisk *self);
 void qdisk_free(QDisk *self);
 
 gboolean qdisk_save_state(QDisk *self, GQueue *qout, GQueue *qbacklog, GQueue *qoverflow);
@@ -65,7 +65,7 @@ gboolean qdisk_save_state(QDisk *self, GQueue *qout, GQueue *qbacklog, GQueue *q
 DiskQueueOptions *qdisk_get_options(QDisk *self);
 gint64 qdisk_get_length(QDisk *self);
 void qdisk_set_length(QDisk *self, gint64 new_value);
-gint64 qdisk_get_size(QDisk *self);
+gint64 qdisk_get_maximum_size(QDisk *self);
 gint64 qdisk_get_writer_head(QDisk *self);
 gint64 qdisk_get_reader_head(QDisk *self);
 void qdisk_set_reader_head(QDisk *self, gint64 new_value);
@@ -79,7 +79,6 @@ gint qdisk_get_memory_size(QDisk *self);
 gboolean qdisk_is_read_only(QDisk *self);
 const gchar *qdisk_get_filename(QDisk *self);
 
-gssize qdisk_read_from_backlog(QDisk *self, gpointer buffer, gsize bytes_to_read);
 gssize qdisk_read(QDisk *self, gpointer buffer, gsize bytes_to_read, gint64 position);
 guint64 qdisk_skip_record(QDisk *self, guint64 position);
 

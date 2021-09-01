@@ -8,7 +8,7 @@
     <refmeta>
       <refentrytitle>syslog-ng</refentrytitle>
       <manvolnum>8</manvolnum>
-      <refmiscinfo class="version">3.19</refmiscinfo>
+      <refmiscinfo class="version">3.28</refmiscinfo>
       <refmiscinfo class="source"/>
     </refmeta>
     <refnamediv>
@@ -95,20 +95,6 @@
         </varlistentry>
         <varlistentry>
           <term>
-            <command>--default-modules</command>
-            <indexterm type="parameter">
-              <primary>--default-modules</primary>
-            </indexterm>
-            <indexterm type="parameter">
-              <primary>default-modules</primary>
-            </indexterm>
-          </term>
-          <listitem>
-            <para>A comma-separated list of the modules that are loaded automatically. Modules not loaded automatically can be loaded by including the <parameter>@module &lt;modulename&gt;</parameter> statement in the  configuration file. The following modules are loaded by default: . Available only in  and later.</para>
-          </listitem>
-        </varlistentry>
-        <varlistentry>
-          <term>
             <command>--enable-core</command>
             <indexterm type="parameter">
               <primary>--enable-core</primary>
@@ -174,7 +160,7 @@
             </indexterm>
           </term>
           <listitem>
-            <para>Display the list and description of the available modules. Note that not all of these modules are loaded automatically, only the ones specified in the <command>--default-modules</command> option. Available only in   and later.</para>
+            <para>Display the list and description of the available modules. Available only in   and later.</para>
           </listitem>
         </varlistentry>
         <varlistentry>
@@ -284,7 +270,7 @@
                         <indexterm type="parameter"><primary>version</primary></indexterm>
                     </term>
           <listitem>
-            <para>Display version number and compilation information, and also the list and short description of the available modules. For detailed description of the available modules, see the <command>--module-registry</command> option. Note that not all of these modules are loaded automatically, only the ones specified in the <command>--default-modules</command> option.</para>
+            <para>Display version number and compilation information, and also the list and short description of the available modules. For detailed description of the available modules, see the <command>--module-registry</command> option.</para>
           </listitem>
         </varlistentry>
         <varlistentry>
@@ -298,7 +284,7 @@
             </indexterm>
           </term>
           <listitem>
-            <para>Sets the number of worker threads  can use, including the main  thread. Note that certain operations in  can use threads that are not limited by this option. This setting has effect only when  is running in multithreaded mode. Available only in   and later. See <command>The  3.19 Administrator Guide</command> for details.</para>
+            <para>Sets the number of worker threads  can use, including the main  thread. Note that certain operations in  can use threads that are not limited by this option. This setting has effect only when  is running in multithreaded mode. Available only in   and later. See <command>The  3.28 Administrator Guide</command> for details.</para>
           </listitem>
         </varlistentry>
       </variablelist>
@@ -318,7 +304,7 @@
         <link linkend="syslog-ng.conf.5"><command>syslog-ng.conf</command>(5)</link>
       </para>
       <note version="5.0">
-        <para>For the detailed documentation of  see <link xmlns:ns1="http://www.w3.org/1999/xlink" ns1:href="https://www.balabit.com/documents/syslog-ng-ose-latest-guides/en/syslog-ng-ose-guide-admin/html/index.html"><command>The  3.19 Administrator Guide</command></link></para>
+        <para>For the detailed documentation of  see <link xmlns:ns1="http://www.w3.org/1999/xlink" ns1:href="https://www.balabit.com/documents/syslog-ng-ose-latest-guides/en/syslog-ng-ose-guide-admin/html/index.html"><command>The  3.28 Administrator Guide</command></link></para>
         <para>If you experience any problems or need help with syslog-ng, visit the <link xmlns:ns1="http://www.w3.org/1999/xlink" ns1:href="https://lists.balabit.hu/mailman/listinfo/syslog-ng"><command>syslog-ng mailing list</command></link>.</para>
         <para>For news and notifications about of syslog-ng, visit the <link xmlns:ns1="http://www.w3.org/1999/xlink" ns1:href="https://syslog-ng.org/blogs/"><command>syslog-ng blogs</command></link>.</para>
       </note>

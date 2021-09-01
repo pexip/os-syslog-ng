@@ -83,20 +83,6 @@ g_sockaddr_new(struct sockaddr *sa, int salen)
   return addr;
 }
 
-GSockAddr *
-g_sockaddr_new_from_peer_fd(gint fd)
-{
-  GSockAddr *result = NULL;
-  struct sockaddr_storage addr;
-  socklen_t len =  sizeof(addr);
-
-  if (getpeername(fd, (struct sockaddr *)&addr, &len) == 0)
-    {
-      result = g_sockaddr_new((struct sockaddr *)&addr, len);
-    }
-  return result;
-}
-
 /**
  * g_sockaddr_format:
  * @a        instance pointer of a GSockAddr
@@ -184,8 +170,6 @@ g_sockaddr_ref(GSockAddr *a)
     g_atomic_counter_inc(&a->refcnt);
   return a;
 }
-
-static gsize g_sockaddr_len(GSockAddr *);
 
 /*+
 
@@ -459,15 +443,21 @@ g_sockaddr_inet6_check(GSockAddr *a)
 GSockAddr *
 g_sockaddr_inet6_new(const gchar *ip, guint16 port)
 {
-  GSockAddrInet6 *addr = g_slice_new0(GSockAddrInet6);
+  GSockAddrInet6 *addr = NULL;
+  struct in6_addr sin6_addr;
 
-  g_atomic_counter_set(&addr->refcnt, 1);
-  addr->flags = 0;
-  addr->salen = sizeof(struct sockaddr_in6);
-  addr->sin6.sin6_family = AF_INET6;
-  inet_pton(AF_INET6, ip, &addr->sin6.sin6_addr);
-  addr->sin6.sin6_port = htons(port);
-  addr->sa_funcs = &inet6_sockaddr_funcs;
+  if (inet_pton(AF_INET6, ip, &sin6_addr))
+    {
+      addr = g_slice_new0(GSockAddrInet6);
+
+      g_atomic_counter_set(&addr->refcnt, 1);
+      addr->flags = 0;
+      addr->salen = sizeof(struct sockaddr_in6);
+      addr->sin6.sin6_family = AF_INET6;
+      addr->sin6.sin6_addr = sin6_addr;
+      addr->sin6.sin6_port = htons(port);
+      addr->sa_funcs = &inet6_sockaddr_funcs;
+    }
 
   return (GSockAddr *) addr;
 }
@@ -500,6 +490,17 @@ g_sockaddr_inet6_new2(struct sockaddr_in6 *sin6)
 }
 
 #endif
+
+GSockAddr *
+g_sockaddr_inet_or_inet6_new(const gchar *name, guint16 port)
+{
+  GSockAddr *addr = g_sockaddr_inet_new(name, port);
+#if SYSLOG_NG_ENABLE_IPV6
+  if (!addr)
+    addr = g_sockaddr_inet6_new(name, port);
+#endif
+  return addr;
+}
 
 /* AF_UNIX socket address */
 
@@ -650,10 +651,13 @@ g_sockaddr_unix_format(GSockAddr *addr, gchar *text, gulong n, gint format)
   return text;
 }
 
-static gsize
+gsize
 g_sockaddr_len(GSockAddr *a)
 {
   gsize len;
+
+  if (!a)
+    return 0;
 
   if (a->sa_funcs == &inet_sockaddr_funcs)
     len = sizeof(GSockAddrInet);

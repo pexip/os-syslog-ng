@@ -235,8 +235,7 @@ afprogram_sd_init(LogPipe *s)
       proto = log_proto_text_server_new(transport, &self->reader_options.proto_options.super);
 
       self->reader = log_reader_new(s->cfg);
-      log_reader_reopen(self->reader, proto,
-                        poll_fd_events_new(fd));
+      log_reader_open(self->reader, proto, poll_fd_events_new(fd));
       log_reader_set_options(self->reader,
                              s,
                              &self->reader_options,
@@ -315,7 +314,7 @@ afprogram_sd_new(gchar *cmdline, GlobalConfig *cfg)
   log_reader_options_defaults(&self->reader_options);
   self->reader_options.parse_options.flags |= LP_LOCAL;
   self->reader_options.super.stats_level = STATS_LEVEL0;
-  self->reader_options.super.stats_source = SCS_PROGRAM;
+  self->reader_options.super.stats_source = stats_register_type("program");
   return &self->super.super;
 }
 
@@ -590,7 +589,7 @@ afprogram_dd_new(gchar *cmdline, GlobalConfig *cfg)
   afprogram_set_inherit_environment(&self->process_info, TRUE);
   log_writer_options_defaults(&self->writer_options);
   self->writer_options.stats_level = STATS_LEVEL0;
-  self->writer_options.stats_source = SCS_PROGRAM;
+  self->writer_options.stats_source = stats_register_type("program");
   return &self->super.super;
 }
 

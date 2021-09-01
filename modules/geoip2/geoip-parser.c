@@ -52,20 +52,6 @@ geoip_parser_set_database_path(LogParser *s, const gchar *database_path)
   self->database_path = g_strdup(database_path);
 }
 
-void
-mmdb_problem_to_error(const int _gai_error, const int _mmdb_error, gchar *where)
-{
-  if (0 != _gai_error)
-    msg_error("Error from call to getaddrinfo",
-              evt_tag_str("gai_error", gai_strerror(_gai_error)),
-              evt_tag_str("where", where));
-
-  if (MMDB_SUCCESS != _mmdb_error)
-    msg_error("maxminddb_error",
-              evt_tag_str("error", MMDB_strerror(_mmdb_error)),
-              evt_tag_str("where", where));
-}
-
 static gboolean
 _mmdb_load_entry_data_list(GeoIPParser *self, const gchar *input, MMDB_entry_data_list_s **entry_data_list)
 {
@@ -75,7 +61,18 @@ _mmdb_load_entry_data_list(GeoIPParser *self, const gchar *input, MMDB_entry_dat
 
   if (!result.found_entry)
     {
-      mmdb_problem_to_error(_gai_error, mmdb_error, "lookup");
+      if (_gai_error != 0)
+        msg_error("geoip2(): getaddrinfo failed",
+                  evt_tag_str("gai_error", gai_strerror(_gai_error)),
+                  evt_tag_str("ip", input),
+                  log_pipe_location_tag(&self->super.super));
+
+      if (mmdb_error != MMDB_SUCCESS )
+        msg_error("geoip2(): maxminddb error",
+                  evt_tag_str("error", MMDB_strerror(mmdb_error)),
+                  evt_tag_str("ip", input),
+                  log_pipe_location_tag(&self->super.super));
+
       return FALSE;
     }
 
@@ -151,7 +148,8 @@ maxminddb_parser_free(LogPipe *s)
 static void
 remove_trailing_dot(gchar *str)
 {
-  g_assert(strlen(str));
+  if (!strlen(str))
+    return;
   if (str[strlen(str)-1] == '.')
     str[strlen(str)-1] = 0;
 }
@@ -160,6 +158,15 @@ static gboolean
 maxminddb_parser_init(LogPipe *s)
 {
   GeoIPParser *self = (GeoIPParser *) s;
+
+  if (!self->super.template)
+    {
+      msg_error("geoip2(): template is a mandatory parameter", log_pipe_location_tag(s));
+      return FALSE;
+    }
+
+  if (!self->database_path)
+    self->database_path = mmdb_default_database();
 
   if (!self->database_path)
     return FALSE;

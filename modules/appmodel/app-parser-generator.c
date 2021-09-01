@@ -114,13 +114,13 @@ _generate_application(Application *app, Application *base_app, gpointer user_dat
   if (_is_application_excluded(self, app))
     return;
 
-  g_string_append_printf(self->block, "\n#Start Application %s\n",app->name);
+  g_string_append_printf(self->block, "\n#Start Application %s\n", app->name);
   g_string_append(self->block, "channel {\n");
   _generate_filter(self, _get_filter_expr(app, base_app));
   _generate_parser(self, _get_parser_expr(app, base_app));
   _generate_action(self, app);
   g_string_append(self->block, "};\n");
-  g_string_append_printf(self->block, "\n#End Application %s\n",app->name);
+  g_string_append_printf(self->block, "\n#End Application %s\n", app->name);
 
 }
 
@@ -132,6 +132,12 @@ _generate_applications(AppParserGenerator *self, AppModelContext *appmodel)
 
 
 static void
+_generate_empty_frame(AppParserGenerator *self)
+{
+  g_string_append(self->block, "\nchannel { filter { tags('.app.doesnotexist'); }; flags(final); };");
+}
+
+static void
 _generate_framing(AppParserGenerator *self, AppModelContext *appmodel)
 {
   g_string_append(self->block,
@@ -139,16 +145,11 @@ _generate_framing(AppParserGenerator *self, AppModelContext *appmodel)
                   "    junction {\n");
 
   _generate_applications(self, appmodel);
-
+  _generate_empty_frame(self);
   g_string_append(self->block, "    };\n");
   g_string_append(self->block, "}");
 }
 
-static void
-_generate_empty_frame(AppParserGenerator *self)
-{
-  g_string_append(self->block, "\nchannel {}");
-}
 
 static gboolean
 _parse_auto_parse_arg(AppParserGenerator *self, CfgArgs *args, const gchar *reference)
@@ -212,12 +213,13 @@ _parse_arguments(AppParserGenerator *self, CfgArgs *args, const gchar *reference
 }
 
 static gboolean
-_generate(CfgBlockGenerator *s, GlobalConfig *cfg, CfgArgs *args, GString *result, const gchar *reference)
+_generate(CfgBlockGenerator *s, GlobalConfig *cfg, gpointer args, GString *result, const gchar *reference)
 {
   AppParserGenerator *self = (AppParserGenerator *) s;
   AppModelContext *appmodel = appmodel_get_context(cfg);
+  CfgArgs *cfgargs = (CfgArgs *)args;
 
-  if (!_parse_arguments(self, args, reference))
+  if (!_parse_arguments(self, cfgargs, reference))
     return FALSE;
 
   self->block = result;

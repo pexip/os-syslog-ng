@@ -35,9 +35,6 @@
 #include <time.h>
 
 #include "afmongodb-private.h"
-#if SYSLOG_NG_ENABLE_LEGACY_MONGODB_OPTIONS
-#include "afmongodb-legacy-uri.h"
-#endif
 
 #define DEFAULT_URI \
       "mongodb://127.0.0.1:27017/syslog"\
@@ -183,10 +180,11 @@ _connect(MongoDBDestDriver *self, gboolean reconnect)
 
   bson_t reply;
   bson_error_t error;
+  bson_t *cmd = BCON_NEW("serverStatus", "1");
   const mongoc_read_prefs_t *read_prefs = mongoc_collection_get_read_prefs(self->coll_obj);
-  gboolean ok = mongoc_client_get_server_status(self->client, (mongoc_read_prefs_t *)read_prefs,
-                                                &reply, &error);
+  gboolean ok = mongoc_client_command_simple(self->client, self->const_db ? : "", cmd, read_prefs, &reply, &error);
   bson_destroy(&reply);
+  bson_destroy(cmd);
   if (!ok)
     {
       msg_error("Error connecting to MongoDB",
@@ -360,7 +358,7 @@ _vp_process_value(const gchar *name, const gchar *prefix, TypeHint type,
   return FALSE;
 }
 
-static worker_insert_result_t
+static LogThreadedResult
 _worker_insert(LogThreadedDestDriver *s, LogMessage *msg)
 {
   MongoDBDestDriver *self = (MongoDBDestDriver *)s;
@@ -368,7 +366,7 @@ _worker_insert(LogThreadedDestDriver *s, LogMessage *msg)
   gboolean drop_silently = self->template_options.on_error & ON_ERROR_SILENT;
 
   if (!_connect(self, TRUE))
-    return WORKER_INSERT_RESULT_NOT_CONNECTED;
+    return LTR_NOT_CONNECTED;
 
   bson_reinit(self->bson);
 
@@ -390,7 +388,7 @@ _worker_insert(LogThreadedDestDriver *s, LogMessage *msg)
                                         LTZ_SEND, &self->template_options),
                     evt_tag_str("driver", self->super.super.super.id));
         }
-      return WORKER_INSERT_RESULT_DROP;
+      return LTR_DROP;
     }
 
   msg_debug("Outgoing message to MongoDB destination",
@@ -409,7 +407,7 @@ _worker_insert(LogThreadedDestDriver *s, LogMessage *msg)
                     evt_tag_int("time_reopen", self->super.time_reopen),
                     evt_tag_str("reason", error.message),
                     evt_tag_str("driver", self->super.super.super.id));
-          return WORKER_INSERT_RESULT_NOT_CONNECTED;
+          return LTR_NOT_CONNECTED;
         }
       else
         {
@@ -417,22 +415,17 @@ _worker_insert(LogThreadedDestDriver *s, LogMessage *msg)
                     evt_tag_int("time_reopen", self->super.time_reopen),
                     evt_tag_str("reason", error.message),
                     evt_tag_str("driver", self->super.super.super.id));
-          return WORKER_INSERT_RESULT_ERROR;
+          return LTR_ERROR;
         }
     }
 
-  return WORKER_INSERT_RESULT_SUCCESS;
+  return LTR_SUCCESS;
 }
 
 gboolean
 afmongodb_dd_private_uri_init(LogDriver *d)
 {
   MongoDBDestDriver *self = (MongoDBDestDriver *)d;
-
-#if SYSLOG_NG_ENABLE_LEGACY_MONGODB_OPTIONS
-  if (!afmongodb_dd_create_uri_from_legacy(self))
-    return FALSE;
-#endif
 
   if (!self->uri_str)
     self->uri_str = g_string_new(DEFAULT_URI);
@@ -538,9 +531,7 @@ _free(LogPipe *d)
       self->uri_str = NULL;
     }
   g_free(self->coll);
-#if SYSLOG_NG_ENABLE_LEGACY_MONGODB_OPTIONS
-  afmongodb_dd_free_legacy(self);
-#endif
+
   value_pairs_unref(self->vp);
 
   if (self->uri_obj)
@@ -574,11 +565,8 @@ afmongodb_dd_new(GlobalConfig *cfg)
   self->super.worker.disconnect = _worker_disconnect;
   self->super.worker.insert = _worker_insert;
   self->super.format_stats_instance = _format_stats_instance;
-  self->super.stats_source = SCS_MONGODB;
+  self->super.stats_source = stats_register_type("mongodb");
 
-#if SYSLOG_NG_ENABLE_LEGACY_MONGODB_OPTIONS
-  afmongodb_dd_init_legacy(self);
-#endif
   afmongodb_dd_set_collection(&self->super.super.super, "messages");
 
   log_template_options_defaults(&self->template_options);

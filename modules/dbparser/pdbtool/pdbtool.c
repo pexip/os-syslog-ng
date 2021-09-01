@@ -44,6 +44,8 @@
 #include "crypto.h"
 #include "compat/openssl_support.h"
 #include "scratch-buffers.h"
+#include "timeutils/cache.h"
+#include "mainloop.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -79,6 +81,7 @@ static const gchar **colors = empty_colors;
 
 static const gchar *patterndb_file = PATH_PATTERNDB_FILE;
 static gboolean color_out = FALSE;
+static gboolean sort = FALSE;
 
 typedef struct _PdbToolMergeState
 {
@@ -213,6 +216,8 @@ error:
   if (parse_ctx)
     g_markup_parse_context_free(parse_ctx);
 
+  g_error_free(error);
+
   return success;
 }
 
@@ -223,33 +228,27 @@ static gboolean merge_recursive = FALSE;
 static gboolean
 pdbtool_merge_dir(const gchar *dir, gboolean recursive, GString *merged)
 {
-  GDir *pdb_dir;
-  gboolean ok = TRUE;
+  GPtrArray *filenames;
   GError *error = NULL;
-  const gchar *filename;
 
-  if ((pdb_dir = g_dir_open(dir, 0, &error)) == NULL)
+  if ((filenames = pdb_get_filenames(dir, recursive, merge_glob, &error)) == NULL)
     {
-      fprintf(stderr, "Error opening directory %s, error='%s'\n", merge_dir, error ? error->message : "Unknown error");
+      fprintf(stderr, "error getting filenames: %s\n", error->message);
       g_clear_error(&error);
       return FALSE;
     }
 
-  while ((filename = g_dir_read_name(pdb_dir)) != NULL && ok)
-    {
-      gchar *full_name = g_build_filename(dir, filename, NULL);
+  if (sort)
+    pdb_sort_filenames(filenames);
 
-      if (recursive && is_file_directory(full_name))
-        {
-          ok = pdbtool_merge_dir(full_name, recursive, merged);
-        }
-      else if (is_file_regular(full_name) && (!merge_glob || g_pattern_match_simple(merge_glob, filename)))
-        {
-          ok = pdbtool_merge_file(full_name, merged);
-        }
-      g_free(full_name);
+  for (guint i = 0; i < filenames->len; ++i)
+    {
+      if (!pdbtool_merge_file(g_ptr_array_index(filenames, i), merged))
+        break;
     }
-  g_dir_close(pdb_dir);
+
+  g_ptr_array_free(filenames, TRUE);
+
   return TRUE;
 }
 
@@ -291,6 +290,7 @@ pdbtool_merge(int argc, char *argv[])
     {
       fprintf(stderr, "Error storing patterndb; filename='%s', errror='%s'\n", patterndb_file,
               error ? error->message : "Unknown error");
+      g_error_free(error);
       ok = FALSE;
     }
 
@@ -316,6 +316,10 @@ static GOptionEntry merge_options[] =
   {
     "directory", 'D', 0, G_OPTION_ARG_STRING, &merge_dir,
     "Directory from merge pattern databases", "<directory>"
+  },
+  {
+    "sort", 's', 0, G_OPTION_ARG_NONE, &sort,
+    "Sort files during merge (alphabetic order, with files first, directories after)", NULL
   },
   { NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL }
 };
@@ -421,9 +425,16 @@ pdbtool_match(int argc, char *argv[])
       CfgLexer *lexer;
 
       lexer = cfg_lexer_new_buffer(configuration, filter_string, strlen(filter_string));
-      if (!cfg_run_parser(configuration, lexer, &filter_expr_parser, (gpointer *) &filter, NULL))
+      if (!cfg_run_parser_with_main_context(configuration, lexer, &filter_expr_parser, (gpointer *) &filter, NULL,
+                                            "pdbtool filter expression"))
         {
           fprintf(stderr, "Error parsing filter expression\n");
+          return 1;
+        }
+
+      if (!filter_expr_init(filter, configuration))
+        {
+          fprintf(stderr, "Error initializing filter expression\n");
           return 1;
         }
     }
@@ -862,7 +873,7 @@ pdbtool_walk_tree(RNode *root, gint level, gboolean program)
   gint i;
 
   for (i = 0; i < level; i++)
-         printf(" ");
+    printf(" ");
 
   if (root->parser)
     printf("@%s:%s@ ", r_parser_type_name(root->parser->type), log_msg_get_value_name(root->parser->handle, NULL));
@@ -879,10 +890,10 @@ pdbtool_walk_tree(RNode *root, gint level, gboolean program)
   printf("\n");
 
   for (i = 0; i < root->num_children; i++)
-         pdbtool_walk_tree(root->children[i], level + 1, program);
+    pdbtool_walk_tree(root->children[i], level + 1, program);
 
   for (i = 0; i < root->num_pchildren; i++)
-         pdbtool_walk_tree(root->pchildren[i], level + 1, program);
+    pdbtool_walk_tree(root->pchildren[i], level + 1, program);
 }
 
 static gint
@@ -976,10 +987,10 @@ pdbtool_dictionary_walk(RNode *root, const gchar *progname)
     }
 
   for (i = 0; i < root->num_children; i++)
-         pdbtool_dictionary_walk(root->children[i], progname);
+    pdbtool_dictionary_walk(root->children[i], progname);
 
   for (i = 0; i < root->num_pchildren; i++)
-         pdbtool_dictionary_walk(root->pchildren[i], progname);
+    pdbtool_dictionary_walk(root->pchildren[i], progname);
 }
 
 static GOptionEntry dictionary_options[] =
@@ -1223,6 +1234,7 @@ main(int argc, char *argv[])
 
   setlocale(LC_ALL, "");
 
+  main_loop_thread_resource_init();
   msg_init(TRUE);
   resolved_configurable_paths_init(&resolvedConfigurablePaths);
   stats_init();
@@ -1262,5 +1274,6 @@ main(int argc, char *argv[])
   configuration = NULL;
   crypto_deinit();
   msg_deinit();
+  main_loop_thread_resource_deinit();
   return ret;
 }

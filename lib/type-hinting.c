@@ -58,6 +58,8 @@ type_hint_parse(const gchar *hint, TypeHint *out_type, GError **error)
     *out_type = TYPE_HINT_DOUBLE;
   else if (strcmp(hint, "datetime") == 0)
     *out_type = TYPE_HINT_DATETIME;
+  else if (strcmp(hint, "list") == 0)
+    *out_type = TYPE_HINT_LIST;
   else if (strcmp(hint, "boolean") == 0)
     *out_type = TYPE_HINT_BOOLEAN;
   else if (strcmp(hint, "default") == 0)
@@ -110,7 +112,7 @@ type_cast_to_int32(const gchar *value, gint32 *out, GError **error)
 
   *out = (gint32)strtol(value, &endptr, 10);
 
-  if (endptr[0] != '\0')
+  if (value[0] == 0 || endptr[0] != '\0')
     {
       if (error)
         g_set_error(error, TYPE_HINTING_ERROR, TYPE_HINTING_INVALID_CAST,
@@ -127,7 +129,7 @@ type_cast_to_int64(const gchar *value, gint64 *out, GError **error)
 
   *out = (gint64)strtoll(value, &endptr, 10);
 
-  if (endptr[0] != '\0')
+  if (value[0] == 0 || endptr[0] != '\0')
     {
       if (error)
         g_set_error(error, TYPE_HINTING_ERROR, TYPE_HINTING_INVALID_CAST,

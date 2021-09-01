@@ -32,6 +32,8 @@
 #include <stdlib.h>
 #include <glib/gprintf.h>
 
+MsgFormatOptions parse_options;
+
 typedef struct _LogMessageTestParams
 {
   LogMessage *message;
@@ -47,7 +49,7 @@ _construct_log_message(void)
   const gchar *raw_msg = "foo";
   LogMessage *msg;
 
-  msg = log_msg_new(raw_msg, strlen(raw_msg), NULL, &parse_options);
+  msg = log_msg_new(raw_msg, strlen(raw_msg), &parse_options);
   log_msg_set_value(msg, LM_V_HOST, raw_msg, -1);
   return msg;
 }
@@ -151,7 +153,7 @@ void
 setup(void)
 {
   app_startup();
-  init_and_load_syslogformat_module();
+  init_parse_options_and_load_syslogformat(&parse_options);
 }
 
 void
@@ -312,8 +314,8 @@ Test(log_message, test_log_msg_get_value_with_time_related_macro)
   const char *date_value;
 
   msg = log_msg_new_empty();
-  msg->timestamps[LM_TS_STAMP].tv_sec = 1389783444;
-  msg->timestamps[LM_TS_STAMP].zone_offset = 3600;
+  msg->timestamps[LM_TS_STAMP].ut_sec = 1389783444;
+  msg->timestamps[LM_TS_STAMP].ut_gmtoff = 3600;
 
   handle = log_msg_get_value_handle("ISODATE");
   date_value = log_msg_get_value(msg, handle, &value_len);
@@ -326,10 +328,12 @@ Test(log_message, test_local_logmsg_created_with_the_right_flags_and_timestamps)
 {
   LogMessage *msg = log_msg_new_local();
 
-  gboolean are_equals = log_stamp_eq(&msg->timestamps[LM_TS_STAMP], &msg->timestamps[LM_TS_RECVD]);
+  gboolean are_equals = unix_time_eq(&msg->timestamps[LM_TS_STAMP], &msg->timestamps[LM_TS_RECVD]);
 
   cr_assert_neq((msg->flags & LF_LOCAL), 0, "LogMessage created by log_msg_new_local() should have LF_LOCAL flag set");
   cr_assert(are_equals, "The timestamps in a LogMessage created by log_msg_new_local() should be equals");
+
+  log_msg_unref(msg);
 }
 
 Test(log_message, test_sdata_sanitization)
@@ -460,7 +464,6 @@ static void
 test_with_sdata(LogMessage *msg, guint32 old_msg_size)
 {
   sizes_t sizes;
-  gchar key_format[]   = ".SDATA.%02d";
   gchar key[]          = ".SDATA.**";
   gchar value[] = "AAAAAAA";
 
@@ -471,7 +474,7 @@ test_with_sdata(LogMessage *msg, guint32 old_msg_size)
 
   for (char i = 0; i < iter_length; i++)
     {
-      g_sprintf(key, key_format, i);
+      g_sprintf(key, ".SDATA.%02d", i);
       sizes = add_key_value(msg, key, value);
 
       single_sdata_kv_size = NV_ENTRY_DIRECT_HDR + NV_TABLE_BOUND(strlen(key)+1 + strlen(value)+1);

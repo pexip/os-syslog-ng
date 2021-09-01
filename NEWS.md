@@ -1,64 +1,104 @@
-3.19.1
+3.28.1
 ======
+
+## Highlights
+
+ * `http`: add support for proxy option
+
+   Example:
+   ```
+   log {
+      source { system(); };
+      destination { http( url("SYSLOG_SERVER_IP:PORT") proxy("PROXY_IP:PORT") method("POST") ); };
+   };
+   ```
+   ([#3253](https://github.com/syslog-ng/syslog-ng/pull/3253))
 
 ## Features
 
- * HTTP load balancer (#2347)
- * Slack destination (#2451)
- * Add Cisco Catalyst formatted triplets support to cisco-parser() (#2394)
- * Add RFC5424 syslog support to the system() source (FreeBSD 12.0 support) (#2430)
- * Add network `interface()` option to network sources (#2389)
- * Add so-reuseport() to network drivers (#2379)
- * Enable supporting HTTP redirects (#2136)
+ * `map`: template function
+
+   This template function applies a function to all elements of a list. For example: `$(map $(+ 1 $_) 0,1,2)` => 1,2,3.
+   ([#3301](https://github.com/syslog-ng/syslog-ng/pull/3301))
+ * `use-syslogng-pid()`: new option to all sources
+
+   If set to `yes`, `syslog-ng` overwrites the message's `${PID}` macro to its own PID.
+   ([#3323](https://github.com/syslog-ng/syslog-ng/pull/3323))
 
 ## Bugfixes
 
- * Fix frequent disconnects of syslog() with TLS (#2432)
- * Fix possible refcount leak during reload/shutdown (#2434)
- * Fix message storm on trace level (#2425)
- * Fix use after free in file destinations (time-reap) (#2418)
- * Fixing a few memleaks in the Java destination (#2417)
- * Fix telegram dst default ca dir (#2416)
- * Fix prefix handling in $(list-concat) and $(strip) (#2405)
- * Fixing an eventfd leak with ivykis<=0.38 (threaded destinations) (#2404)
- * Process flush result after worker thread exits (threaded destinations) (#2402)
- * hdfs: do not try to write unopened file (#2391)
- * Fix leaks in redis() destination (#2383)
- * Block location tracking fixes (#2378)
- * Fix $(basename) and $(dirname) in the presence of a prefix (#2371)
- * Fixing a false positive corruption detection in non-reliable diskq (#2356)
- * Check if /proc/kmsg can be opened in system-source (#2408)
- * Fix include guard in systemd-journal (#2445)
- * Remove hexadecimal and octal number parsing from templates (#2401)
+ * `affile`: eliminate infinite loop in case of a spurious file path
+
+   If the template evaluation of a log message will result to a spurious
+   path in the file destination, syslog-ng refuses to create that file.
+   However the problematic log message was left in the msg queue, so
+   syslog-ng was trying to create that file again in time-reopen periods.
+   From now on syslog-ng will handle "permanent" file errors, and drop
+   the relevant msg.
+   ([#3230](https://github.com/syslog-ng/syslog-ng/pull/3230))
+ * Fix minor memory leaks in error scenarios
+   ([#3265](https://github.com/syslog-ng/syslog-ng/pull/3265))
+ * `crypto`: fix hang on boot due to lack of entropy
+   ([#3271](https://github.com/syslog-ng/syslog-ng/pull/3271))
+ * Fix IPv4 UDP destinations on FreeBSD
+
+   UDP-based destinations crashed when receiving the first message on FreeBSD due
+   to a bug in destination IP extraction logic.
+   ([#3278](https://github.com/syslog-ng/syslog-ng/pull/3278))
+ * `network sources`: fix TLS connection closure
+
+   RFC 5425 specifies that once the transport receiver gets `close_notify` from the
+   transport sender, it MUST reply with a `close_notify`.
+
+   The `close_notify` alert is now sent back correctly in case of TLS network sources.
+   ([#2811](https://github.com/syslog-ng/syslog-ng/pull/2811))
+ * `disk-buffer`: fixes possible crash, or fetching wrong value for logmsg nvpair
+   ([#3281](https://github.com/syslog-ng/syslog-ng/pull/3281))
+ * `packaging/debian`: fix mod-rdkafka Debian packaging
+   ([#3282](https://github.com/syslog-ng/syslog-ng/pull/3282))
+ * `kafka destination`: destination halts if consumer is down, and kafka's queue is filled
+   ([#3305](https://github.com/syslog-ng/syslog-ng/pull/3305))
+ * `file-source`: Throw error, when `follow-freq()` is set with a negative float number.
+   ([#3306](https://github.com/syslog-ng/syslog-ng/pull/3306))
+ * `stats-freq`: with high stats-freq syslog-ng emits stats immediately causing high memory and CPU usage
+   ([#3320](https://github.com/syslog-ng/syslog-ng/pull/3320))
+ * `secure-logging`: bug fixes ([#3284](https://github.com/syslog-ng/syslog-ng/pull/3284))
+    - template arguments are now consistently checked
+    - fixed errors when mac file not provided
+    - fixed abort when derived key not provided
+    - fixed crash with slogkey missing parameters
+    - fixed secure-logging on 32-bit architectures
+    - fixed CMake build
 
 ## Other changes
 
- * Do not load certs from default CURL ca-dir by default (http() destination) (#2410)
- * Disable SSL compression by default (#2372)
- * Flush lines cleanup (#2386, #2392)
- * Refine json-parser() log messages to be less alarming (#2437)
- * Move some messages to trace (#2358)
- * Make include-path more discoverable (#2426)
- * Adding build flag -Wmissing-format-attribute and -Wsuggest-attribute=noreturn (#2423)
- * Rewrite filter unit tests based on criterion (#2422)
- * PytestFramework in Travis (#2415)
- * syslog-ng-mod-java debian pkg should depend on headless jre (#2388)
- * Add contextual data error reporting improvements & csv-scanner refactor (#2373)
- * Afsocket remove unused functions/bitfields (#2363)
- * Afsocket minor cleanup/refactor (#2355)
- * Riemann worker (#2313)
- * Afsql threaded dest driver (#2097)
- * dbld: do not mount .gitconfig if missing (#2419)
- * dbld: Add missing docbook-xsl packages (#2398)
- * dbld: update criterion to 2.3.3 (#2396)
- * dbld: Remove "proposed" Ubuntu repository from enable_dbgsyms() (#2382)
- * dbld: Add new target "list-builder-images" (#2381)
- * dbld: Support Ubuntu Bionic and update existing images (#2318)
- * dbld: release target should use the default image (#2464)
+ * `dbld`: Fedora 32 support ([#3315](https://github.com/syslog-ng/syslog-ng/pull/3315))
+ * `dbld`: Removed Ubuntu Eoan ([#3313](https://github.com/syslog-ng/syslog-ng/pull/3313))
+ * `secure-logging`: improvements ([#3284](https://github.com/syslog-ng/syslog-ng/pull/3284))
+    - removed 1500 message length limitation
+    - `slogimport` has been renamed to `slogencrypt`
+    - `$(slog)` will not start anymore when key is not found
+    - internal messaging (warning, debug) improvements
+    - improved memory handling and error information display
+    - CMake build improvements
+    - switched to GLib command line argument parsing
+    - the output of `slogkey -s` is now parsable
+    - manpage improvements
 
-## Notes to the developers
+## Notes to developers
 
- * PytestFramework: Add initial test framework (#1940)
+ * `dbld`: devshell is now upgraded to Ubuntu Focal
+   ([#3277](https://github.com/syslog-ng/syslog-ng/pull/3277))
+ * `dbld/devshell`: Multiple changes:
+    * Added snmptrapd package.
+    * Added support for both `python2` and `python3`.
+   ([#3222](https://github.com/syslog-ng/syslog-ng/pull/3222))
+ * `threaded-source`: fully support default-priority() and default-facility()
+   ([#3304](https://github.com/syslog-ng/syslog-ng/pull/3304))
+ * `CMake`: fix libcap detection
+   ([#3294](https://github.com/syslog-ng/syslog-ng/pull/3294))
+ * Fix atomic_gssize_set() warning with new glib versions
+   ([#3286](https://github.com/syslog-ng/syslog-ng/pull/3286))
 
 ## Credits
 
@@ -71,6 +111,6 @@ of syslog-ng, contribute.
 
 We would like to thank the following people for their contribution:
 
-Abder Benbachir, Andras Mitzki, Antal Nemes, Attila Szakacs, Balazs Scheidler,
-Gabor Nagy, Gergely Tonté, JP Vossen, Juhasz Viktor, Laszlo Budai,
-Laszlo Szemere, László Várady, Norbert Takacs, Peter Kokai, Zoltan Pallagi.
+Airbus Commercial Aircraft, Andras Mitzki, Antal Nemes, Attila Szakacs,
+Balazs Scheidler, Gabor Nagy, Laszlo Budai, Laszlo Szemere, László Várady,
+Péter Kókai, Vatsal Sisodiya, Vivin Peris.

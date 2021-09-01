@@ -34,6 +34,12 @@
 #include <criterion/criterion.h>
 #include <criterion/parameterized.h>
 
+#include <string.h>
+
+guint SCS_FILE;
+guint SCS_PIPE;
+guint SCS_TCP;
+
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
 typedef struct _CounterHashContent
@@ -42,6 +48,8 @@ typedef struct _CounterHashContent
   const gchar *id;
   const gchar *instance;
   const gint type;
+  atomic_gssize *external_counter;
+  gssize initial_value;
 } CounterHashContent;
 
 typedef struct _QueryTestCase
@@ -53,10 +61,22 @@ typedef struct _QueryTestCase
 typedef void(*ClusterKeySet)(StatsClusterKey *, guint16, const gchar *, const gchar *);
 
 static void
+setup(void)
+{
+  app_startup();
+  SCS_FILE = stats_register_type("file");
+  SCS_PIPE = stats_register_type("pipe");
+  SCS_TCP = stats_register_type("tcp");
+}
+
+static void
 _add_two_to_value(GList *counters, StatsCounterItem **result)
 {
-  StatsCounterItem *c = counters->data;
-  stats_counter_set(*result, stats_counter_get(c) + 2);
+  for (GList *it = counters; it; it = it->next)
+    {
+      StatsCounterItem *c = it->data;
+      stats_counter_add(*result, stats_counter_get(c) + 2);
+    }
 }
 
 static gchar *
@@ -87,10 +107,18 @@ _register_counters(const CounterHashContent *counters, size_t n, ClusterKeySet k
   stats_lock();
   for (size_t i = 0; i < n; i++)
     {
-      StatsCounterItem *item = NULL;
       StatsClusterKey sc_key;
-      key_set(&sc_key, counters[i].component, counters[i].id, counters[i].instance );
-      stats_register_counter(0, &sc_key, counters[i].type, &item);
+      key_set(&sc_key, counters[i].component, counters[i].id, counters[i].instance);
+      if (counters[i].external_counter)
+        {
+          atomic_gssize_set(counters[i].external_counter, counters[i].initial_value);
+          stats_register_external_counter(0, &sc_key, counters[i].type, counters[i].external_counter);
+        }
+      else
+        {
+          StatsCounterItem *item = NULL;
+          stats_register_counter(0, &sc_key, counters[i].type, &item);
+        }
       gchar *name = _construct_view_name(counters[i].id);
       GList *queries = _construct_view_query_list(counters[i].instance);
       stats_register_view(name, queries, _add_two_to_value);
@@ -114,22 +142,24 @@ _register_single_counter_with_name(void)
 static void
 _initialize_counter_hash(void)
 {
+  setup();
+  static atomic_gssize external_frozen_ctr;
+
   const CounterHashContent logpipe_cluster_counters[] =
   {
-    {SCS_CENTER, "guba.polo", "frozen", SC_TYPE_SUPPRESSED},
-    {SCS_FILE | SCS_SOURCE, "guba", "processed", SC_TYPE_PROCESSED},
-    {SCS_GLOBAL, "guba.gumi.diszno", "frozen", SC_TYPE_SUPPRESSED},
-    {SCS_PIPE | SCS_SOURCE, "guba.gumi.disz", "frozen", SC_TYPE_SUPPRESSED},
-    {SCS_TCP | SCS_DESTINATION, "guba.labda", "received", SC_TYPE_DROPPED},
-    {SCS_TCP | SCS_SOURCE, "guba.frizbi", "left", SC_TYPE_QUEUED},
+    {SCS_CENTER, "guba.polo", "frozen", SC_TYPE_SUPPRESSED, &external_frozen_ctr, 12},
+    {SCS_FILE | SCS_SOURCE, "guba", "processed", SC_TYPE_PROCESSED, NULL, 0},
+    {SCS_GLOBAL, "guba.gumi.diszno", "frozen", SC_TYPE_SUPPRESSED, NULL, 0},
+    {SCS_PIPE | SCS_SOURCE, "guba.gumi.disz", "frozen", SC_TYPE_SUPPRESSED, NULL, 0},
+    {SCS_TCP | SCS_DESTINATION, "guba.labda", "received", SC_TYPE_DROPPED, NULL, 0},
+    {SCS_TCP | SCS_SOURCE, "guba.frizbi", "left", SC_TYPE_QUEUED, NULL, 0},
   };
 
   const CounterHashContent single_cluster_counters[] =
   {
-    {SCS_GLOBAL, "", "guba", SC_TYPE_SINGLE_VALUE}
+    {SCS_GLOBAL, "", "guba", SC_TYPE_SINGLE_VALUE, NULL, 0}
   };
 
-  app_startup();
   _register_counters(logpipe_cluster_counters, ARRAY_SIZE(logpipe_cluster_counters), stats_cluster_logpipe_key_set);
   _register_counters(single_cluster_counters, ARRAY_SIZE(single_cluster_counters), stats_cluster_single_key_set);
   _register_single_counter_with_name();
@@ -200,8 +230,7 @@ _test_format_list(StatsCounterItem *ctr, gpointer user_data)
   return TRUE;
 }
 
-
-TestSuite(cluster_query_key, .init = app_startup, .fini = app_shutdown);
+TestSuite(cluster_query_key, .init = setup, .fini = app_shutdown);
 
 Test(cluster_query_key, test_global_key)
 {
@@ -212,6 +241,7 @@ Test(cluster_query_key, test_global_key)
   cr_assert_str_eq(sc->query_key, expected_key,
                    "generated query key(%s) does not match to the expected key(%s)",
                    sc->query_key, expected_key);
+  stats_cluster_free(sc);
 }
 
 TestSuite(stats_query, .init = _initialize_counter_hash, .fini = app_shutdown);
@@ -240,12 +270,13 @@ ParameterizedTest(QueryTestCase *test_cases, stats_query, test_stats_query_get_l
   log_msg_unref(msg);
 }
 
+
 ParameterizedTestParameters(stats_query, test_stats_query_get_str_out)
 {
   static QueryTestCase test_cases[] =
   {
-    {"center.*.*", "center.guba.polo.frozen.suppressed: 0\n"},
-    {"cent*", "center.guba.polo.frozen.suppressed: 0\n"},
+    {"center.*.*", "center.guba.polo.frozen.suppressed: 12\n"},
+    {"cent*", "center.guba.polo.frozen.suppressed: 12\n"},
     {"src.pipe.guba.gumi.disz.*.*", "src.pipe.guba.gumi.disz.frozen.suppressed: 0\n"},
     {"src.pipe.guba.gumi.*.*", "src.pipe.guba.gumi.disz.frozen.suppressed: 0\n"},
     {"src.pipe.guba.*.*", "src.pipe.guba.gumi.disz.frozen.suppressed: 0\n"},
@@ -256,15 +287,6 @@ ParameterizedTestParameters(stats_query, test_stats_query_get_str_out)
     {"src.java.*.*", ""},
     {"src.ja*.*.*", ""},
     {"global.id.instance.name", "global.id.instance.name: 0\n"},
-    {
-      "*.aliased", ".aliased: 2\n"
-      "guba.frizbi.aliased: 2\n"
-      "guba.gumi.diszno.aliased: 2\n"
-      "guba.polo.aliased: 2\n"
-      "guba.aliased: 2\n"
-      "guba.gumi.disz.aliased: 2\n"
-      "guba.labda.aliased: 2\n"
-    },
   };
 
   return cr_make_param_array(QueryTestCase, test_cases, sizeof(test_cases) / sizeof(test_cases[0]));
@@ -280,6 +302,37 @@ ParameterizedTest(QueryTestCase *test_cases, stats_query, test_stats_query_get_s
 
   g_string_free(result, TRUE);
 }
+
+
+Test(stats_query, test_stats_query_get_str_out_with_multiple_matching_counters)
+{
+  const gchar *pattern = "*.aliased";
+
+  GString *result = g_string_new("");
+  stats_query_get(pattern, _test_format_str_get, (gpointer)result);
+
+  const gchar *expected_results[] =
+  {
+    /* add_two is called for each; .aliased means *guba.
+     * 0+2, 2+12+2, 16+0+2, 18+0+2, 20+0+2, 22+0+2, 24+0+2=26 */
+    ".aliased: 26\n",
+    "guba.frizbi.aliased: 2\n",
+    "guba.gumi.diszno.aliased: 18\n", // *frozen.*
+    "guba.polo.aliased: 18\n", // *frozen.*
+    "guba.aliased: 2\n",
+    "guba.gumi.disz.aliased: 18\n", // *frozen.*
+    "guba.labda.aliased: 2\n"
+  };
+
+  for (gsize i = 0; i < G_N_ELEMENTS(expected_results); ++i)
+    {
+      cr_assert_not_null(strstr(result->str, expected_results[i]),
+                         "Pattern: '%s'; expected key and value: '%s' in output: '%s';", pattern, expected_results[i], result->str);
+    }
+
+  g_string_free(result, TRUE);
+}
+
 
 ParameterizedTestParameters(stats_query, test_stats_query_get_sum_log_msg_out)
 {
@@ -307,11 +360,29 @@ ParameterizedTest(QueryTestCase *test_cases, stats_query, test_stats_query_get_s
 
 ParameterizedTestParameters(stats_query, test_stats_query_get_sum_str_out)
 {
+  /* 98...
+    sum:0; inc:0; ctr-name: src.pipe.guba.gumi.disz.frozen.suppressed
+    sum:0; inc:12; ctr-name: center.guba.polo.frozen.suppressed
+    sum:12; inc:0; ctr-name: src.tcp.guba.frizbi.left.queued
+    sum:12; inc:0; ctr-name: global.id.instance.name
+    sum:12; inc:0; ctr-name: src.file.guba.processed.processed
+    sum:12; inc:0; ctr-name: global.guba.gumi.diszno.frozen.suppressed
+    sum:12; inc:0; ctr-name: global.guba.value
+    sum:12; inc:0; ctr-name: dst.tcp.guba.labda.received.dropped
+    sum:12; inc:18; ctr-name: guba.polo.aliased
+    sum:30; inc:2; ctr-name: guba.frizbi.aliased
+    sum:32; inc:2; ctr-name: guba.labda.aliased
+    sum:34; inc:18; ctr-name: guba.gumi.diszno.aliased
+    sum:52; inc:2; ctr-name: guba.aliased
+    sum:54; inc:18; ctr-name: guba.gumi.disz.aliased
+    sum:72; inc:26; ctr-name: .aliased
+    98 = 72+26
+  */
   static QueryTestCase test_cases[] =
   {
-    {"*", "14"},
-    {"center.*.*", "0"},
-    {"cent*", "0"},
+    {"*", "98"},
+    {"center.*.*", "12"},
+    {"cent*", "12"},
     {"src.pipe.guba.gumi.disz.*.*", "0"},
     {"*.tcp.guba.*.*", "0"},
     {"*.guba.*i.*.*", "0"},

@@ -35,38 +35,9 @@
 #include <string.h>
 #include <signal.h>
 
-typedef struct _PersistFileHeader
-{
-  union
-  {
-    struct
-    {
-      /* should contain SLP4, everything is Big-Endian */
-
-      /* 64 bytes for file header */
-      gchar magic[4];
-      /* should be zero, any non-zero value is not supported and causes the state to be dropped */
-      guint32 flags;
-      /* number of name-value keys in the file */
-      guint32 key_count;
-      /* space reserved for additional information in the header */
-      gchar __reserved1[52];
-      /* initial key store where the first couple of NV keys are stored, sized to align the header to 4k boundary */
-      gchar initial_key_store[4032];
-    };
-    gchar __padding[4096];
-  };
-} PersistFileHeader;
-
 #define PERSIST_FILE_INITIAL_SIZE 16384
 #define PERSIST_STATE_KEY_BLOCK_SIZE 4096
 #define PERSIST_FILE_WATERMARK 4096
-
-typedef struct
-{
-  void (*handler)(gpointer user_data);
-  gpointer cookie;
-} PersistStateErrorHandler;
 
 /*
  * The syslog-ng persistent state is a set of name-value pairs,
@@ -135,32 +106,6 @@ typedef struct
  * the file you need to check it whether it is inside the mapped file.
  *
  */
-struct _PersistState
-{
-  gint version;
-  gchar *committed_filename;
-  gchar *temp_filename;
-  gint fd;
-  gint mapped_counter;
-  GMutex *mapped_lock;
-  GCond *mapped_release_cond;
-  guint32 current_size;
-  guint32 current_ofs;
-  gpointer current_map;
-  PersistFileHeader *header;
-  PersistStateErrorHandler error_handler;
-
-  /* keys being used */
-  GHashTable *keys;
-  PersistEntryHandle current_key_block;
-  gint current_key_ofs;
-  gint current_key_size;
-};
-
-typedef struct _PersistEntry
-{
-  PersistEntryHandle ofs;
-} PersistEntry;
 
 /* everything is big-endian */
 typedef struct _PersistValueHeader
@@ -359,8 +304,8 @@ _free_value(PersistState *self, PersistEntryHandle handle)
 
 /* key management */
 
-gboolean
-persist_state_lookup_key(PersistState *self, const gchar *key, PersistEntryHandle *handle)
+static gboolean
+_persist_state_lookup_key(PersistState *self, const gchar *key, PersistEntryHandle *handle)
 {
   PersistEntry *entry;
 
@@ -389,6 +334,42 @@ persist_state_rename_entry(PersistState *self, const gchar *old_key, const gchar
         }
     }
   return FALSE;
+}
+
+
+static void
+_persist_state_copy_entry(PersistState *self, const PersistEntryHandle from, PersistEntryHandle to, gsize size)
+{
+  gpointer entry_from = persist_state_map_entry(self, from);
+  gpointer entry_to = persist_state_map_entry(self, to);
+
+  memcpy(entry_to, entry_from, size);
+
+  persist_state_unmap_entry(self, from);
+  persist_state_unmap_entry(self, to);
+}
+
+gboolean
+persist_state_move_entry(PersistState *self, const gchar *old_key, const gchar *new_key)
+{
+  gsize size;
+  guint8 version;
+  PersistEntryHandle old_handle = persist_state_lookup_entry(self, old_key, &size, &version);
+  if (!old_handle)
+    return FALSE;
+
+  PersistEntryHandle new_handle = persist_state_alloc_entry(self, new_key, size);
+  if (!new_handle)
+    return FALSE;
+
+  _persist_state_copy_entry(self, old_handle, new_handle, size);
+  _free_value(self, old_handle);
+
+  msg_debug("Persistent entry moved",
+            evt_tag_str("from", old_key),
+            evt_tag_str("to", new_key));
+
+  return TRUE;
 }
 
 /*
@@ -740,6 +721,7 @@ persist_state_map_entry(PersistState *self, PersistEntryHandle handle)
 {
   /* we count the number of mapped entries in order to know if we're
    * safe to remap the file region */
+  g_assert(handle);
   g_mutex_lock(self->mapped_lock);
   self->mapped_counter++;
   g_mutex_unlock(self->mapped_lock);
@@ -765,7 +747,7 @@ persist_state_unmap_entry(PersistState *self, PersistEntryHandle handle)
 static PersistValueHeader *
 _map_header_of_entry(PersistState *self, const gchar *persist_name, PersistEntryHandle *handle)
 {
-  if (!persist_state_lookup_key(self, persist_name, handle))
+  if (!_persist_state_lookup_key(self, persist_name, handle))
     return NULL;
 
   return _map_header_of_entry_from_handle(self, *handle);
@@ -812,11 +794,18 @@ persist_state_lookup_entry(PersistState *self, const gchar *key, gsize *size, gu
 }
 
 gboolean
+persist_state_entry_exists(PersistState *self, const gchar *persist_name)
+{
+  PersistEntryHandle handle;
+  return _persist_state_lookup_key(self, persist_name, &handle);
+}
+
+gboolean
 persist_state_remove_entry(PersistState *self, const gchar *key)
 {
   PersistEntryHandle handle;
 
-  if (!persist_state_lookup_key(self, key, &handle))
+  if (!_persist_state_lookup_key(self, key, &handle))
     return FALSE;
 
   _free_value(self, handle);
@@ -839,11 +828,12 @@ _foreach_entry_func(gpointer key, gpointer value, gpointer userdata)
 
   PersistValueHeader *header = persist_state_map_entry(data->storage, entry->ofs - sizeof(PersistValueHeader));
   gint size = GUINT32_FROM_BE(header->size);
-  persist_state_unmap_entry(data->storage, entry->ofs);
+  persist_state_unmap_entry(data->storage, entry->ofs - sizeof(PersistValueHeader));
 
-  gpointer *state = persist_state_map_entry(data->storage, entry->ofs);
+  PersistEntryHandle original_handler = entry->ofs;
+  gpointer state = persist_state_map_entry(data->storage, entry->ofs);
   data->func(name, size, state, data->userdata);
-  persist_state_unmap_entry(data->storage, entry->ofs);
+  persist_state_unmap_entry(data->storage, original_handler);
 }
 
 void

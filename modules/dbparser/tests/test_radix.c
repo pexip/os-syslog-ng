@@ -319,7 +319,7 @@ ParameterizedTestParameters(dbparser, test_radix_search_matches)
     {
       .node_to_insert = {"@IPvANY:ip@", NULL},
       .key = "192.168.1.1huhuhu",
-      .expected_pattern = {"ip","192.168.1.1",NULL}
+      .expected_pattern = {"ip", "192.168.1.1", NULL}
     },
     {
       .node_to_insert = {"@IPvANY:ip@", NULL},
@@ -430,7 +430,7 @@ ParameterizedTestParameters(dbparser, test_radix_search_matches)
     {
       .node_to_insert = {"@IPv4:ipv4@", NULL},
       .key = "192.168.1.1 huhuhu",
-      .expected_pattern = {"ipv4", "192.168.1.1",NULL}
+      .expected_pattern = {"ipv4", "192.168.1.1", NULL}
     },
     {
       .node_to_insert = {"@IPv4:ipv4@", NULL},
@@ -1003,6 +1003,16 @@ ParameterizedTestParameters(dbparser, test_radix_search_matches)
       .node_to_insert = {"jjj @PCRE:regexp:[abc]+@", "jjjj @PCRE:regexp:[abc]+@d foobar", NULL},
       .key = "jjjj abcabcd foobar",
       .expected_pattern = {"regexp", "abcabc", NULL},
+    },
+    {
+      .node_to_insert = {"@PCRE:regexp:(foo|bar)@", NULL},
+      .key = "foo",
+      .expected_pattern = {"regexp", "foo", NULL},
+    },
+    {
+      .node_to_insert = {"@PCRE:regexp:(?:foo|bar)@", NULL},
+      .key = "foo",
+      .expected_pattern = {"regexp", "foo", NULL},
     },
     /* test_nlstring_matches */
     {

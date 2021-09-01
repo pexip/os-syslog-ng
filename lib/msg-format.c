@@ -38,7 +38,7 @@ msg_format_inject_parse_error(LogMessage *msg, const guchar *data, gsize length,
   log_msg_set_value(msg, LM_V_HOST, "", 0);
 
   g_snprintf(buf, sizeof(buf), "Error processing log message: %.*s>@<%.*s", (gint) problem_position-1,
-             data,(gint) (length-problem_position+1), data+problem_position-1);
+             data, (gint) (length-problem_position+1), data+problem_position-1);
 
   log_msg_set_value(msg, LM_V_MESSAGE, buf, -1);
   log_msg_set_value(msg, LM_V_PROGRAM, "syslog-ng", 9);
@@ -46,6 +46,27 @@ msg_format_inject_parse_error(LogMessage *msg, const guchar *data, gsize length,
   log_msg_set_value(msg, LM_V_PID, buf, -1);
 
   msg->pri = LOG_SYSLOG | LOG_ERR;
+}
+
+void
+msg_format_parse(MsgFormatOptions *options, const guchar *data, gsize length, LogMessage *msg)
+{
+  if (G_LIKELY(options->format_handler))
+    {
+      msg_trace("Initial message parsing follows");
+      options->format_handler->parse(options, data, length, msg);
+      if (options->flags & LP_NO_PARSE_DATE)
+        {
+          msg->timestamps[LM_TS_STAMP] = msg->timestamps[LM_TS_RECVD];
+          unix_time_set_timezone(&msg->timestamps[LM_TS_STAMP],
+                                 time_zone_info_get_offset(options->recv_time_zone_info,
+                                                           msg->timestamps[LM_TS_RECVD].ut_sec));
+        }
+    }
+  else
+    {
+      log_msg_set_value(msg, LM_V_MESSAGE, "Error parsing message, format module is not loaded", -1);
+    }
 }
 
 void
@@ -131,6 +152,7 @@ CfgFlagHandler msg_format_flag_handlers[] =
   { "dont-store-legacy-msghdr", CFH_CLEAR, offsetof(MsgFormatOptions, flags), LP_STORE_LEGACY_MSGHDR },
   { "expect-hostname",            CFH_SET, offsetof(MsgFormatOptions, flags), LP_EXPECT_HOSTNAME },
   { "no-hostname",              CFH_CLEAR, offsetof(MsgFormatOptions, flags), LP_EXPECT_HOSTNAME },
+  { "guess-timezone",             CFH_SET, offsetof(MsgFormatOptions, flags), LP_GUESS_TIMEZONE },
 
   { NULL },
 };

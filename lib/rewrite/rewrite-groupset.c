@@ -24,6 +24,7 @@
  */
 
 #include "rewrite-groupset.h"
+#include "scratch-buffers.h"
 
 typedef struct _LogRewriteGroupSetCallbackData
 {
@@ -42,14 +43,13 @@ log_rewrite_groupset_foreach_func(const gchar *name, TypeHint type,
   LogTemplate *template = callback_data->template;
   GString *result;
 
-  result = g_string_sized_new(64);
+  result = scratch_buffers_alloc();
 
   log_template_format(template, msg, NULL, LTZ_LOCAL, 0, value, result);
 
   NVHandle handle = log_msg_get_value_handle(name);
   log_msg_set_value(msg, handle, result->str, result->len);
 
-  g_string_free(result, TRUE);
   return FALSE;
 }
 
@@ -103,7 +103,7 @@ log_rewrite_groupset_clone(LogPipe *s)
 {
   LogRewriteGroupSet *self = (LogRewriteGroupSet *) s;
   LogRewriteGroupSet *cloned = (LogRewriteGroupSet *)log_rewrite_groupset_new(self->replacement,
-      log_pipe_get_config(&self->super.super) );
+                               log_pipe_get_config(&self->super.super));
   value_pairs_unref(cloned->query);
   cloned->query = value_pairs_ref(self->query);
   cloned->vp_func = self->vp_func;

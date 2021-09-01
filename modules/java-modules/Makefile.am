@@ -1,35 +1,43 @@
 if ENABLE_JAVA_MODULES
 
-export GRADLE_OPTS
 
-JAVA_MOD_DST_DIR=$(DESTDIR)/$(moduledir)/java-modules
-MOD_JARS=$(shell find $(abs_top_builddir)/modules/java-modules -name '*.jar' -not -path "$(abs_top_builddir)/modules/java-modules/.gradle/*")
-JAVA_MODULES_INSTALLED_JARS=$(shell find $(JAVA_MOD_DST_DIR) -name '*.jar')
-GRADLE_WORKDIR=$(abs_top_builddir)/modules/java-modules/.gradle
+GRADLE_PROJECT_DIR ?= $(abs_top_srcdir)/modules/java-modules
+GRADLE_PROJECT_CACHE_DIR_DEFAULT = $(abs_top_builddir)/modules/java-modules/.gradle
+GRADLE_PROJECT_CACHE_DIR ?= $(GRADLE_PROJECT_CACHE_DIR_DEFAULT)
+GRADLE_FLAGS ?=
+GRADLE_ARGS = $(GRADLE_FLAGS) \
+	--project-dir $(GRADLE_PROJECT_DIR) \
+	--project-cache-dir=$(GRADLE_PROJECT_CACHE_DIR) \
+	-PsyslogBuildDir=$(abs_top_builddir)/modules/java-modules \
+	-PsyslogDepsDir=$(abs_top_builddir)/modules/java/syslog-ng-core/libs
+GRADLE_COMMAND = $(AM_V_GEN) $(GRADLE) $(GRADLE_ARGS)
+
+JAVA_MODULEDIR=$(DESTDIR)/$(moduledir)/java-modules
+JAVA_BUILT_JARS=$(shell find $(abs_top_builddir)/modules/java-modules -name '*.jar' -not -path "$(GRADLE_PROJECT_CACHE_DIR)/*")
+JAVA_INSTALLED_JARS=$(shell find $(JAVA_MODULEDIR) -name '*.jar')
 
 java-modules: $(SYSLOG_NG_CORE_JAR)
-	$(AM_V_GEN) $(GRADLE) --project-cache-dir $(GRADLE_WORKDIR) -g $(GRADLE_WORKDIR) -p $(abs_top_srcdir)/modules/java-modules -PsyslogBuildDir=$(abs_top_builddir)/modules/java-modules -PsyslogDepsDir=$(abs_top_builddir)/modules/java/syslog-ng-core/libs build
+	$(GRADLE_COMMAND) build
 
 all-local: java-modules
 
 log4j-copy-jar:
-	$(AM_V_GEN) $(GRADLE) --project-cache-dir $(GRADLE_WORKDIR) -g $(GRADLE_WORKDIR) -p $(abs_top_srcdir)/modules/java-modules -PsyslogBuildDir=$(abs_top_builddir)/modules/java-modules -PsyslogDepsDir=$(abs_top_builddir)/modules/java/syslog-ng-core/libs -PjarDestDir=$(JAVA_MOD_DST_DIR) copyLog4j
+	$(GRADLE_COMMAND) -PjarDestDir=$(JAVA_MODULEDIR) copyLog4j
 
 jest-copy-jar:
-	$(AM_V_GEN) $(GRADLE) --project-cache-dir $(GRADLE_WORKDIR) -g $(GRADLE_WORKDIR) -p $(abs_top_srcdir)/modules/java-modules -PsyslogBuildDir=$(abs_top_builddir)/modules/java-modules -PsyslogDepsDir=$(abs_top_builddir)/modules/java/syslog-ng-core/libs -PjarDestDir=$(JAVA_MOD_DST_DIR) copyJestRuntimeDeps
+	$(GRADLE_COMMAND) -PjarDestDir=$(JAVA_MODULEDIR) copyJestRuntimeDeps
 
 java-modules-install-exec-hook: log4j-copy-jar jest-copy-jar
-	$(mkinstalldirs) $(JAVA_MOD_DST_DIR)
-	cp $(MOD_JARS) $(JAVA_MOD_DST_DIR)
+	$(mkinstalldirs) $(JAVA_MODULEDIR)
+	cp $(JAVA_BUILT_JARS) $(JAVA_MODULEDIR)
 
 java-modules-uninstall-exec-hook:
-	rm -f $(JAVA_MODULES_INSTALLED_JARS)
+	rm -f $(JAVA_INSTALLED_JARS)
 
 java-modules-clean-hook:
-	rm -rf $(abs_top_builddir)/modules/java-modules/*.log
-	$(GRADLE) --project-cache-dir $(GRADLE_WORKDIR) -q -g $(GRADLE_WORKDIR) -p $(abs_top_srcdir)/modules/java-modules -PsyslogBuildDir=$(abs_top_builddir)/modules/java-modules -PsyslogDepsDir=$(abs_top_builddir)/modules/java/syslog-ng-core/libs clean
-	rm -rf $(GRADLE_WORKDIR)
-
+	$(GRADLE_COMMAND) clean
+	rm -f $(abs_top_builddir)/modules/java-modules/*.log
+	[ "$(GRADLE_PROJECT_CACHE_DIR)" = "$(GRADLE_PROJECT_CACHE_DIR_DEFAULT)" ] && rm -rf "$(GRADLE_PROJECT_CACHE_DIR)" || true
 
 INSTALL_EXEC_HOOKS += java-modules-install-exec-hook
 UNINSTALL_HOOKS += java-modules-uninstall-exec-hook
@@ -39,7 +47,6 @@ endif
 
 EXTRA_DIST += \
 	modules/java-modules/common/build.gradle  \
-	modules/java-modules/elastic/build.gradle \
 	modules/java-modules/elastic-v2/build.gradle \
 	modules/java-modules/kafka/build.gradle \
 	modules/java-modules/hdfs/build.gradle    \
@@ -48,18 +55,6 @@ EXTRA_DIST += \
 	modules/java-modules/settings.gradle \
 	modules/java-modules/build.gradle \
 	modules/java-modules/internal_repositories.gradle \
-	modules/java-modules/elastic/src/main/java/org/syslog_ng/elasticsearch/messageprocessor/ESMessageProcessor.java \
-	modules/java-modules/elastic/src/main/java/org/syslog_ng/elasticsearch/messageprocessor/DummyProcessor.java \
-	modules/java-modules/elastic/src/main/java/org/syslog_ng/elasticsearch/messageprocessor/ESBulkMessageProcessor.java \
-	modules/java-modules/elastic/src/main/java/org/syslog_ng/elasticsearch/messageprocessor/ESMessageProcessorFactory.java \
-	modules/java-modules/elastic/src/main/java/org/syslog_ng/elasticsearch/messageprocessor/ESSingleMessageProcessor.java \
-	modules/java-modules/elastic/src/main/java/org/syslog_ng/elasticsearch/ElasticSearchDestination.java \
-	modules/java-modules/elastic/src/main/java/org/syslog_ng/elasticsearch/client/ESTransportClient.java \
-	modules/java-modules/elastic/src/main/java/org/syslog_ng/elasticsearch/client/ESClient.java \
-	modules/java-modules/elastic/src/main/java/org/syslog_ng/elasticsearch/client/ESNodeClient.java \
-	modules/java-modules/elastic/src/main/java/org/syslog_ng/elasticsearch/client/UnknownESClientModeException.java \
-	modules/java-modules/elastic/src/main/java/org/syslog_ng/elasticsearch/client/ESClientFactory.java \
-	modules/java-modules/elastic/src/main/java/org/syslog_ng/elasticsearch/ElasticSearchOptions.java \
 	modules/java-modules/kafka/src/main/java/org/syslog_ng/KafkaDestination.java \
 	modules/java-modules/kafka/src/main/java/org/syslog_ng/KafkaDestinationOptions.java \
 	modules/java-modules/kafka/src/main/java/org/syslog_ng/KafkaDestinationProperties.java \

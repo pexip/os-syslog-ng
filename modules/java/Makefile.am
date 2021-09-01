@@ -69,7 +69,6 @@ module_LTLIBRARIES += modules/java/libmod-java.la
 modules_java_libmod_java_la_CFLAGS = \
     $(AM_CFLAGS) \
     $(JNI_CFLAGS)  \
-    $(INCUBATOR_CFLAGS) \
     -I$(top_srcdir)/modules/java    \
     -I$(top_builddir)/modules/java	\
     -I$(top_srcdir)/modules/java/native \
@@ -105,16 +104,16 @@ modules_java_libmod_java_la_DEPENDENCIES  = \
         $(MODULE_DEPS_LIBS)
 
 JAVA_FILES = \
-    $(SYSLOG_NG_CORE_SRC_DIR)/InternalMessageSender.java \
-    $(SYSLOG_NG_CORE_SRC_DIR)/SyslogNgClassLoader.java \
-    $(SYSLOG_NG_CORE_SRC_DIR)/LogMessage.java \
-    $(SYSLOG_NG_CORE_SRC_DIR)/LogTemplate.java \
-    $(SYSLOG_NG_CORE_SRC_DIR)/LogPipe.java \
-    $(SYSLOG_NG_CORE_SRC_DIR)/LogDestination.java \
-    $(SYSLOG_NG_CORE_SRC_DIR)/TextLogDestination.java \
-    $(SYSLOG_NG_CORE_SRC_DIR)/StructuredLogDestination.java \
-    $(SYSLOG_NG_CORE_SRC_DIR)/DummyTextDestination.java \
-    $(SYSLOG_NG_CORE_SRC_DIR)/DummyStructuredDestination.java
+    InternalMessageSender.java \
+    SyslogNgClassLoader.java \
+    LogMessage.java \
+    LogTemplate.java \
+    LogPipe.java \
+    LogDestination.java \
+    TextLogDestination.java \
+    StructuredLogDestination.java \
+    DummyTextDestination.java \
+    DummyStructuredDestination.java
 
 JAVA_HEADER_FILES = \
    $(JAVA_BUILDDIR)/org_syslog_ng_LogMessage.h \
@@ -122,18 +121,7 @@ JAVA_HEADER_FILES = \
    $(JAVA_BUILDDIR)/org_syslog_ng_LogTemplate.h \
    $(JAVA_BUILDDIR)/org_syslog_ng_InternalMessageSender.h
 
-JAVA_CLASS_FILES = \
-   $(SYSLOG_NG_CORE_PACKAGE_DIR)/InternalMessageSender.class \
-   $(SYSLOG_NG_CORE_PACKAGE_DIR)/SyslogNgClassLoader.class \
-   $(SYSLOG_NG_CORE_PACKAGE_DIR)/LogMessage.class \
-   $(SYSLOG_NG_CORE_PACKAGE_DIR)/LogTemplate.class \
-   $(SYSLOG_NG_CORE_PACKAGE_DIR)/LogPipe.class \
-   $(SYSLOG_NG_CORE_PACKAGE_DIR)/LogDestination.class \
-   $(SYSLOG_NG_CORE_PACKAGE_DIR)/TextLogDestination.class \
-   $(SYSLOG_NG_CORE_PACKAGE_DIR)/StructuredLogDestination.class \
-   $(SYSLOG_NG_CORE_PACKAGE_DIR)/DummyTextDestination.class \
-   $(SYSLOG_NG_CORE_PACKAGE_DIR)/DummyStructuredDestination.class
-
+JAVA_CLASS_FILES = $(patsubst %.java, $(SYSLOG_NG_CORE_PACKAGE_DIR)/%.class, $(JAVA_FILES))
 endif
 
 BUILT_SOURCES += \
@@ -145,7 +133,7 @@ EXTRA_DIST += \
     modules/java/native/java-grammar.ym \
     modules/java/CMakeLists.txt	\
     modules/java/tools/syslog-ng.conf.example	\
-    $(JAVA_FILES)
+    $(patsubst %, $(SYSLOG_NG_CORE_SRC_DIR)/%, $(JAVA_FILES))
 
 if ENABLE_JAVA
 

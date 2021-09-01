@@ -25,8 +25,12 @@
 #include "python-logmsg.h"
 #include "python-helpers.h"
 #include "logthrsource/logthrsourcedrv.h"
+#include "thread-utils.h"
 #include "str-utils.h"
 #include "string-list.h"
+#include "python-persist.h"
+
+#include <structmember.h>
 
 typedef struct _PythonSourceDriver PythonSourceDriver;
 
@@ -37,6 +41,7 @@ struct _PythonSourceDriver
   gchar *class;
   GList *loaders;
   GHashTable *options;
+  ThreadId thread_id;
 
   void (*post_message)(PythonSourceDriver *self, LogMessage *msg);
 
@@ -48,6 +53,7 @@ struct _PythonSourceDriver
     PyObject *request_exit_method;
     PyObject *suspend_method;
     PyObject *wakeup_method;
+    PyObject *generate_persist_name;
   } py;
 };
 
@@ -55,10 +61,12 @@ typedef struct _PyLogSource
 {
   PyObject_HEAD
   PythonSourceDriver *driver;
+  gchar *persist_name;
 } PyLogSource;
 
 static PyTypeObject py_log_source_type;
 
+static const gchar *python_source_format_persist_name(const LogPipe *s);
 
 void
 python_sd_set_class(LogDriver *s, gchar *filename)
@@ -90,14 +98,16 @@ static const gchar *
 python_sd_format_stats_instance(LogThreadedSourceDriver *s)
 {
   PythonSourceDriver *self = (PythonSourceDriver *) s;
-  static gchar persist_name[1024];
 
-  if (s->super.super.super.persist_name)
-    g_snprintf(persist_name, sizeof(persist_name), "python,%s", s->super.super.super.persist_name);
-  else
-    g_snprintf(persist_name, sizeof(persist_name), "python,%s", self->class);
+  PythonPersistMembers options =
+  {
+    .generate_persist_name_method = self->py.generate_persist_name,
+    .options = self->options,
+    .class = self->class,
+    .id = self->super.super.super.id
+  };
 
-  return persist_name;
+  return python_format_stats_instance((LogPipe *)s, "python", &options);
 }
 
 static void
@@ -164,12 +174,17 @@ _py_is_log_source(PyObject *obj)
 static void
 _py_free_bindings(PythonSourceDriver *self)
 {
+  PyLogSource *py_instance = (PyLogSource *) self->py.instance;
+  if (py_instance)
+    g_free(py_instance->persist_name);
+
   Py_CLEAR(self->py.class);
   Py_CLEAR(self->py.instance);
   Py_CLEAR(self->py.run_method);
   Py_CLEAR(self->py.request_exit_method);
   Py_CLEAR(self->py.suspend_method);
   Py_CLEAR(self->py.wakeup_method);
+  Py_CLEAR(self->py.generate_persist_name);
 }
 
 static gboolean
@@ -275,11 +290,30 @@ _py_lookup_suspend_and_wakeup_methods(PythonSourceDriver *self)
 }
 
 static gboolean
+_py_lookup_generate_persist_name_method(PythonSourceDriver *self)
+{
+  self->py.generate_persist_name = _py_get_attr_or_null(self->py.instance, "generate_persist_name");
+  return TRUE;
+}
+
+static gboolean
+_py_set_persist_name(PythonSourceDriver *self)
+{
+  const gchar *persist_name = python_source_format_persist_name(&self->super.super.super.super);
+  PyLogSource *py_instance = (PyLogSource *) self->py.instance;
+  py_instance->persist_name = g_strdup(persist_name);
+
+  return TRUE;
+}
+
+static gboolean
 _py_init_methods(PythonSourceDriver *self)
 {
   return _py_lookup_run_method(self)
          && _py_lookup_request_exit_method(self)
-         && _py_lookup_suspend_and_wakeup_methods(self);
+         && _py_lookup_suspend_and_wakeup_methods(self)
+         && _py_lookup_generate_persist_name_method(self)
+         && _py_set_persist_name(self);
 }
 
 static gboolean
@@ -410,12 +444,6 @@ _py_sd_init(PythonSourceDriver *self)
   if (!_py_init_bindings(self))
     goto error;
 
-  if (self->py.suspend_method && self->py.wakeup_method)
-    {
-      self->post_message = _post_message_non_blocking;
-      log_threaded_source_set_wakeup_func(&self->super, python_sd_wakeup);
-    }
-
   if (!_py_init_object(self))
     goto error;
 
@@ -434,6 +462,20 @@ static PyObject *
 py_log_source_post(PyObject *s, PyObject *args, PyObject *kwrds)
 {
   PyLogSource *self = (PyLogSource *) s;
+
+  if (self->driver->thread_id != get_thread_id())
+    {
+      /*
+         Message posting must happen in a syslog-ng thread that was
+         initialized by main_loop_call_thread_init(), which is not
+         exposed to python. Hence posting from a python thread can
+         crash syslog-ng.
+      */
+
+      PyErr_Format(PyExc_RuntimeError, "post_message must be called from main thread");
+      return NULL;
+    }
+
   PythonSourceDriver *sd = self->driver;
 
   PyLogMessage *pymsg;
@@ -467,6 +509,7 @@ python_sd_run(LogThreadedSourceDriver *s)
 {
   PythonSourceDriver *self = (PythonSourceDriver *) s;
 
+  self->thread_id = get_thread_id();
   PyGILState_STATE gstate = PyGILState_Ensure();
   _py_invoke_run(self);
   PyGILState_Release(gstate);
@@ -480,6 +523,22 @@ python_sd_request_exit(LogThreadedSourceDriver *s)
   PyGILState_STATE gstate = PyGILState_Ensure();
   _py_invoke_request_exit(self);
   PyGILState_Release(gstate);
+}
+
+static const gchar *
+python_source_format_persist_name(const LogPipe *s)
+{
+  const PythonSourceDriver *self = (const PythonSourceDriver *)s;
+
+  PythonPersistMembers options =
+  {
+    .generate_persist_name_method = self->py.generate_persist_name,
+    .options = self->options,
+    .class = self->class,
+    .id = self->super.super.super.id
+  };
+
+  return python_format_persist_name(s, "python-source", &options);
 }
 
 static gboolean
@@ -501,7 +560,20 @@ python_sd_init(LogPipe *s)
               evt_tag_str("driver", self->super.super.super.id),
               evt_tag_str("class", self->class));
 
-  return log_threaded_source_driver_init_method(s);
+  gboolean retval = log_threaded_source_driver_init_method(s);
+  if (!retval)
+    return FALSE;
+
+  log_threaded_source_driver_set_worker_request_exit_func(&self->super, python_sd_request_exit);
+  log_threaded_source_driver_set_worker_run_func(&self->super, python_sd_run);
+
+  if (self->py.suspend_method && self->py.wakeup_method)
+    {
+      self->post_message = _post_message_non_blocking;
+      log_threaded_source_set_wakeup_func(&self->super, python_sd_wakeup);
+    }
+
+  return TRUE;
 }
 
 static gboolean
@@ -541,13 +613,11 @@ python_sd_new(GlobalConfig *cfg)
   self->super.super.super.super.init = python_sd_init;
   self->super.super.super.super.deinit = python_sd_deinit;
   self->super.super.super.super.free_fn = python_sd_free;
+  self->super.super.super.super.generate_persist_name = python_source_format_persist_name;
 
   self->super.format_stats_instance = python_sd_format_stats_instance;
   self->super.worker_options.super.stats_level = STATS_LEVEL0;
-  self->super.worker_options.super.stats_source = SCS_PYTHON;
-
-  log_threaded_source_driver_set_worker_request_exit_func(&self->super, python_sd_request_exit);
-  log_threaded_source_driver_set_worker_run_func(&self->super, python_sd_run);
+  self->super.worker_options.super.stats_source = stats_register_type("python");
 
   self->options = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
   self->post_message = _post_message_blocking;
@@ -562,16 +632,23 @@ static PyMethodDef py_log_source_methods[] =
   {NULL}
 };
 
+static PyMemberDef py_log_source_members[] =
+{
+  { "persist_name", T_STRING, offsetof(PyLogSource, persist_name), READONLY },
+  {NULL}
+};
+
 static PyTypeObject py_log_source_type =
 {
   PyVarObject_HEAD_INIT(&PyType_Type, 0)
   .tp_name = "LogSource",
   .tp_basicsize = sizeof(PyLogSource),
-  .tp_dealloc = (destructor) PyObject_Del,
+  .tp_dealloc = py_slng_generic_dealloc,
   .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
   .tp_doc = "The LogSource class is a base class for custom Python sources.",
   .tp_new = PyType_GenericNew,
   .tp_methods = py_log_source_methods,
+  .tp_members = py_log_source_members,
   0,
 };
 
@@ -579,5 +656,5 @@ void
 py_log_source_init(void)
 {
   PyType_Ready(&py_log_source_type);
-  PyModule_AddObject(PyImport_AddModule("syslogng"), "LogSource", (PyObject *) &py_log_source_type);
+  PyModule_AddObject(PyImport_AddModule("_syslogng"), "LogSource", (PyObject *) &py_log_source_type);
 }

@@ -33,11 +33,13 @@
 
 #include "msg_parse_lib.h"
 
+MsgFormatOptions parse_options;
+
 void
 stardate_assert(const gchar *msg_str, const int precision, const gchar *expected)
 {
 
-  LogMessage *logmsg = log_msg_new(msg_str, strlen(msg_str), NULL, &parse_options);
+  LogMessage *logmsg = log_msg_new(msg_str, strlen(msg_str), &parse_options);
 
   char *template_command;
   int ret_val;
@@ -58,6 +60,7 @@ void
 setup(void)
 {
   app_startup();
+  init_parse_options_and_load_syslogformat(&parse_options);
   init_template_tests();
   cfg_load_module(configuration, "stardate");
 }
@@ -66,6 +69,7 @@ void
 teardown(void)
 {
   deinit_template_tests();
+  deinit_syslogformat_module();
   app_shutdown();
 }
 

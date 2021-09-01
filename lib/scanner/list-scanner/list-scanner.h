@@ -39,10 +39,12 @@ struct _ListScanner
 };
 
 void list_scanner_input_va(ListScanner *self, const gchar *arg1, ...);
-void list_scanner_input_gstring_array(ListScanner *self, gint argc, GString *argv[]);
+void list_scanner_input_gstring_array(ListScanner *self, gint argc, GString *const *argv);
+void list_scanner_input_string(ListScanner *self, const gchar *value, gssize value_len);
 gboolean list_scanner_scan_next(ListScanner *self);
+void list_scanner_skip_n(ListScanner *self, gint n);
 const gchar *list_scanner_get_current_value(ListScanner *self);
-ListScanner *list_scanner_clone(ListScanner *self);
+gsize list_scanner_get_current_value_len(ListScanner *self);
 void list_scanner_free_method(ListScanner *self);
 void list_scanner_init(ListScanner *self);
 void list_scanner_deinit(ListScanner *self);

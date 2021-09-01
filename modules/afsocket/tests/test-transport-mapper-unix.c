@@ -25,9 +25,12 @@
 #include "stats/stats-registry.h"
 #include "transport-mapper-lib.h"
 
-static void
-test_transport_mapper_unix_stream_apply_transport_sets_defaults(void)
+guint SCS_UNIX_STREAM;
+guint SCS_UNIX_DGRAM;
+
+Test(transport_mapper_unix, test_transport_mapper_unix_stream_apply_transport_sets_defaults)
 {
+  transport_mapper = transport_mapper_unix_stream_new();
   assert_transport_mapper_apply(transport_mapper, NULL);
   assert_transport_mapper_transport(transport_mapper, "unix-stream");
   assert_transport_mapper_address_family(transport_mapper, AF_UNIX);
@@ -37,9 +40,9 @@ test_transport_mapper_unix_stream_apply_transport_sets_defaults(void)
   assert_transport_mapper_stats_source(transport_mapper, SCS_UNIX_STREAM);
 }
 
-static void
-test_transport_mapper_unix_dgram_apply_transport_sets_defaults(void)
+Test(transport_mapper_unix, test_transport_mapper_unix_dgram_apply_transport_sets_defaults)
 {
+  transport_mapper = transport_mapper_unix_dgram_new();
   assert_transport_mapper_apply(transport_mapper, NULL);
   assert_transport_mapper_transport(transport_mapper, "unix-dgram");
   assert_transport_mapper_address_family(transport_mapper, AF_UNIX);
@@ -50,17 +53,18 @@ test_transport_mapper_unix_dgram_apply_transport_sets_defaults(void)
 }
 
 static void
-test_transport_mapper_unix(void)
-{
-  TRANSPORT_MAPPER_TESTCASE(unix_stream, test_transport_mapper_unix_stream_apply_transport_sets_defaults);
-  TRANSPORT_MAPPER_TESTCASE(unix_dgram, test_transport_mapper_unix_dgram_apply_transport_sets_defaults);
-}
-
-int
-main(int argc, char *argv[])
+setup(void)
 {
   app_startup();
-  test_transport_mapper_unix();
-  app_shutdown();
-  return 0;
+  SCS_UNIX_STREAM = stats_register_type("unix-stream");
+  SCS_UNIX_DGRAM = stats_register_type("unix-dgram");
 }
+
+static void
+teardown(void)
+{
+  transport_mapper_free(transport_mapper);
+  app_shutdown();
+}
+
+TestSuite(transport_mapper_unix, .init = setup, .fini = teardown);

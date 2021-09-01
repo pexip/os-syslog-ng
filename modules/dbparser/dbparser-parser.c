@@ -39,6 +39,7 @@ static CfgLexerKeyword dbparser_keywords[] =
   { "inject_mode",        KW_INJECT_MODE },
   { "drop_unmatched",     KW_DROP_UNMATCHED },
   { "key",                KW_KEY },
+  { "sort_key",           KW_SORT_KEY },
   { "scope",              KW_SCOPE },
   { "timeout",            KW_TIMEOUT },
   { "aggregate",          KW_AGGREGATE },
@@ -47,6 +48,8 @@ static CfgLexerKeyword dbparser_keywords[] =
   { "having",             KW_HAVING },
   { "trigger",            KW_TRIGGER },
   { "value",              KW_VALUE },
+  { "program_template",   KW_PROGRAM_TEMPLATE },
+  { "message_template",   KW_MESSAGE_TEMPLATE },
   { NULL }
 };
 

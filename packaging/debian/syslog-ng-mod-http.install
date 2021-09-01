@@ -1,3 +1,2 @@
 usr/lib/syslog-ng/*/libhttp.so
-usr/share/syslog-ng/include/scl/slack/*
-usr/share/syslog-ng/include/scl/telegram/*
+usr/lib/syslog-ng/*/libazure-auth-header.so

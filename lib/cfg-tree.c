@@ -621,6 +621,7 @@ cfg_tree_new_pipe(CfgTree *self, LogExprNode *related_expr)
   LogPipe *pipe = log_pipe_new(self->cfg);
   pipe->expr_node = related_expr;
   g_ptr_array_add(self->initialized_pipes, pipe);
+  log_pipe_add_info(pipe, "cfg_tree_pipe");
   return pipe;
 }
 
@@ -809,6 +810,7 @@ cfg_tree_compile_reference(CfgTree *self, LogExprNode *node,
           if (!sub_pipe_tail->pipe_next)
             {
               mpx = cfg_tree_new_mpx(self, referenced_node);
+              log_pipe_add_info(&mpx->super, "mpx(source)");
               log_pipe_append(sub_pipe_tail, &mpx->super);
             }
           else
@@ -849,6 +851,7 @@ cfg_tree_compile_reference(CfgTree *self, LogExprNode *node,
       */
 
       mpx = cfg_tree_new_mpx(self, node);
+      log_pipe_add_info(&mpx->super, "mpx(destination-reference)");
 
       if (sub_pipe_head)
         {
@@ -1049,6 +1052,31 @@ cfg_tree_compile_sequence(CfgTree *self, LogExprNode *node,
       node_properties_propagated = TRUE;
     }
 
+  if (node->content == ENC_DESTINATION)
+    {
+      /* We want to leave pipe-next available to use for
+         destinations. Config graph uses pipe-next to pass messages forward
+         in a sequence layout. But pipe-next might be overridden (for
+         example network destination with LogWriter) hence disjointing
+         the config graph.
+
+         This patch links destinations in T form, instead of single link.
+
+         * (endpoint of sequence)
+         |
+         V
+         * (multiplexer) -(next-hop)-> destination -(pipe-next*)-> logwriter
+         |
+         (pipe-next)
+         |
+         V
+         * (rest of the sequence)
+         That way destinations are free to use the pipe-next*
+      */
+
+      last_pipe = first_pipe;
+    }
+
   *outer_pipe_tail = last_pipe;
   *outer_pipe_head = first_pipe;
   return TRUE;
@@ -1108,6 +1136,7 @@ cfg_tree_compile_junction(CfgTree *self,
           if (!fork_mpx)
             {
               fork_mpx = cfg_tree_new_mpx(self, node);
+              log_pipe_add_info(&fork_mpx->super, "mpx(junction)");
               *outer_pipe_head = &fork_mpx->super;
             }
           log_multiplexer_add_next_hop(fork_mpx, sub_pipe_head);
@@ -1273,9 +1302,7 @@ cfg_tree_get_objects(CfgTree *self)
 gboolean
 cfg_tree_add_template(CfgTree *self, LogTemplate *template)
 {
-  gboolean res = TRUE;
-
-  res = (g_hash_table_lookup(self->templates, template->name) == NULL);
+  gboolean res = (g_hash_table_lookup(self->templates, template->name) == NULL);
   g_hash_table_replace(self->templates, template->name, template);
   return res;
 }

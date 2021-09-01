@@ -83,17 +83,17 @@ ParameterizedTest(StringHintPair *string_value_pair, type_hints, test_type_hint_
   TypeHint type_hint;
   GError *error = NULL;
 
-  cr_assert_eq(type_hint_parse(string_value_pair->string, &type_hint, &error),TRUE,
+  cr_assert_eq(type_hint_parse(string_value_pair->string, &type_hint, &error), TRUE,
                "Parsing \"%s\" as type hint failed", string_value_pair->string);
   cr_assert_eq(type_hint, string_value_pair->value);
   cr_assert_null(error);
 }
 
-Test(type_hints,test_invalid_type_hint_parse)
+Test(type_hints, test_invalid_type_hint_parse)
 {
   TypeHint t;
   GError *error = NULL;
-  cr_assert_eq(type_hint_parse("invalid-hint", &t, &error),FALSE,
+  cr_assert_eq(type_hint_parse("invalid-hint", &t, &error), FALSE,
                "Parsing an invalid hint results in an error.");
 
   cr_assert_not_null(error);
@@ -109,11 +109,11 @@ ParameterizedTestParameters(type_hints, test_bool_cast)
     {"True",  TRUE},
     {"true",  TRUE},
     {"1",     TRUE},
-    {"totaly true",TRUE},
+    {"totaly true", TRUE},
     {"False", FALSE},
     {"false", FALSE},
     {"0",     FALSE},
-    {"fatally false",FALSE}
+    {"fatally false", FALSE}
   };
 
   return cr_make_param_array(StringBoolPair, string_value_pairs,
@@ -131,7 +131,7 @@ ParameterizedTest(StringBoolPair *string_value_pair, type_hints, test_bool_cast)
   cr_assert_null(error);
 }
 
-Test(type_hints,test_invalid_bool_cast)
+Test(type_hints, test_invalid_bool_cast)
 {
   GError *error = NULL;
   gboolean value;
@@ -146,18 +146,26 @@ Test(type_hints,test_invalid_bool_cast)
   g_clear_error(&error);
 }
 
-Test(type_hints,test_int32_cast)
+Test(type_hints, test_int32_cast)
 {
   GError *error = NULL;
   gint32 value;
 
-  cr_assert_eq(type_cast_to_int32("12345", &value, &error), TRUE, "Type cast of \"12345\" to gint32 failed");
-  cr_assert_eq(value,12345);
+  cr_assert(type_cast_to_int32("12345", &value, &error), "Type cast of \"12345\" to gint32 failed");
+  cr_assert_eq(value, 12345);
   cr_assert_null(error);
 
   /* test for invalid string */
-  cr_assert_eq(type_cast_to_int32("12345a", &value, &error), FALSE,
-               "Type cast of invalid string to gint32 should be failed");
+  cr_assert_not(type_cast_to_int32("12345a", &value, &error),
+                "Type cast of invalid string to gint32 should be failed");
+  cr_assert_not_null(error);
+  cr_assert_eq(error->domain, TYPE_HINTING_ERROR);
+  cr_assert_eq(error->code, TYPE_HINTING_INVALID_CAST);
+  g_clear_error(&error);
+
+  /* empty string */
+  cr_assert_not(type_cast_to_int32("", &value, &error),
+                "Type cast of empty string to gint32 should be failed");
   cr_assert_not_null(error);
   cr_assert_eq(error->domain, TYPE_HINTING_ERROR);
   cr_assert_eq(error->code, TYPE_HINTING_INVALID_CAST);
@@ -165,22 +173,29 @@ Test(type_hints,test_int32_cast)
   g_clear_error(&error);
 }
 
-Test(type_hints,test_int64_cast)
+Test(type_hints, test_int64_cast)
 {
   GError *error = NULL;
   gint64 value;
 
-  cr_assert_eq(type_cast_to_int64("12345", &value, &error), TRUE, "Type cast of \"12345\" to gint64 failed");
-  cr_assert_eq(value,12345);
+  cr_assert(type_cast_to_int64("12345", &value, &error), "Type cast of \"12345\" to gint64 failed");
+  cr_assert_eq(value, 12345);
   cr_assert_null(error);
 
   /* test for invalid string */
-  cr_assert_eq(type_cast_to_int64("12345a", &value, &error), FALSE,
-               "Type cast of invalid string to gint64 should be failed");
+  cr_assert_not(type_cast_to_int64("12345a", &value, &error),
+                "Type cast of invalid string to gint64 should be failed");
   cr_assert_not_null(error);
   cr_assert_eq(error->domain, TYPE_HINTING_ERROR);
   cr_assert_eq(error->code, TYPE_HINTING_INVALID_CAST);
+  g_clear_error(&error);
 
+  /* empty string */
+  cr_assert_not(type_cast_to_int64("", &value, &error),
+                "Type cast of empty string to gint64 should be failed");
+  cr_assert_not_null(error);
+  cr_assert_eq(error->domain, TYPE_HINTING_ERROR);
+  cr_assert_eq(error->code, TYPE_HINTING_INVALID_CAST);
   g_clear_error(&error);
 }
 
@@ -189,14 +204,30 @@ ParameterizedTestParameters(type_hints, test_double_cast)
   static StringDoublePair string_value_pairs[] =
   {
 #ifdef INFINITY
-    {"INF",INFINITY},
+    {"INF", (gdouble)INFINITY},
 #endif
-    {"1.0",1.0},
-    {"1e-100000000",0.0}
+    {"1.0", 1.0},
+    {"1e-100000000", 0.0}
   };
 
   return cr_make_param_array(StringDoublePair, string_value_pairs,
                              sizeof(string_value_pairs) / sizeof(string_value_pairs[0]));
+}
+
+static void
+cr_assert_gdouble_eq(gdouble a, gdouble b)
+{
+  const gint is_a_inf = isinf((long double)a);
+  const gint is_b_inf = isinf((long double)a);
+
+  cr_assert_eq(is_a_inf, is_b_inf);
+  if (is_a_inf && is_b_inf)
+    {
+      cr_assert(TRUE);
+      return;
+    }
+
+  cr_assert(fabs(a-b) < G_MINDOUBLE);
 }
 
 ParameterizedTest(StringDoublePair *string_value_pair, type_hints, test_double_cast)
@@ -204,33 +235,34 @@ ParameterizedTest(StringDoublePair *string_value_pair, type_hints, test_double_c
   gdouble value;
   GError *error = NULL;
 
-  cr_assert_eq(type_cast_to_double(string_value_pair->string, &value, &error), TRUE,
-               "Type cast of \"%s\" to double failed", string_value_pair->string);
-  cr_assert_eq(value, string_value_pair->value);
+  cr_assert(type_cast_to_double(string_value_pair->string, &value, &error),
+            "Type cast of \"%s\" to double failed", string_value_pair->string);
+
+  cr_assert_gdouble_eq(value, string_value_pair->value);
   cr_assert_null(error);
 }
 
 ParameterizedTestParameters(type_hints, test_invalid_double_cast)
 {
-  static gchar *string_list[] =
+  static StringDoublePair string_list[] =
   {
-    "2.0bad",
-    "bad",
-    "",
-    "1e1000000",
-    "-1e1000000"
+    {"2.0bad", },
+    {"bad", },
+    {"", },
+    {"1e1000000", },
+    {"-1e1000000" },
   };
 
-  return cr_make_param_array(gchar *, string_list, sizeof(string_list) / sizeof(string_list[0]));
+  return cr_make_param_array(StringDoublePair, string_list, sizeof(string_list) / sizeof(string_list[0]));
 }
 
-ParameterizedTest(gchar *string, type_hints, test_invalid_double_cast)
+ParameterizedTest(StringDoublePair *string_value_pair, type_hints, test_invalid_double_cast)
 {
   gdouble value;
   GError *error = NULL;
 
-  cr_assert_eq(type_cast_to_double(string, &value, &error), FALSE,
-               "Type cast of invalid string (%s) to double should be failed",string);
+  cr_assert_not(type_cast_to_double(string_value_pair->string, &value, &error),
+                "Type cast of invalid string (%s) to double should be failed", string_value_pair->string);
   cr_assert_not_null(error);
   cr_assert_eq(error->domain, TYPE_HINTING_ERROR);
   cr_assert_eq(error->code, TYPE_HINTING_INVALID_CAST);
@@ -243,8 +275,8 @@ ParameterizedTestParameters(type_hints, test_datetime_cast)
   {
     {"12345",   12345000},
     {"12345.5", 12345500},
-    {"12345.54",12345540},
-    {"12345.543",12345543},
+    {"12345.54", 12345540},
+    {"12345.543", 12345543},
     {"12345.54321", 12345543}
   };
 
