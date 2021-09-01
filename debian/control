@@ -40,7 +40,7 @@ Standards-Version: 4.3.0
 Homepage: https://www.syslog-ng.com/
 Vcs-Git: https://github.com/gcsideal/syslog-ng-debian.git
 Vcs-Browser: https://github.com/gcsideal/syslog-ng-debian
-XS-Pexip-Upstream: http://ftp.debian.org/debian/ buster
+XS-Pexip-Upstream: http://ftp.debian.org/debian/ bullseye
 
 Package: syslog-ng
 Architecture: all
