@@ -52,6 +52,7 @@ gboolean
 transport_mapper_open_socket(TransportMapper *self,
                              SocketOptions *socket_options,
                              GSockAddr *bind_addr,
+                             GSockAddr *peer_addr,
                              AFSocketDirection dir,
                              int *fd)
 {
@@ -68,7 +69,7 @@ transport_mapper_open_socket(TransportMapper *self,
   g_fd_set_nonblock(sock, TRUE);
   g_fd_set_cloexec(sock, TRUE);
 
-  if (!socket_options_setup_socket(socket_options, sock, bind_addr, dir))
+  if (!socket_options_setup_socket(socket_options, sock, peer_addr, dir))
     goto error_close;
 
   if (!transport_mapper_privileged_bind(sock, bind_addr))
@@ -95,15 +96,6 @@ gboolean
 transport_mapper_apply_transport_method(TransportMapper *self, GlobalConfig *cfg)
 {
   return TRUE;
-}
-
-LogTransport *
-transport_mapper_construct_log_transport_method(TransportMapper *self, gint fd)
-{
-  if (self->sock_type == SOCK_DGRAM)
-    return log_transport_dgram_socket_new(fd);
-  else
-    return log_transport_stream_socket_new(fd);
 }
 
 void
@@ -133,7 +125,6 @@ transport_mapper_init_instance(TransportMapper *self, const gchar *transport)
   self->sock_type = -1;
   self->free_fn = transport_mapper_free_method;
   self->apply_transport = transport_mapper_apply_transport_method;
-  self->construct_log_transport = transport_mapper_construct_log_transport_method;
 }
 
 void

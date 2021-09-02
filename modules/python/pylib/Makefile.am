@@ -50,7 +50,7 @@ INSTALL_EXEC_HOOKS += install-pylib
 UNINSTALL_HOOKS += uninstall-pylib
 CLEAN_HOOKS += clean-pylib
 
-PYSETUP_OPTIONS ?= --root="$(PYTHON_ROOT)" --prefix="$(prefix)"
+PYSETUP_OPTIONS ?= --root="$(PYTHON_ROOT)" --install-lib="$(python_moduledir)"
 
 install-pylib:
 	(cd $(PYLIB_SRCDIR) && $(PYTHON) setup.py \
@@ -66,14 +66,25 @@ clean-pylib:
 
 python-checks: python-unit python-pep8 python-pylint
 
+if NOSETESTS
 python-unit:
-	nosetests $(PYLIB_SRCDIR)/syslogng
+	@NOSETESTS@ $(PYLIB_SRCDIR)/syslogng
+else
+python-unit:
+	$(error "missing nosetests")
+endif
 
 python-pep8:
 	pep8 --ignore=E501 $(PYLIB_SRCDIR)/syslogng
 
+if PYLINT
 python-pylint:
-	pylint -r n --rcfile=$(PYLIB_SRCDIR)/pylintrc $(PYLIB_SRCDIR)/syslogng
+	@PYLINT@ -r n --rcfile=$(PYLIB_SRCDIR)/pylintrc $(PYLIB_SRCDIR)/syslogng
+else
+python-pylint:
+	$(error "missing pylint")
+endif
+
 
 modules_python_pylib_tests_TESTS = modules/python/pylib/test_pylib.sh
 check_SCRIPTS += $(modules_python_pylib_tests_TESTS)

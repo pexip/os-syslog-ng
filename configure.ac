@@ -32,7 +32,7 @@ dnl BINARY_BRANCH      - the value is added to all source/binary packages
 dnl SOURCE_REVISION    - Revision of the source-tree, will added to the version string
 dnl
 
-AC_INIT([syslog-ng], m4_esyscmd([tr -d '\n' < VERSION]))
+AC_INIT([syslog-ng], m4_esyscmd_s([scripts/version.sh]))
 AC_CONFIG_SRCDIR([syslog-ng/main.c])
 AC_CONFIG_MACRO_DIR([m4])
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
@@ -40,10 +40,11 @@ m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 dnl ***************************************************************************
 dnl dependencies
 
-GLIB_MIN_VERSION="2.26.1"
+GLIB_MIN_VERSION="2.28"
 OPENSSL_MIN_VERSION="0.9.8"
 LIBDBI_MIN_VERSION="0.9.0"
 LIBRABBITMQ_MIN_VERSION="0.5.3"
+LIBRDKAFKA_MIN_VERSION="1.0.0"
 IVYKIS_MIN_VERSION="0.36.1"
 IVYKIS_UPDATED_VERSION="0.39"
 JSON_C_MIN_VERSION="0.9"
@@ -147,6 +148,11 @@ AC_ARG_WITH(libnet,
    ,
    [with_libnet=""])
 
+AC_ARG_WITH(net-snmp,
+   [  --with-net-snmp=path      use path to net-snmp-config script],
+   ,
+   [with_net_snmp=""])
+
 AC_ARG_WITH(pidfile-dir,
    [  --with-pidfile-dir=path   Use path as the directory for storing pidfiles],
    pidfiledir=$with_pidfile_dir)
@@ -154,6 +160,10 @@ AC_ARG_WITH(pidfile-dir,
 AC_ARG_WITH(module-dir,
    [  --with-module-dir=path   Use path as the directory to install modules into],
    moduledir=$with_module_dir)
+
+AC_ARG_WITH(loggen-plugin-dir,
+   [  --with-loggen-plugin-dir=path   Use path as the directory to install loggen plugins into],
+   loggenplugindir=$with_loggen_plugin_dir)
 
 AC_ARG_WITH(module-path,
    [  --with-module-path=path   Use path as the list of ':' separated directories looked up when searching for modules],
@@ -179,6 +189,9 @@ AC_ARG_ENABLE(forced_server_mode,
 
 AC_ARG_ENABLE(debug,
               [  --enable-debug      Enable debugging code.],, enable_debug="no")
+
+AC_ARG_ENABLE(force_gnu99,
+              [  --enable-force-gnu99      Enforce C99 with gnu extensions.],, force_gnu99="no")
 
 AC_ARG_ENABLE(extra-warnings,
               [  --enable-extra-warnings      Enable extra compiler warnings (recommended).],, enable_extra_warnings="no")
@@ -236,11 +249,6 @@ AC_ARG_ENABLE(mongodb,
 	      [  --enable-mongodb        Enable mongodb destination (default: auto)]
               ,,enable_mongodb="auto")
 
-AC_ARG_ENABLE(legacy-mongodb-options,
-              [  --enable-legacy-mongodb-options=[yes/no]
-                                         Support libmongo-client non-URI MongoDB options. (default: yes)]
-              ,,enable_legacy_mongodb_options="yes")
-
 AC_ARG_WITH(jsonc,
               [  --with-jsonc=[system/internal/auto/no]
                                          Link against the system supplied or the built-in jsonc library or explicitly disable it. (default:auto)]
@@ -291,10 +299,6 @@ AC_ARG_ENABLE(systemd,
               [  --enable-systemd        Enable systemd support (default: auto)]
               ,,enable_systemd="auto")
 
-AC_ARG_ENABLE(geoip,
-              [  --enable-geoip          Enable GeoIP support (default: auto)]
-              ,,enable_geoip="auto")
-
 AC_ARG_ENABLE(geoip2,
               [  --enable-geoip2          Enable GeoIP2 support (default: auto)]
               ,,enable_geoip2="auto")
@@ -313,19 +317,34 @@ AC_ARG_WITH(systemd-journal,
               ,,with_systemd_journal="auto")
 
 AC_ARG_ENABLE(python,
-              [  --disable-python       Disable python destination]
+              [  --disable-python       Disable Python module]
               ,,enable_python="auto")
+
+AC_ARG_ENABLE(kafka,
+              [  --enable-kafka         Enable rdkafka support]
+              ,,enable_kafka="auto")
 
 AC_ARG_WITH(python,
               [  --with-python=VERSION    Build with a specific version of python]
               ,,with_python="auto")
 
-AC_ARG_WITH(docbook-dir,
-            AC_HELP_STRING([--with-docbook-dir=DIR],
-                           [compiling manpages using docbook in the specified path, if not set online version will be used from http://docbook.sourceforge.net]),
-            [ XSL_STYLESHEET=$with_docbook_dir ],
-            [ XSL_STYLESHEET=http://docbook.sourceforge.net/release/xsl/current/manpages/docbook.xsl ]
-            )
+AC_ARG_WITH(python3-home,
+              [  --with-python3-home=path Use path as a hard-coded Python home directory that can not be overwritten by the PYTHONHOME environment variable],
+              python3_home_dir=$with_python3_home)
+
+AC_ARG_WITH(python2-home,
+              [  --with-python2-home=path Use path as a hard-coded Python home directory that can not be overwritten by the PYTHONHOME environment variable],
+              python2_home_dir=$with_python2_home)
+
+AC_ARG_WITH(nosetests,
+              [  --with-nosetests=ABSOLUTE_PATH    Specify nosetests location])
+
+AC_ARG_WITH(pylint,
+              [  --with-pylint=ABSOLUTE_PATH    Specify pylint location])
+
+AC_ARG_WITH(docbook,
+            [  --with-docbook=FILE    Compiling manpages using docbook in the specified path, if not set, it will be searched on the system, or online version will be used from http://docbook.sourceforge.net/release/xsl/current/manpages/docbook.xsl]
+            ,,with_docbook="auto")
 
 AC_ARG_ENABLE(manpages, AC_HELP_STRING([ --enable-manpages], [ Enable generation of manpages (default: no)]), , [enable_manpages="no"; XSL_STYLESHEET=""])
 
@@ -337,6 +356,8 @@ AC_ARG_ENABLE(native,
               [  --enable-native        Enable native bindings (default: auto)]
               ,,enable_native="auto")
 
+AC_ARG_ENABLE(afsnmp, [ --enable-afsnmp Enable afsnmp module (default: auto)],, enable_afsnmp="auto")
+
 AC_ARG_ENABLE(all-modules,
               [  --enable-all-modules    Forcibly enable all modules. (default: auto)]
               ,,enable_all_modules="auto")
@@ -345,8 +366,8 @@ if test "x$enable_all_modules" != "xauto"; then
    state="$enable_all_modules"
 
    MODULES="spoof_source sun_streams sql pacct mongodb json amqp stomp \
-            redis systemd geoip geoip2 riemann ipv6 smtp native python java java_modules \
-            http"
+            redis systemd geoip2 riemann ipv6 smtp native python java java_modules \
+            http afsnmp kafka"
    for mod in ${MODULES}; do
        modstate=$(eval echo \$enable_${mod})
        if test "x$modstate" = "xauto"; then
@@ -387,13 +408,16 @@ AC_PROG_MAKE_SET
 PKG_PROG_PKG_CONFIG
 LT_INIT([dlopen disable-static])
 if test "x$with_python" = "xauto"; then
-  AM_PATH_PYTHON()
+  AM_PATH_PYTHON(,,[:])
 else
-  AM_PATH_PYTHON([$with_python])
+  AM_PATH_PYTHON([$with_python],,[:])
 fi
+
 if test "${PYTHON}" = ":"; then
-	AC_MSG_ERROR([Python interpreter is required])
+       AC_MSG_WARN([Python interpreter is missing.])
 fi
+
+AM_CONDITIONAL([HAVE_PYTHON_INTERPRETER], [test "$PYTHON" != :])
 
 dnl ***************************************************************************
 dnl Validate yacc
@@ -471,7 +495,6 @@ dnl ***************************************************************************
 dnl Set up CFLAGS
 
 
-
 dnl The rest of CFLAGS. We produce
 dnl -g/-O2/-pg/-fprofile-arcs/-ftest-coverage combinations, the rest is
 dnl supplied by Makefile.am
@@ -497,6 +520,12 @@ else
         enable_extra_warnings="no"
 fi
 CFLAGS_ADD="${CFLAGS_ADD} -pthread"
+
+dnl The current supported standard is C99 with gnu extensions
+
+if test "x$force_gnu99" = "xyes"; then
+	CFLAGS_ADD="${CFLAGS_ADD} -std=gnu99"
+fi
 
 dnl We are checking for the postive warning flag, as gcc handles the
 dnl -Wno-XXX version oddly, so if no other warnings are present, it is not
@@ -538,6 +567,8 @@ case "$ostype" in
 		;;
 	Darwin)
 		MODULE_LDFLAGS="-avoid-version -dylib"
+		LDFLAGS="$LDFLAGS -Wl,-flat_namespace"
+		CFLAGS="$CFLAGS -D__APPLE_USE_RFC_3542"
     ;;
 	OSF1)
 		CFLAGS="${CFLAGS} -D_XOPEN_SOURCE=500 -D_XOPEN_SOURCE_EXTENDED -D_OSF_SOURCE -D_POSIX_C_SOURCE"
@@ -624,6 +655,7 @@ dnl ***************************************************************************
 
 AC_HEADER_STDC
 AC_CHECK_HEADER(dmalloc.h)
+AC_CHECK_HEADER(dlfcn.h)
 AC_CHECK_HEADERS(strings.h	\
 	getopt.h		\
 	stropts.h		\
@@ -738,7 +770,7 @@ dnl Checks for libraries
 AC_CHECK_LIB(door, door_create, BASE_LIBS="$BASE_LIBS -ldoor")
 AC_CHECK_LIB(socket, socket, BASE_LIBS="$BASE_LIBS -lsocket")
 AC_CHECK_LIB(rt, nanosleep, BASE_LIBS="$BASE_LIBS -lrt")
-AC_CHECK_LIB(nsl, gethostbyname, BASE_LIBS="$BASE_LIBS -lnsl")
+AC_CHECK_FUNC(gethostbyname, [], AC_CHECK_LIB(nsl, gethostbyname, BASE_LIBS="$BASE_LIBS -lnsl"))
 AC_CHECK_LIB(regex, regexec, REGEX_LIBS="-lregex")
 AC_CHECK_LIB(resolv, res_init, RESOLV_LIBS="-lresolv")
 
@@ -748,7 +780,6 @@ AC_CHECK_FUNCS(strdup		\
 	strtoimax		\
 	inet_aton		\
 	inet_ntoa		\
-	getopt_long		\
 	getaddrinfo		\
 	getnameinfo		\
 	getutent		\
@@ -884,6 +915,8 @@ if test "$linking_mode" != "dynamic"; then
 	LIBS=$old_LIBS
 fi
 
+GLIB_CFLAGS="${GLIB_CFLAGS} -DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_28 -DGLIB_VERSION_MAX_ALLOWED=0x023C00"
+
 old_CPPFLAGS=$CPPFLAGS
 CPPFLAGS="$GLIB_CFLAGS"
 old_LDFLAGS=$LDFLAGS
@@ -891,7 +924,12 @@ LDFLAGS="$LDFLAGS $GLIB_LIBS"
 
 old_LIBS=$LIBS
 LIBS="$LIBS $GLIB_LIBS"
-AC_CHECK_FUNCS(g_list_copy_deep g_queue_free_full g_list_free_full)
+AC_CHECK_FUNCS(g_list_copy_deep \
+  g_queue_free_full \
+  g_list_free_full \
+  g_ptr_array_find_with_equal_func \
+  g_canonicalize_filename \
+  g_hash_table_contains)
 LIBS=$old_LIBS
 
 AC_CACHE_CHECK(sanity checking Glib headers,
@@ -918,24 +956,6 @@ fi
 
 if test "x$linking_mode" != "xdynamic" -a "x$blb_cv_static_glib" = "xno"; then
 	AC_MSG_ERROR([static GLib libraries not found (a file named libglib-2.0.a), either link GLib dynamically using the --enable-dynamic-linking or install a static GLib])
-fi
-
-dnl ***************************************************************************
-dnl geoip headers/libraries
-dnl ***************************************************************************
-if test "x$enable_geoip" = "xyes" || test "x$enable_geoip" = "xauto"; then
-        if test "x$GEOIP_LIBS" != "x"; then
-                AC_MSG_CHECKING([for GEOIP])
-                AC_MSG_RESULT([yes (GEOIP_LIBS set, will use that.)])
-                with_geoip="yes"
-        else
-                PKG_CHECK_MODULES(GEOIP, geoip, with_geoip="yes", with_geoip="no")
-        fi
-
-        if test "x$with_geoip" = "xno" && test "x$enable_geoip" = "xyes"; then
-                AC_MSG_ERROR([Could not find libgeoip, and geoip support was explicitly enabled.])
-        fi
-        enable_geoip="$with_geoip"
 fi
 
 dnl ***************************************************************************
@@ -1019,6 +1039,7 @@ AC_CHECK_DECLS([EVP_MD_CTX_reset], [], [], [[#include <openssl/evp.h>]])
 AC_CHECK_DECLS([ASN1_STRING_get0_data], [], [], [[#include <openssl/asn1.h>]])
 AC_CHECK_DECLS([DH_set0_pqg], [], [], [[#include <openssl/dh.h>]])
 AC_CHECK_DECLS([BN_get_rfc3526_prime_2048], [], [], [[#include <openssl/bn.h>]])
+AC_CHECK_DECLS([SSL_CTX_set_num_tickets],[], [], [[#include <openssl/ssl.h>]])
 
 CPPFLAGS="$CPPFLAGS_SAVE"
 
@@ -1048,6 +1069,10 @@ if test -n "$LIBNET_CONFIG" -a -x "$LIBNET_CONFIG"; then
         LIBNET_CFLAGS="`$LIBNET_CONFIG --defines`"
         LIBNET_LIBS="`$LIBNET_CONFIG --libs`"
         AC_MSG_RESULT(yes)
+dnl libnet-config does not provide the _DEFAULT_SOURCE define, that can cause warning during build
+dnl as upstream libnet-config does uses _DEFAULT_SOURCE this is just a fix till
+        LIBNET_CFLAGS="$LIBNET_CFLAGS -D_DEFAULT_SOURCE"
+
 else
         LIBNET_LIBS=
         AC_MSG_RESULT(no)
@@ -1075,6 +1100,47 @@ elif test "x$enable_spoof_source" = "xno"; then
 	enable_spoof_source=no
 else
   AC_MSG_ERROR([Invalid value ($enable_spoof_source) for enable-spoof-source])
+fi
+
+dnl ***************************************************************************
+dnl afsnmp module & net-snmp headers/libraries
+dnl ***************************************************************************
+AC_MSG_CHECKING(whether to enable snmp destination driver)
+
+if test "x$with_net_snmp" = "x"; then
+   NETSNMP_CONFIG="`which net-snmp-config`"
+else
+   NETSNMP_CONFIG="$with_net_snmp/net-snmp-config"
+fi
+
+if test "x$enable_afsnmp" = "xyes"; then
+   if test -n "$NETSNMP_CONFIG" -a -x "$NETSNMP_CONFIG"; then
+     enable_afsnmp="yes"
+     AC_MSG_RESULT(yes)
+   else
+     enable_afsnmp_dest="no"
+     AC_MSG_RESULT(no)
+     AC_MSG_ERROR("AFSNMP module is explicit enabled but no net-snmp lib found")
+   fi
+elif test "x$enable_afsnmp" = "xauto"; then
+  if test -n "$NETSNMP_CONFIG" -a -x "$NETSNMP_CONFIG"; then
+     enable_afsnmp="yes"
+     AC_MSG_RESULT(yes)
+  else
+     enable_afsnmp="no"
+     AC_MSG_RESULT(no)
+  fi
+else
+  enable_afsnmp="no"
+  AC_MSG_RESULT(no)
+fi
+
+if test "$enable_afsnmp" = "yes"; then
+  NETSNMP_CFLAGS="`$NETSNMP_CONFIG --cflags`"
+  NETSNMP_LIBS="`$NETSNMP_CONFIG --libs`"
+else
+  NETSNMP_CFLAGS=
+  NETSNMP_LIBS=
 fi
 
 dnl ***************************************************************************
@@ -1138,6 +1204,13 @@ dnl ***************************************************************************
 
 enable_json="no"
 
+JSON_INTERNAL_SOURCE_EXISTS="test -f $srcdir/lib/jsonc/json.h"
+
+if $JSON_INTERNAL_SOURCE_EXISTS; then
+  AC_CONFIG_SUBDIRS([lib/jsonc])
+  JSON_SUBDIRS="lib/jsonc"
+fi
+
 if test "x$with_jsonc" = "xsystem" -o "x$with_jsonc" = "xauto"; then
    enable_json="yes"
    PKG_CHECK_EXISTS(json-c, json_module_name="json-c",
@@ -1149,17 +1222,16 @@ if test "x$with_jsonc" = "xsystem" -o "x$with_jsonc" = "xauto"; then
 fi
 if test "x$with_jsonc" = "xinternal" -o "x$with_jsonc" = "xauto"; then
   AC_MSG_CHECKING(for JSON)
-  if test -f "$srcdir/lib/jsonc/json.h"; then
-      AC_CONFIG_SUBDIRS([lib/jsonc])
+  if $JSON_INTERNAL_SOURCE_EXISTS; then
       JSON_LIBS="\$(top_builddir)/lib/jsonc/libjson-c.la"
       JSON_DEPENDENCY="$JSON_LIBS"
       JSON_CFLAGS="-I\$(top_srcdir)/lib/jsonc -I\$(top_builddir)/lib/jsonc"
-      JSON_SUBDIRS="lib/jsonc"
       enable_json="yes"
       with_jsonc="internal"
   else
       AC_MSG_WARN([Internal jsonc sources not found in lib/jsonc])
       enable_json="no"
+      with_jsonc="no"
   fi
   AC_MSG_RESULT($enable_json)
 fi
@@ -1167,13 +1239,6 @@ fi
 dnl ***************************************************************************
 dnl mongo-c-driver headers/libraries
 dnl ***************************************************************************
-
-if test x"$enable_legacy_mongodb_options" = x"no"; then
-	enable_legacy_mongodb_options_bit=0
-else
-	enable_legacy_mongodb_options_bit=1
-fi
-AC_DEFINE_UNQUOTED(ENABLE_LEGACY_MONGODB_OPTIONS, [$enable_legacy_mongodb_options_bit], [Support libmongo-client non-URI MongoDB options])
 
 PKG_CHECK_MODULES(LIBMONGO, libmongoc-1.0 >= $LMC_MIN_VERSION, with_mongoc="yes", with_mongoc="no")
 
@@ -1241,6 +1306,15 @@ if test "x$enable_http" != "xno" && test "x$with_libcurl" != "xno"; then
 		AC_MSG_ERROR(libcurl not found)
 	fi
 	enable_http=$libcurl
+
+        if test "$enable_http" = "yes"; then
+           old_CFLAGS=$CFLAGS
+           CFLAGS=$LIBCURL_CFLAGS
+           AC_CHECK_DECLS([CURL_SSLVERSION_TLSv1_0, CURL_SSLVERSION_TLSv1_1, CURL_SSLVERSION_TLSv1_2, CURL_SSLVERSION_TLSv1_3],
+                          [], [],
+                          [[#include <curl/curl.h>]])
+           CFLAGS=$old_CFLAGS
+        fi
 fi
 
 dnl ***************************************************************************
@@ -1283,6 +1357,21 @@ if test "$enable_amqp" = "yes" && test "$with_librabbitmq_client" = "no"; then
        AC_MSG_ERROR([Could not find librabbitmq-c, and AMQP support was explicitly enabled.])
 fi
 
+old_LIBS=$LIBS
+LIBS=$LIBRABBITMQ_LIBS
+AC_CHECK_FUNCS(amqp_ssl_socket_set_verify_peer)
+LIBS=$old_LIBS
+
+dnl ***************************************************************************
+dnl rdkafka headers/libraries
+dnl ***************************************************************************
+
+PKG_CHECK_MODULES(LIBRDKAFKA, rdkafka >= $LIBRDKAFKA_MIN_VERSION, with_librdkafka="yes", with_librdkafka="no")
+
+if test "$enable_kafka" = "yes" && test "$with_librdkafka" = "no"; then
+       AC_MSG_ERROR([Could not find librdkafka, and Kafka support was explicitly enabled.])
+fi
+
 
 if test "x$enable_native" = "xyes" -o "x$enable_native" = "xauto"; then
     AC_CONFIG_FILES([syslog-ng-native-connector.pc])
@@ -1306,7 +1395,9 @@ if test "$enable_riemann" != "no"; then
 
     old_CFLAGS=$CFLAGS
     CFLAGS=`pkg-config --cflags riemann-client`
-    AC_CHECK_DECLS(RIEMANN_EVENT_FIELD_TIME_MICROS, [riemann_micros="yes"], [riemann_micros="no"], [[#include <riemann/event.h>]])
+    AC_CHECK_DECLS(RIEMANN_EVENT_FIELD_TIME_MICROS,
+                  AC_DEFINE(HAVE_RIEMANN_MICROSECONDS, 1, [Riemann microseconds support]),,
+                  [[#include <riemann/event.h>]])
     CFLAGS=$old_CFLAGS
  fi
 fi
@@ -1323,7 +1414,9 @@ dnl python checks
 dnl ***************************************************************************
 if test "x$enable_python" != "xno"; then
   if test "x$with_python" = "xauto"; then
-    PKG_CHECK_MODULES(PYTHON, python3, python_found="yes", python_found="no")
+    PKG_CHECK_MODULES(PYTHON, python3-embed, python_found="yes", [
+      PKG_CHECK_MODULES(PYTHON, python3, python_found="yes", python_found="no")
+    ])
     if test "$python_found" = "no"; then
       PKG_CHECK_MODULES(PYTHON, python2, python_found="yes", python_found="no")
       if test "$python_found" = "no"; then
@@ -1340,7 +1433,9 @@ if test "x$enable_python" != "xno"; then
           ;;
     esac
 
-    PKG_CHECK_MODULES(PYTHON, $with_python, python_found="yes", python_found="no")
+    PKG_CHECK_MODULES(PYTHON, $with_python-embed, python_found="yes", [
+      PKG_CHECK_MODULES(PYTHON, $with_python, python_found="yes", python_found="no")
+    ])
   fi
 
   if test "x$python_found" = "xyes"; then
@@ -1354,8 +1449,63 @@ if test "x$enable_python" != "xno"; then
     AC_MSG_ERROR([Could not find the requested Python development libraries])
   fi
   enable_python="$python_found"
+
+  if (echo "$with_python" | grep -Eq "python-?3.*"); then
+    python_version=3
+  else
+    python_version=2
+  fi
 else
   with_python=""
+fi
+
+dnl ***************************************************************************
+dnl nosetests, pylint
+dnl ***************************************************************************
+
+if test "x$with_nosetests" != "x"; then
+    NOSETESTS=$with_nosetests
+else
+    if test "$python_found" = "yes"; then
+      if test "$python_version" = "3"; then
+          AC_CHECK_PROG(NOSETESTS, nosetests3, nosetests3)
+          if test "x$NOSETESTS" == "x"; then
+            AC_CHECK_PROG(NOSETESTS, nosetests, nosetests)
+          fi
+      else
+          AC_CHECK_PROG(NOSETESTS, nosetests, nosetests)
+      fi
+    fi
+fi
+
+if test "x$with_pylint" != "x"; then
+    PYLINT=$with_pylint
+else
+    if test "$python_found" = "yes"; then
+      if test "$python_version" = "3"; then
+          AC_CHECK_PROG(PYLINT, pylint3, pylint3)
+          if test "x$PYLINT" == "x"; then
+            AC_CHECK_PROG(PYLINT, pylint, pylint)
+          fi
+      else
+          AC_CHECK_PROG(PYLINT, pylint, pylint)
+      fi
+    fi
+fi
+
+dnl ***************************************************************************
+dnl docbook
+dnl ***************************************************************************
+
+if test "x$enable_manpages" != "xno"; then
+    if test "x$with_docbook" = "xauto"; then
+        XSL_STYLESHEET=`find /usr/share/{xml,sgml} -path '*/manpages/docbook.xsl' 2>/dev/null | head -n 1`
+        if test -z "$XSL_STYLESHEET"; then
+            XSL_STYLESHEET="http://docbook.sourceforge.net/release/xsl/current/manpages/docbook.xsl"
+        fi
+    else
+        XSL_STYLESHEET=$with_docbook
+    fi
 fi
 
 dnl ***************************************************************************
@@ -1481,6 +1631,15 @@ if test "x$enable_amqp" = "xauto"; then
     AC_MSG_RESULT([$enable_amqp])
 fi
 
+if test "x$enable_kafka" = "xauto"; then
+    AC_MSG_CHECKING(whether to enable kafka support)
+    if test "x$with_librdkafka" != "xno"; then
+        enable_kafka="yes"
+    else
+        enable_kafka="no"
+    fi
+    AC_MSG_RESULT([$enable_kafka])
+fi
 
 if test "x$enable_systemd" = "xauto"; then
 	if test "$ostype" = "Linux" -a "$have_libsystemd" = "yes"; then
@@ -1532,8 +1691,6 @@ if test "x$enable_systemd" = "xyes"; then
         fi
 fi
 
-PKG_CHECK_MODULES(UUID, uuid, enable_libuuid="yes", enable_libuuid="no")
-
 dnl ***************************************************************************
 dnl check if we have timezone variable in <time.h>
 dnl ***************************************************************************
@@ -1559,6 +1716,8 @@ if test "x$module_path" = "x"; then
 	module_path="$moduledir"
 	java_module_path="$moduledir"/java-modules
 fi
+
+python_moduledir="$moduledir"/python
 
 CPPFLAGS="$CPPFLAGS $GLIB_CFLAGS $EVTLOG_CFLAGS $PCRE_CFLAGS $OPENSSL_CFLAGS $LIBNET_CFLAGS $LIBDBI_CFLAGS $IVYKIS_CFLAGS $LIBCAP_CFLAGS -D_GNU_SOURCE -D_DEFAULT_SOURCE -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64"
 
@@ -1684,6 +1843,9 @@ if test -n "$env_ld_library_path"; then
         AC_DEFINE_UNQUOTED(ENV_LD_LIBRARY_PATH, "$env_ld_library_path", [set LD_LIBRARY_PATH to this value])
 fi
 AC_DEFINE_UNQUOTED(PATH_MODULEDIR, "$moduledir", [module installation directory])
+AC_DEFINE_UNQUOTED(PYTHON_MODULE_DIR, "$python_moduledir", [Python module installation directory])
+AC_DEFINE_UNQUOTED(PYTHON3_HOME_DIR, "$python3_home_dir", [Hard-coded Python 3 home directory])
+AC_DEFINE_UNQUOTED(PYTHON2_HOME_DIR, "$python2_home_dir", [Hard-coded Python 2 home directory])
 AC_DEFINE_UNQUOTED(PATH_LOGGENPLUGINDIR, "$loggenplugindir", [loggenplugin installation directory])
 AC_DEFINE_UNQUOTED(MODULE_PATH, "$module_path", [module search path])
 AC_DEFINE_UNQUOTED(JAVA_MODULE_PATH, "$java_module_path", [java module search path])
@@ -1694,7 +1856,6 @@ AC_DEFINE_UNQUOTED(PACKAGE_NAME, "$PACKAGE_NAME", [package name])
 AC_DEFINE_UNQUOTED(WITH_COMPILE_DATE, $wcmp_date, [Include the compile date in the binary])
 AC_DEFINE_UNQUOTED(ENABLE_FORCED_SERVER_MODE, `enable_value $enable_forced_server_mode`, [Enable forced server mode])
 AC_DEFINE_UNQUOTED(ENABLE_DEBUG, `enable_value $enable_debug`, [Enable debugging])
-AC_DEFINE_UNQUOTED(ENABLE_LIBUUID, `enable_value $enable_libuuid`, [Enable libuuid support])
 AC_DEFINE_UNQUOTED(ENABLE_GPROF, `enable_value $enable_gprof`, [Enable gcc profiling])
 AC_DEFINE_UNQUOTED(ENABLE_MEMTRACE, `enable_value $enable_memtrace`, [Enable memtrace])
 AC_DEFINE_UNQUOTED(ENABLE_SPOOF_SOURCE, `enable_value $enable_spoof_source`, [Enable spoof source support])
@@ -1703,12 +1864,11 @@ AC_DEFINE_UNQUOTED(ENABLE_TCP_WRAPPER, `enable_value $enable_tcp_wrapper`, [Enab
 AC_DEFINE_UNQUOTED(ENABLE_LINUX_CAPS, `enable_value $enable_linux_caps`, [Enable Linux capability management support])
 AC_DEFINE_UNQUOTED(ENABLE_ENV_WRAPPER, `enable_value $enable_env_wrapper`, [Enable environment wrapper support])
 AC_DEFINE_UNQUOTED(ENABLE_SYSTEMD, `enable_value $enable_systemd`, [Enable systemd support])
+AC_DEFINE_UNQUOTED(ENABLE_KAFKA, `enable_value $enable_kafka`, [Enable kafka support])
 AC_DEFINE_UNQUOTED(SYSTEMD_JOURNAL_MODE, `journald_mode`, [Systemd-journal support mode])
 AC_DEFINE_UNQUOTED(HAVE_INOTIFY, `enable_value $ac_cv_func_inotify_init`, [Have inotify])
-AC_DEFINE_UNQUOTED(HAVE_GETRANDOM, `enable_value $ac_cv_func_getrandom`, [Have getrandom])
-AC_DEFINE_UNQUOTED(ENABLE_PYTHONv2, `(echo "$with_python" | grep -Eq "python-?2.*") && echo 1 || echo 0`, [Python2 c api])
-AC_DEFINE_UNQUOTED(ENABLE_PYTHONv3, `(echo "$with_python" | grep -Eq "python-?3.*") && echo 1 || echo 0`, [Python3 c api])
-AC_DEFINE_UNQUOTED(HAVE_RIEMANN_MICROSECONDS, `enable_value $riemann_micros`, [Riemann microseconds support])
+AC_DEFINE_UNQUOTED(ENABLE_PYTHONv2, `(test "$python_version" = "2" ) && echo 1 || echo 0`, [Python2 c api])
+AC_DEFINE_UNQUOTED(ENABLE_PYTHONv3, `(test "$python_version" = "3" ) && echo 1 || echo 0`, [Python3 c api])
 AC_DEFINE_UNQUOTED(USE_CONST_IVYKIS_MOCK, `enable_value $IVYKIS_VERSION_UPDATED`, [ivykis version is greater than $IVYKIS_UPDATED_VERSION])
 
 AM_CONDITIONAL(ENABLE_ENV_WRAPPER, [test "$enable_env_wrapper" = "yes"])
@@ -1724,11 +1884,11 @@ AM_CONDITIONAL(ENABLE_HTTP, [test "$enable_http" = "yes"])
 AM_CONDITIONAL(ENABLE_AMQP, [test "$enable_amqp" = "yes"])
 AM_CONDITIONAL(ENABLE_STOMP, [test "$enable_stomp" = "yes"])
 AM_CONDITIONAL(ENABLE_JSON, [test "$enable_json" = "yes"])
-AM_CONDITIONAL(ENABLE_GEOIP, [test "$enable_geoip" = "yes"])
 AM_CONDITIONAL(ENABLE_GEOIP2, [test "$enable_geoip2" = "yes"])
 AM_CONDITIONAL(ENABLE_REDIS, [test "$enable_redis" = "yes"])
+AM_CONDITIONAL(ENABLE_KAFKA, [test "$enable_kafka" = "yes"])
 AM_CONDITIONAL(IVYKIS_INTERNAL, [test "x$with_ivykis" = "xinternal"])
-AM_CONDITIONAL(JSON_INTERNAL, [test "x$JSON_SUBDIRS" != "x"])
+AM_CONDITIONAL(JSON_INTERNAL, [test "x$with_jsonc" = "xinternal"])
 AM_CONDITIONAL(LIBMONGO_INTERNAL, [test "x$LIBMONGO_SUBDIRS" != "x"])
 AM_CONDITIONAL(LIBRABBITMQ_INTERNAL, [test "x$with_librabbitmq_client" = "xinternal"])
 AM_CONDITIONAL(ENABLE_RIEMANN, [test "$enable_riemann" != "no"])
@@ -1736,19 +1896,25 @@ AM_CONDITIONAL(ENABLE_JOURNALD, [test "$with_systemd_journal" != "no"])
 AM_CONDITIONAL(ENABLE_PYTHON, [test "$enable_python" != "no"])
 AM_CONDITIONAL(ENABLE_JAVA, [test "$enable_java" = "yes"])
 AM_CONDITIONAL(ENABLE_JAVA_MODULES, [test "$enable_java_modules" = "yes"])
+AM_CONDITIONAL(ENABLE_AFSNMP, [test "$enable_afsnmp" = "yes"])
 AM_CONDITIONAL(ENABLE_MANPAGES, [test "$enable_manpages" != "no"])
 AM_CONDITIONAL(ENABLE_NATIVE, [test "$enable_native" != "no"])
 AM_CONDITIONAL(ENABLE_EXTRA_WARNINGS, [test "$enable_extra_warnings" = "yes"])
-AM_CONDITIONAL(ENABLE_LEGACY_MONGODB_OPTIONS, [test x"$enable_legacy_mongodb_options" != x"no"])
 AM_CONDITIONAL(ENABLE_TESTING, [test "$enable_tests" != "no"])
 AM_CONDITIONAL([HAVE_INOTIFY], [test x$ac_cv_func_inotify_init = xyes])
 AM_CONDITIONAL([HAVE_GETRANDOM], [test x$ac_cv_func_getrandom = xyes])
 AM_CONDITIONAL([HAVE_FMEMOPEN], [test x$ac_cv_func_fmemopen = xyes])
 AM_CONDITIONAL(ENABLE_IPV6, [test $enable_ipv6 = yes])
+AM_CONDITIONAL(NOSETESTS, [test "x$NOSETESTS" != "x"])
+AM_CONDITIONAL(PYLINT, [test "x$PYLINT" != "x"])
 
+
+AC_SUBST(NOSETESTS)
+AC_SUBST(PYLINT)
 AC_SUBST(timezonedir)
 AC_SUBST(pidfiledir)
 AC_SUBST(moduledir)
+AC_SUBST(python_moduledir)
 AC_SUBST(loggenplugindir)
 AC_SUBST(toolsdir)
 AC_SUBST(config_includedir)
@@ -1766,6 +1932,8 @@ AC_SUBST(BASE_LIBS)
 AC_SUBST(YFLAGS)
 AC_SUBST(LIBNET_LIBS)
 AC_SUBST(LIBNET_CFLAGS)
+AC_SUBST(NETSNMP_CFLAGS)
+AC_SUBST(NETSNMP_LIBS)
 AC_SUBST(LIBWRAP_LIBS)
 AC_SUBST(LIBWRAP_CFLAGS)
 AC_SUBST(ZLIB_LIBS)
@@ -1788,8 +1956,6 @@ AC_SUBST(JSON_SUBDIRS)
 AC_SUBST(JSON_DEPENDENCY)
 AC_SUBST(IVYKIS_SUBDIRS)
 AC_SUBST(RESOLV_LIBS)
-AC_SUBST(UUID_CFLAGS)
-AC_SUBST(UUID_LIBS)
 
 AC_SUBST(CURRDATE)
 AC_SUBST(RELEASE_TAG)
@@ -1806,7 +1972,6 @@ AX_VALGRIND_CHECK
 
 AC_OUTPUT(dist.conf
           Makefile
-	  syslog-ng.spec
 	  syslog-ng.pc
           libtest/syslog-ng-test.pc
 	  scripts/update-patterndb
@@ -1845,7 +2010,6 @@ echo "  Linux capability support    : ${has_linux_caps:=no}"
 echo "  Env wrapper support         : ${enable_env_wrapper:=no}"
 echo "  systemd support             : ${enable_systemd:=no} (unit dir: ${systemdsystemunitdir:=none})"
 echo "  systemd-journal support     : ${with_systemd_journal:=no}"
-echo "  libmongo-client options     : ${enable_legacy_mongodb_options}"
 echo " Modules:"
 echo "  Module search path          : ${module_path}"
 echo "  Sun STREAMS support (module): ${enable_sun_streams:=no}"
@@ -1858,11 +2022,12 @@ echo "  SMTP support (module)       : ${enable_smtp:=no}"
 echo "  HTTP support (module)       : ${enable_http:=no}"
 echo "  AMQP destination (module)   : ${enable_amqp:=no}"
 echo "  STOMP destination (module)  : ${enable_stomp:=no}"
-echo "  GEOIP support (module)      : ${enable_geoip:=no}"
 echo "  GEOIP2 support (module)     : ${enable_geoip2:=no}"
 echo "  Redis support (module)      : ${enable_redis:=no}"
+echo "  Kafka support (module)      : ${enable_kafka:=no}"
 echo "  Riemann destination (module): ${enable_riemann:=no}, microseconds: ${riemann_micros:=no}"
 echo "  python                      : ${enable_python:=no} (pkg-config package: ${with_python:=none})"
 echo "  java                        : ${enable_java:=no}"
 echo "  java modules                : ${enable_java_modules:=no}"
+echo "  afsnmp module               : ${enable_afsnmp:=no}"
 echo "  native bindings             : ${enable_native:=no}"

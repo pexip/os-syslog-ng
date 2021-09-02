@@ -26,7 +26,9 @@
 #include "cfg-grammar.h"
 #include "plugin.h"
 #include "wildcard-source.h"
+
 #include <criterion/criterion.h>
+#include <criterion/parameterized.h>
 
 static void
 _init(void)
@@ -80,23 +82,31 @@ Test(wildcard_source, initial_test)
   cr_assert_eq(driver->monitor_method, MM_POLL);
 }
 
-Test(wildcard_source, test_option_inheritance)
+Test(wildcard_source, test_option_inheritance_multiline)
 {
   WildcardSourceDriver *driver = _create_wildcard_filesource("base-dir(/test_non_existent_dir)"
                                                              "filename-pattern(*.log)"
                                                              "recursive(yes)"
                                                              "max-files(100)"
                                                              "follow-freq(10)"
-                                                             "follow_freq(10.0)"
-                                                             "pad_size(5)"
+                                                             "follow-freq(10.0)"
                                                              "multi-line-mode(regexp)"
-                                                             "multi-line-prefix(\\d+)"
+                                                             "multi-line-prefix('\\d+')"
                                                              "multi-line-garbage(garbage)");
   cr_assert_eq(driver->file_reader_options.follow_freq, 10000);
-  cr_assert_eq(file_reader_options_get_log_proto_options(&driver->file_reader_options)->pad_size, 5);
   cr_assert_eq(file_reader_options_get_log_proto_options(&driver->file_reader_options)->super.mode, MLM_PREFIX_GARBAGE);
   cr_assert(file_reader_options_get_log_proto_options(&driver->file_reader_options)->super.prefix != NULL);
   cr_assert(file_reader_options_get_log_proto_options(&driver->file_reader_options)->super.garbage != NULL);
+}
+
+Test(wildcard_source, test_option_inheritance_padded)
+{
+  WildcardSourceDriver *driver = _create_wildcard_filesource("base-dir(/test_non_existent_dir)"
+                                                             "filename-pattern(*.log)"
+                                                             "recursive(yes)"
+                                                             "max-files(100)"
+                                                             "pad-size(5)");
+  cr_assert_eq(file_reader_options_get_log_proto_options(&driver->file_reader_options)->pad_size, 5);
 }
 
 Test(wildcard_source, test_option_duplication)
@@ -157,4 +167,41 @@ Test(wildcard_source, test_window_size)
                                                              "max_files(10)"
                                                              "log_iw_size(10000)");
   cr_assert_eq(driver->file_reader_options.reader_options.super.init_window_size, 1000);
+}
+
+
+struct LegacyWildcardTestParams
+{
+  const gchar *path;
+  const gchar *expected_base_dir;
+  const gchar *expected_filename_pattern;
+};
+
+ParameterizedTestParameters(wildcard_source, test_legacy_wildcard)
+{
+  static struct LegacyWildcardTestParams params[] =
+  {
+    { "/a/b/c/d*", "/a/b/c", "d*" },
+    { "/a/b/c/d?", "/a/b/c", "d?" },
+    { "/*", "/", "*" },
+    { "*", ".", "*" },
+    { "/tmp/*", "/tmp", "*" },
+    { "tmp/?", "tmp", "?" },
+    { "tmp*", ".", "tmp*" },
+    { "/tmp*", "/", "tmp*" },
+    { "tmp/a*", "tmp", "a*" },
+  };
+
+
+  return cr_make_param_array(struct LegacyWildcardTestParams, params, G_N_ELEMENTS(params));
+}
+
+ParameterizedTest(struct LegacyWildcardTestParams *params, wildcard_source, test_legacy_wildcard)
+{
+  WildcardSourceDriver *driver = (WildcardSourceDriver *) wildcard_sd_legacy_new(params->path, configuration);
+
+  cr_assert_str_eq(driver->base_dir, params->expected_base_dir);
+  cr_assert_str_eq(driver->filename_pattern, params->expected_filename_pattern);
+
+  log_pipe_unref(&driver->super.super.super);
 }

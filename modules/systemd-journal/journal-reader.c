@@ -28,9 +28,10 @@
 #include "mainloop-io-worker.h"
 #include "persist-state.h"
 #include "persistable-state-header.h"
-#include "ack_tracker.h"
+#include "ack-tracker/ack_tracker.h"
 #include "parse-number.h"
 #include "journal-reader.h"
+#include "timeutils/misc.h"
 
 #include <stdlib.h>
 #include <iv_event.h>
@@ -243,13 +244,13 @@ _set_message_timestamp(JournalReader *self, LogMessage *msg)
   guint64 ts;
 
   journald_get_realtime_usec(self->journal, &ts);
-  msg->timestamps[LM_TS_STAMP].tv_sec = ts / 1000000;
-  msg->timestamps[LM_TS_STAMP].tv_usec = ts % 1000000;
-  msg->timestamps[LM_TS_STAMP].zone_offset = time_zone_info_get_offset(self->options->recv_time_zone_info,
-                                             msg->timestamps[LM_TS_STAMP].tv_sec);
-  if (msg->timestamps[LM_TS_STAMP].zone_offset == -1)
+  msg->timestamps[LM_TS_STAMP].ut_sec = ts / 1000000;
+  msg->timestamps[LM_TS_STAMP].ut_usec = ts % 1000000;
+  msg->timestamps[LM_TS_STAMP].ut_gmtoff = time_zone_info_get_offset(self->options->recv_time_zone_info,
+                                           msg->timestamps[LM_TS_STAMP].ut_sec);
+  if (msg->timestamps[LM_TS_STAMP].ut_gmtoff == -1)
     {
-      msg->timestamps[LM_TS_STAMP].zone_offset = get_local_timezone_ofs(msg->timestamps[LM_TS_STAMP].tv_sec);
+      msg->timestamps[LM_TS_STAMP].ut_gmtoff = get_local_timezone_ofs(msg->timestamps[LM_TS_STAMP].ut_sec);
     }
 }
 
@@ -519,7 +520,7 @@ _work_finished(gpointer s)
 }
 
 static void
-_work_perform(gpointer s)
+_work_perform(gpointer s, GIOCondition cond)
 {
   JournalReader *self = (JournalReader *) s;
   self->notify_code = _fetch_log(self);
@@ -546,13 +547,13 @@ _io_process_input(gpointer s)
   _stop_watches(self);
   if ((self->options->flags & JR_THREADED))
     {
-      main_loop_io_worker_job_submit(&self->io_job);
+      main_loop_io_worker_job_submit(&self->io_job, G_IO_IN);
     }
   else
     {
       if (!main_loop_worker_job_quit())
         {
-          _work_perform(s);
+          _work_perform(s, G_IO_IN);
           _work_finished(s);
         }
     }
@@ -673,7 +674,7 @@ _init_watches(JournalReader *self)
 
   main_loop_io_worker_job_init(&self->io_job);
   self->io_job.user_data = self;
-  self->io_job.work = (void (*)(void *)) _work_perform;
+  self->io_job.work = (void (*)(void *, GIOCondition)) _work_perform;
   self->io_job.completion = (void (*)(void *)) _work_finished;
   self->io_job.engage = (void (*)(void *)) log_pipe_ref;
   self->io_job.release = (void (*)(void *)) log_pipe_unref;
@@ -732,7 +733,7 @@ journal_reader_options_defaults(JournalReaderOptions *options)
 {
   log_source_options_defaults(&options->super);
   options->super.stats_level = STATS_LEVEL0;
-  options->super.stats_source = SCS_JOURNALD;
+  options->super.stats_source = stats_register_type("journald");
   options->fetch_limit = DEFAULT_FETCH_LIMIT;
   options->default_pri = DEFAULT_PRIO;
   options->max_field_size = DEFAULT_FIELD_SIZE;

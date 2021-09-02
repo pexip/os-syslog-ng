@@ -172,6 +172,27 @@
        </action>\
      </actions>\
     </rule>\
+    <rule provider='test' id='10f' class='violation' context-scope='program' context-id='$PROGRAM' context-timeout='60'>\
+     <patterns>\
+      <pattern>correllated-message-with-action-condition-filter</pattern>\
+     </patterns>\
+     <actions>\
+       <action trigger='match' condition='message(\"filter-not-exists\" type(pcre))' >\
+         <message>\
+           <values>\
+             <value name='MESSAGE'>not-generated-message</value>\
+           </values>\
+         </message>\
+       </action>\
+       <action trigger='match' condition='message(\"filter\" type(pcre))' >\
+         <message>\
+           <values>\
+             <value name='MESSAGE'>generated-message-on-condition</value>\
+           </values>\
+         </message>\
+       </action>\
+     </actions>\
+    </rule>\
     <rule provider='test' id='11b' class='violation'>\
      <patterns>\
       <pattern>simple-message-with-action-on-match</pattern>\
@@ -533,6 +554,33 @@
    <tag>tag1</tag>\
   </tags>\
  </ruleset>\
+</patterndb>"
+
+
+#define pdb_test_match_in_program "<patterndb version='5' pub_date='2010-02-22'>\
+<ruleset name='sshd' id='1'>\
+<patterns>\
+  <pattern>sshd @NUMBER:num@</pattern>\
+</patterns>\
+<rules>\
+  <rule id='12347598' class='sshd' provider='batman'>\
+     <patterns><pattern>almafa</pattern></patterns>\
+  </rule>\
+</rules>\
+</ruleset>\
+</patterndb>"
+
+#define pdb_test_program_template "<patterndb version='5' pub_date='2010-02-22'>\
+<ruleset name='sshd' id='1'>\
+<patterns>\
+  <pattern>sshd @NUMBER:num@</pattern>\
+</patterns>\
+<rules>\
+  <rule id='12347598' class='sshd' provider='batman'>\
+     <patterns><pattern>almafa @STRING:str@</pattern></patterns>\
+  </rule>\
+</rules>\
+</ruleset>\
 </patterndb>"
 
 #endif

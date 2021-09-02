@@ -29,13 +29,20 @@
 #include "python-logmsg.h"
 #include "python-logtemplate.h"
 #include "python-integerpointer.h"
+#include "python-logger.h"
 #include "python-source.h"
 #include "python-fetcher.h"
 #include "python-global-code-loader.h"
 #include "python-debugger.h"
+#include "python-http-header.h"
+#include "python-persist.h"
 
 #include "plugin.h"
 #include "plugin-types.h"
+#include "reloc.h"
+
+#include <stdlib.h>
+#include <string.h>
 
 extern CfgParser python_parser;
 extern CfgParser python_parser_parser;
@@ -45,6 +52,11 @@ static Plugin python_plugins[] =
   {
     .type = LL_CONTEXT_DESTINATION,
     .name = "python",
+    .parser = &python_parser,
+  },
+  {
+    .type = LL_CONTEXT_INNER_DEST,
+    .name = "python_http_header",
     .parser = &python_parser,
   },
   {
@@ -72,23 +84,40 @@ static Plugin python_plugins[] =
 static gboolean interpreter_initialized = FALSE;
 
 static void
+_set_python_path(void)
+{
+  const gchar *current_python_path = getenv("PYTHONPATH");
+  GString *python_path = g_string_new(get_installation_path_for(SYSLOG_NG_PYTHON_MODULE_DIR));
+
+  if (current_python_path)
+    g_string_append_printf(python_path, ":%s", current_python_path);
+
+  setenv("PYTHONPATH", python_path->str, 1);
+
+  g_string_free(python_path, TRUE);
+}
+
+static void
 _py_init_interpreter(void)
 {
   if (!interpreter_initialized)
     {
       python_debugger_append_inittab();
 
+      py_setup_python_home();
+      _set_python_path();
       Py_Initialize();
       py_init_argv();
 
       PyEval_InitThreads();
-      py_datetime_init();
       py_log_message_init();
       py_log_template_init();
       py_integer_pointer_init();
       py_log_source_init();
       py_log_fetcher_init();
+      py_persist_init();
       py_global_code_loader_init();
+      py_logger_init();
       PyEval_SaveThread();
 
       interpreter_initialized = TRUE;
@@ -108,8 +137,8 @@ const ModuleInfo module_info =
 {
   .canonical_name = "python",
   .version = SYSLOG_NG_VERSION,
-  .description = "The python ("PYTHON_MODULE_VERSION") module provides Python scripted destination support for syslog-ng.",
-  .core_revision = VERSION_CURRENT_VER_ONLY,
+  .description = "The python ("PYTHON_MODULE_VERSION") module provides Python scripting support for syslog-ng.",
+  .core_revision = SYSLOG_NG_SOURCE_REVISION,
   .plugins = python_plugins,
   .plugins_len = G_N_ELEMENTS(python_plugins),
 };

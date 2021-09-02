@@ -34,6 +34,8 @@ PyObject *_py_do_import(const gchar *modname);
 PyObject *_py_resolve_qualified_name(const gchar *name);
 PyObject *_py_create_arg_dict(GHashTable *args);
 PyObject *_py_invoke_function(PyObject *func, PyObject *arg, const gchar *class, const gchar *caller_context);
+PyObject *_py_invoke_function_with_args(PyObject *func, PyObject *args, const gchar *class,
+                                        const gchar *caller_context);
 void _py_invoke_void_function(PyObject *func, PyObject *arg, const gchar *class, const gchar *caller_context);
 gboolean _py_invoke_bool_function(PyObject *func, PyObject *arg, const gchar *class, const gchar *caller_context);
 PyObject *_py_get_method(PyObject *instance, const gchar *method_name, const gchar *module);
@@ -50,4 +52,5 @@ gboolean _py_is_string(PyObject *object);
 const gchar *_py_get_string_as_string(PyObject *object);
 PyObject *_py_string_from_string(const gchar *str, gssize len);
 
+void py_slng_generic_dealloc(PyObject *self);
 #endif

@@ -61,6 +61,12 @@ log_proto_buffered_server_put_state(LogProtoBufferedServer *self)
     persist_state_unmap_entry(self->persist_state, self->persist_handle);
 }
 
+static inline gboolean
+_log_proto_buffered_server_fallback_non_persistent(LogProtoBufferedServer *self)
+{
+  return self->persist_state == NULL;
+}
+
 static gboolean
 log_proto_buffered_server_convert_from_raw(LogProtoBufferedServer *self, const guchar *raw_buffer, gsize raw_buffer_len)
 {
@@ -68,7 +74,6 @@ log_proto_buffered_server_convert_from_raw(LogProtoBufferedServer *self, const g
   gsize avail_in = raw_buffer_len;
   gsize avail_out;
   gchar *out;
-  gint  ret = -1;
   gboolean success = FALSE;
   LogProtoBufferedServerState *state = log_proto_buffered_server_get_state(self);
 
@@ -77,7 +82,7 @@ log_proto_buffered_server_convert_from_raw(LogProtoBufferedServer *self, const g
       avail_out = state->buffer_size - state->pending_buffer_end;
       out = (gchar *) self->buffer + state->pending_buffer_end;
 
-      ret = g_iconv(self->convert, (gchar **) &raw_buffer, &avail_in, (gchar **) &out, &avail_out);
+      gint ret = g_iconv(self->convert, (gchar **) &raw_buffer, &avail_in, (gchar **) &out, &avail_out);
       if (ret == (gsize) -1)
         {
           switch (errno)
@@ -126,9 +131,6 @@ log_proto_buffered_server_convert_from_raw(LogProtoBufferedServer *self, const g
                     state->buffer_size = self->super.options->max_buffer_size;
 
                   self->buffer = g_realloc(self->buffer, state->buffer_size);
-
-                  /* recalculate the out pointer, and add what we have now */
-                  ret = -1;
                 }
               else
                 {
@@ -179,7 +181,9 @@ log_proto_buffered_server_apply_state(LogProtoBufferedServer *self, PersistEntry
 
   if (!self->buffer)
     {
-      self->buffer = g_malloc(state->buffer_size);
+      gssize buffer_size = MAX(state->buffer_size, self->super.options->init_buffer_size);
+      self->buffer = g_malloc(buffer_size);
+      state->buffer_size = buffer_size;
     }
   state->pending_buffer_end = 0;
 
@@ -419,6 +423,58 @@ error_converting_v3:
   return FALSE;
 }
 
+static void
+_log_proto_buffered_server_swap_bytes_if_needed(PersistState *persist_state, PersistEntryHandle old_state_handle)
+{
+  LogProtoBufferedServerState *state;
+  state = (LogProtoBufferedServerState *)(persist_state_map_entry(persist_state, old_state_handle));
+
+  if ((state->header.big_endian && G_BYTE_ORDER == G_LITTLE_ENDIAN) ||
+      (!state->header.big_endian && G_BYTE_ORDER == G_BIG_ENDIAN))
+    {
+
+      /* byte order conversion in order to avoid the hassle with
+          scattered byte order conversions in the code */
+
+      state->header.big_endian = !state->header.big_endian;
+      state->buffer_pos = GUINT32_SWAP_LE_BE(state->buffer_pos);
+      state->pending_buffer_pos = GUINT32_SWAP_LE_BE(state->pending_buffer_pos);
+      state->pending_buffer_end = GUINT32_SWAP_LE_BE(state->pending_buffer_end);
+      state->buffer_size = GUINT32_SWAP_LE_BE(state->buffer_size);
+      state->raw_stream_pos = GUINT64_SWAP_LE_BE(state->raw_stream_pos);
+      state->raw_buffer_size = GUINT32_SWAP_LE_BE(state->raw_buffer_size);
+      state->pending_raw_stream_pos = GUINT64_SWAP_LE_BE(state->pending_raw_stream_pos);
+      state->pending_raw_buffer_size = GUINT32_SWAP_LE_BE(state->pending_raw_buffer_size);
+      state->file_size = GUINT64_SWAP_LE_BE(state->file_size);
+      state->file_inode = GUINT64_SWAP_LE_BE(state->file_inode);
+    }
+
+  persist_state_unmap_entry(persist_state, old_state_handle);
+}
+
+static gboolean
+_log_proto_buffered_server_convert_header_version(PersistState *persist_state, PersistEntryHandle old_state_handle)
+{
+  LogProtoBufferedServerState *state;
+  gboolean result = TRUE;
+
+  state = persist_state_map_entry(persist_state, old_state_handle);
+  if (state->header.version > 1)
+    {
+      msg_error("Internal error restoring log reader state, stored data is too new",
+                evt_tag_int("version", state->header.version));
+      result = FALSE;
+    }
+
+  if (state->header.version == 1)
+    {
+      state->header.version = 0;
+    }
+  persist_state_unmap_entry(persist_state, old_state_handle);
+
+  return result;
+}
+
 gboolean
 log_proto_buffered_server_restart_with_state(LogProtoServer *s, PersistState *persist_state, const gchar *persist_name)
 {
@@ -465,37 +521,14 @@ log_proto_buffered_server_restart_with_state(LogProtoServer *s, PersistState *pe
     }
   else if (persist_version == 4)
     {
-      LogProtoBufferedServerState *state;
 
-      old_state = persist_state_map_entry(persist_state, old_state_handle);
-      state = old_state;
-      if ((state->header.big_endian && G_BYTE_ORDER == G_LITTLE_ENDIAN) ||
-          (!state->header.big_endian && G_BYTE_ORDER == G_BIG_ENDIAN))
+      _log_proto_buffered_server_swap_bytes_if_needed(persist_state, old_state_handle);
+
+      if (!_log_proto_buffered_server_convert_header_version(persist_state, old_state_handle))
         {
-
-          /* byte order conversion in order to avoid the hassle with
-             scattered byte order conversions in the code */
-
-          state->header.big_endian = !state->header.big_endian;
-          state->buffer_pos = GUINT32_SWAP_LE_BE(state->buffer_pos);
-          state->pending_buffer_pos = GUINT32_SWAP_LE_BE(state->pending_buffer_pos);
-          state->pending_buffer_end = GUINT32_SWAP_LE_BE(state->pending_buffer_end);
-          state->buffer_size = GUINT32_SWAP_LE_BE(state->buffer_size);
-          state->raw_stream_pos = GUINT64_SWAP_LE_BE(state->raw_stream_pos);
-          state->raw_buffer_size = GUINT32_SWAP_LE_BE(state->raw_buffer_size);
-          state->pending_raw_stream_pos = GUINT64_SWAP_LE_BE(state->pending_raw_stream_pos);
-          state->pending_raw_buffer_size = GUINT32_SWAP_LE_BE(state->pending_raw_buffer_size);
-          state->file_size = GUINT64_SWAP_LE_BE(state->file_size);
-          state->file_inode = GUINT64_SWAP_LE_BE(state->file_inode);
-        }
-
-      if (state->header.version > 0)
-        {
-          msg_error("Internal error restoring log reader state, stored data is too new",
-                    evt_tag_int("version", state->header.version));
           goto error;
         }
-      persist_state_unmap_entry(persist_state, old_state_handle);
+
       log_proto_buffered_server_apply_state(self, old_state_handle, persist_name);
       return TRUE;
     }
@@ -728,6 +761,12 @@ _buffered_server_update_pos(LogProtoServer *s)
 }
 
 static void
+_buffered_server_bookmark_save_non_persistent(Bookmark *bookmark)
+{
+  msg_trace("Last message got confirmed, but we are in non persistent mode");
+}
+
+static void
 _buffered_server_bookmark_save(Bookmark *bookmark)
 {
   BufferedServerBookmarkData *bookmark_data = (BufferedServerBookmarkData *)(&bookmark->container);
@@ -748,6 +787,12 @@ _buffered_server_bookmark_save(Bookmark *bookmark)
 static void
 _buffered_server_bookmark_fill(LogProtoBufferedServer *self, Bookmark *bookmark)
 {
+  if (G_UNLIKELY(_log_proto_buffered_server_fallback_non_persistent(self)))
+    {
+      bookmark->save = _buffered_server_bookmark_save_non_persistent;
+      return;
+    }
+
   LogProtoBufferedServerState *state = log_proto_buffered_server_get_state(self);
   BufferedServerBookmarkData *data = (BufferedServerBookmarkData *)(&bookmark->container);
 
@@ -760,6 +805,32 @@ _buffered_server_bookmark_fill(LogProtoBufferedServer *self, Bookmark *bookmark)
   log_proto_buffered_server_put_state(self);
 }
 
+static void
+log_proto_buffered_server_flush(LogProtoBufferedServer *self, const guchar **msg, gsize *msg_len)
+{
+  LogProtoBufferedServerState *state = log_proto_buffered_server_get_state(self);
+
+  const guchar *buffer_start = self->buffer + state->pending_buffer_pos;
+  gsize buffer_bytes = state->pending_buffer_end - state->pending_buffer_pos;
+
+  if (buffer_bytes == 0)
+    {
+      *msg = NULL;
+      *msg_len = 0;
+      log_proto_buffered_server_put_state(self);
+      return;
+    }
+
+  *msg = buffer_start;
+  *msg_len = buffer_bytes;
+  state->pending_buffer_pos = state->pending_buffer_end;
+
+  log_proto_buffered_server_put_state(self);
+
+  if (self->flush)
+    self->flush(self);
+}
+
 /**
  * Returns: TRUE to indicate success, FALSE otherwise. The returned
  * msg can be NULL even if no failure occurred.
@@ -770,6 +841,13 @@ log_proto_buffered_server_fetch(LogProtoServer *s, const guchar **msg, gsize *ms
 {
   LogProtoBufferedServer *self = (LogProtoBufferedServer *) s;
   LogProtoStatus result = LPS_SUCCESS;
+
+  if (G_UNLIKELY(self->flush_partial_message))
+    {
+      log_proto_buffered_server_flush(self, msg, msg_len);
+      self->flush_partial_message = FALSE;
+      goto exit;
+    }
 
   while (1)
     {

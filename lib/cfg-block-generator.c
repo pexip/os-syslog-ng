@@ -35,7 +35,7 @@ cfg_block_generator_format_name_method(CfgBlockGenerator *self, gchar *buf, gsiz
 }
 
 gboolean
-cfg_block_generator_generate(CfgBlockGenerator *self, GlobalConfig *cfg, CfgArgs *args, GString *result,
+cfg_block_generator_generate(CfgBlockGenerator *self, GlobalConfig *cfg, gpointer args, GString *result,
                              const gchar *reference)
 {
   gchar block_name[1024];
@@ -51,6 +51,7 @@ cfg_block_generator_generate(CfgBlockGenerator *self, GlobalConfig *cfg, CfgArgs
 void
 cfg_block_generator_init_instance(CfgBlockGenerator *self, gint context, const gchar *name)
 {
+  self->ref_cnt = 1;
   self->context = context;
   self->name = g_strdup(name);
   self->format_name = cfg_block_generator_format_name_method;
@@ -63,10 +64,20 @@ cfg_block_generator_free_instance(CfgBlockGenerator *self)
   g_free(self->name);
 }
 
-void
-cfg_block_generator_free(CfgBlockGenerator *self)
+CfgBlockGenerator *
+cfg_block_generator_ref(CfgBlockGenerator *self)
 {
-  if (self->free_fn)
-    self->free_fn(self);
-  g_free(self);
+  self->ref_cnt++;
+  return self;
+}
+
+void
+cfg_block_generator_unref(CfgBlockGenerator *self)
+{
+  if (--self->ref_cnt == 0)
+    {
+      if (self->free_fn)
+        self->free_fn(self);
+      g_free(self);
+    }
 }

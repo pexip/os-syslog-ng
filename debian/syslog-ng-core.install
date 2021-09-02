@@ -1,12 +1,15 @@
 #! /usr/bin/dh-exec
 
 etc/syslog-ng/*
-usr/bin/*
+usr/bin/pdbtool
+usr/bin/loggen
+usr/bin/dqtool
+usr/bin/update-patterndb
+usr/bin/persist-tool
 usr/sbin/*
 usr/lib/syslog-ng/libsyslog-ng-*.so.*
 usr/lib/syslog-ng/libevtlog-*.so.*
 usr/lib/syslog-ng/libsecret-storage.so*
-usr/lib/syslog-ng/*/libhttp.so
 usr/lib/syslog-ng/*/libaffile.so
 usr/lib/syslog-ng/*/libafprog.so
 usr/lib/syslog-ng/*/libafsocket.so
@@ -19,11 +22,12 @@ usr/lib/syslog-ng/*/libdbparser.so
 usr/lib/syslog-ng/*/libjson-plugin.so
 usr/lib/syslog-ng/*/libhook-commands.so
 usr/lib/syslog-ng/*/libkvformat.so
+usr/lib/syslog-ng/*/libtags-parser.so
 usr/lib/syslog-ng/*/liblinux-kmsg-format.so
 usr/lib/syslog-ng/*/libpseudofile.so
 usr/lib/syslog-ng/*/libsyslogformat.so
 usr/lib/syslog-ng/*/libsystem-source.so
-usr/lib/syslog-ng/*/libdate.so
+usr/lib/syslog-ng/*/libtimestamp.so
 usr/lib/syslog-ng/*/libcef.so
 usr/lib/syslog-ng/*/libdisk-buffer.so
 usr/lib/syslog-ng/*/libappmodel.so
@@ -50,11 +54,14 @@ usr/share/syslog-ng/include/scl/linux-audit/*
 usr/share/syslog-ng/include/scl/slack/*
 usr/share/syslog-ng/include/scl/telegram/*
 usr/share/syslog-ng/xsd/*
+[linux-any] usr/lib/syslog-ng/*/libsdjournal.so
+[linux-any] usr/lib/syslog-ng/*/libpacctformat.so
+[linux-any] usr/share/syslog-ng/include/scl/pacct/*
+
 #[!kfreebsd-any] lib/systemd/system/*
 [!kfreebsd-any] debian/syslog-ng.systemd =>  lib/systemd/system/syslog-ng.service
 
 debian/syslog-ng.conf                   /etc/syslog-ng/
-debian/scl.conf                         /etc/syslog-ng/
 
 [kfreebsd-any] debian/tty10.kfreebsd.conf => /usr/share/syslog-ng/include/scl/system/tty10.conf
 [!kfreebsd-any] debian/tty10.linux.conf   => /usr/share/syslog-ng/include/scl/system/tty10.conf

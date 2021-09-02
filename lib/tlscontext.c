@@ -49,8 +49,10 @@ struct _TLSContext
   gchar *pkcs12_file;
   gchar *ca_dir;
   gchar *crl_dir;
+  gchar *ca_file;
   gchar *cipher_suite;
   gchar *ecdh_curve_list;
+  gchar *sni;
   SSL_CTX *ssl_ctx;
   GList *trusted_fingerprint_list;
   GList *trusted_dn_list;
@@ -313,6 +315,25 @@ tls_session_info_callback(const SSL *ssl, int where, int ret)
     }
 }
 
+static gboolean
+_set_sni_in_client_mode(TLSSession *self)
+{
+  if (!self->ctx->sni)
+    return TRUE;
+
+  if (self->ctx->mode != TM_CLIENT)
+    return TRUE;
+
+  if (SSL_set_tlsext_host_name(self->ssl, self->ctx->sni))
+    return TRUE;
+
+  msg_error("Failed to set SNI",
+            evt_tag_str("sni", self->ctx->sni),
+            tls_context_format_location_tag(self->ctx));
+
+  return FALSE;
+}
+
 static TLSSession *
 tls_session_new(SSL *ssl, TLSContext *ctx)
 {
@@ -325,6 +346,13 @@ tls_session_new(SSL *ssl, TLSContext *ctx)
   tls_session_set_verifier(self, NULL);
 
   SSL_set_info_callback(ssl, tls_session_info_callback);
+
+  if (!_set_sni_in_client_mode(self))
+    {
+      tls_context_unref(self->ctx);
+      g_free(self);
+      return NULL;
+    }
 
   return self;
 }
@@ -384,6 +412,12 @@ _print_and_clear_tls_session_error(TLSContext *self)
 }
 
 static void
+tls_context_setup_session_tickets(TLSContext *self)
+{
+  openssl_ctx_setup_session_tickets(self->ssl_ctx);
+}
+
+static void
 tls_context_setup_verify_mode(TLSContext *self)
 {
   gint verify_mode = 0;
@@ -429,6 +463,10 @@ tls_context_setup_ssl_options(TLSContext *self)
         ssl_options |= SSL_OP_NO_TLSv1_1;
       if(self->ssl_options & TSO_NOTLSv12)
         ssl_options |= SSL_OP_NO_TLSv1_2;
+#endif
+#ifdef SSL_OP_NO_TLSv1_3
+      if(self->ssl_options & TSO_NOTLSv13)
+        ssl_options |= SSL_OP_NO_TLSv1_3;
 #endif
 #ifdef SSL_OP_CIPHER_SERVER_PREFERENCE
       if (self->mode == TM_SERVER)
@@ -637,15 +675,15 @@ _are_key_and_cert_files_accessible(TLSContext *self)
 }
 
 static gboolean
-_key_and_cert_files_are_not_specified(TLSContext *self)
+_key_or_cert_file_is_not_specified(TLSContext *self)
 {
-  return (!self->key_file && !self->cert_file);
+  return (!self->key_file || !self->cert_file);
 }
 
 static TLSContextLoadResult
 tls_context_load_key_and_cert(TLSContext *self)
 {
-  if (_key_and_cert_files_are_not_specified(self))
+  if (_key_or_cert_file_is_not_specified(self))
     {
       if (self->mode == TM_SERVER)
         msg_warning("You have a TLS enabled source without a X.509 keypair. Make sure you have tls(key-file() and cert-file()) options, TLS handshake to this source will fail",
@@ -694,6 +732,9 @@ tls_context_setup_context(TLSContext *self)
   if (_is_file_accessible(self, self->ca_dir) && !SSL_CTX_load_verify_locations(self->ssl_ctx, NULL, self->ca_dir))
     goto error;
 
+  if (_is_file_accessible(self, self->ca_file) && !SSL_CTX_load_verify_locations(self->ssl_ctx, self->ca_file, NULL))
+    goto error;
+
   if (_is_file_accessible(self, self->crl_dir) && !SSL_CTX_load_verify_locations(self->ssl_ctx, NULL, self->crl_dir))
     goto error;
 
@@ -701,6 +742,9 @@ tls_context_setup_context(TLSContext *self)
     verify_flags |= X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL;
 
   X509_VERIFY_PARAM_set_flags(SSL_CTX_get0_param(self->ssl_ctx), verify_flags);
+
+  if (self->mode == TM_SERVER)
+    tls_context_setup_session_tickets(self);
 
   tls_context_setup_verify_mode(self);
   tls_context_setup_ssl_options(self);
@@ -749,6 +793,12 @@ tls_context_setup_session(TLSContext *self)
     SSL_set_accept_state(ssl);
 
   TLSSession *session = tls_session_new(ssl, self);
+  if (!session)
+    {
+      SSL_free(ssl);
+      return NULL;
+    }
+
   SSL_set_app_data(ssl, session);
   return session;
 }
@@ -789,8 +839,10 @@ _tls_context_free(TLSContext *self)
   g_free(self->dhparam_file);
   g_free(self->ca_dir);
   g_free(self->crl_dir);
+  g_free(self->ca_file);
   g_free(self->cipher_suite);
   g_free(self->ecdh_curve_list);
+  g_free(self->sni);
   g_free(self);
 }
 
@@ -898,6 +950,10 @@ tls_context_set_ssl_options_by_name(TLSContext *self, GList *options)
       else if (strcasecmp(l->data, "no-tlsv12") == 0 || strcasecmp(l->data, "no_tlsv12") == 0)
         self->ssl_options |= TSO_NOTLSv12;
 #endif
+#ifdef SSL_OP_NO_TLSv1_3
+      else if (strcasecmp(l->data, "no-tlsv13") == 0 || strcasecmp(l->data, "no_tlsv13") == 0)
+        self->ssl_options |= TSO_NOTLSv13;
+#endif
       else
         return FALSE;
     }
@@ -979,6 +1035,13 @@ tls_context_set_crl_dir(TLSContext *self, const gchar *crl_dir)
 }
 
 void
+tls_context_set_ca_file(TLSContext *self, const gchar *ca_file)
+{
+  g_free(self->ca_file);
+  self->ca_file = g_strdup(ca_file);
+}
+
+void
 tls_context_set_cipher_suite(TLSContext *self, const gchar *cipher_suite)
 {
   g_free(self->cipher_suite);
@@ -997,6 +1060,13 @@ tls_context_set_dhparam_file(TLSContext *self, const gchar *dhparam_file)
 {
   g_free(self->dhparam_file);
   self->dhparam_file = g_strdup(dhparam_file);
+}
+
+void
+tls_context_set_sni(TLSContext *self, const gchar *sni)
+{
+  g_free(self->sni);
+  self->sni = g_strdup(sni);
 }
 
 void
@@ -1053,8 +1123,8 @@ tls_wildcard_match(const gchar *host_name, const gchar *pattern)
           goto exit;
         }
 
-      lower_pattern = g_ascii_strdown(pattern_parts[i],-1);
-      lower_hostname = g_ascii_strdown(hostname_parts[i],-1);
+      lower_pattern = g_ascii_strdown(pattern_parts[i], -1);
+      lower_hostname = g_ascii_strdown(hostname_parts[i], -1);
 
       if (!g_pattern_match_simple(lower_pattern, lower_hostname))
         goto exit;

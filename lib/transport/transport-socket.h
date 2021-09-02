@@ -31,12 +31,15 @@ typedef struct _LogTransportSocket LogTransportSocket;
 struct _LogTransportSocket
 {
   LogTransport super;
+  gint address_family;
+  gint proto;
 };
 
 void log_transport_dgram_socket_init_instance(LogTransportSocket *self, gint fd);
 LogTransport *log_transport_dgram_socket_new(gint fd);
 
 void log_transport_stream_socket_init_instance(LogTransportSocket *self, gint fd);
+void log_transport_stream_socket_free_method(LogTransport *s);
 LogTransport *log_transport_stream_socket_new(gint fd);
 
 #endif

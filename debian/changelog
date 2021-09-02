@@ -1,3 +1,129 @@
+syslog-ng (3.28.1-2pexip1) pexip; urgency=medium
+
+  * Pull in newer version of syslog-ng from Bullseye
+  * Most patches now upstream, including add_ca_file.patch
+    + Refactor systemd_default_prio.patch to fit
+  * Disable / remove some modules and build-deps:
+    + syslog-ng-mod-rdkafka (libkafka-dev)
+    + syslog-ng-mod-snmp (libsnmp-dev)
+
+ -- Steve McIntyre <steve.mcintyre@pexip.com>  Thu, 02 Sep 2021 16:02:48 +0100
+
+syslog-ng (3.28.1-2) unstable; urgency=medium
+
+  * [def6b75] Remove overlay configuration from gbp.conf.
+    The git tree used to contain only the debianization related files.  As that
+    is not the case any more, the overlay option is not needed/can cause
+    problems.
+
+ -- SZALAY Attila <sasa@debian.org>  Sun, 13 Sep 2020 11:23:18 +0200
+
+syslog-ng (3.28.1-1) unstable; urgency=medium
+
+  [ SZALAY Attila ]
+  * [fb28861] New upstream version 3.28.1
+  * [47b589a] Remove patches applied upstream
+  * [6e316b7] Follow upstream renaming to slogimport to slogencrypt
+  * [c3e32f7] Added new manpage secure-logging.7
+  * [469b9e4] Fix lintian warning about direct maintscript usage
+  * [3af35f0] Clean up the packaging a bit.
+    Fixed the dh_missing exclude magic, so both the rm command can be removed
+    from the rules file and the related lines can be removed from the
+    not-installed file.
+  * [a1ffbc9] Made some other changes suggested by lintian
+    * Stop using dpkg-parsechangelog to get the package version
+    * Remove/change entries in the copyright file
+  * [3ec3edd] Remove github specific files from upstream archive
+  * [eb55eb4] Factor out syslog-ng-mod-slog
+
+  [ Balazs Scheidler ]
+  * [8627c6b] add azure-auth-header build products into mod-http
+  * [58e946b] drop pylint3 as a Build-Dependency.
+    We are not running pylint3 in debian packaging anyway and Ubuntu eoan does
+    not have this package.
+  * [ee8dd32] follow upstream merge of snmpdest and snmptrapd-parser modules
+  * [4ae0f1b] move the python files under a syslog-ng specific directory
+
+ -- SZALAY Attila <sasa@debian.org>  Fri, 28 Aug 2020 23:40:23 +0200
+
+syslog-ng (3.27.1-3) unstable; urgency=medium
+
+  * Fix sumologic.conf installation.
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.org>  Tue, 16 Jun 2020 22:16:59 +0200
+
+syslog-ng (3.27.1-2) unstable; urgency=medium
+
+  * Fix self-tests as mod-snmptrapd-parser merged to mod-snmp package
+    (closes: #962893).
+  * Update Standards-Version to 4.5.0 .
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.org>  Tue, 16 Jun 2020 19:04:17 +0200
+
+syslog-ng (3.27.1-1) unstable; urgency=medium
+
+  * New upstream release:
+    - builds with Bison 3.6.1 (closes: #960481).
+  * Merge snmptrapd-parser mod to snmp mod.
+  * Backport fix for hang on boot due to lack of entropy (closes: #913754).
+  * Remove merged in patches.
+  * Update configuration version.
+
+  [ Balazs Scheidler <bazsi77@gmail.com> ]
+  * Add support for the snmp() destination (syslog-ng-mod-snmp package).
+  * Move the http() destination into a separate package (syslog-ng-mod-http).
+  * Move BSD process accounting (pacct) support into the core package.
+  * Move tags-parser() to the core package.
+  * Add support for librdkafka based kafka destination (in mod-rdkafka
+    package).
+  * Use upstream scl.conf .
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.org>  Sun, 17 May 2020 14:41:30 +0200
+
+syslog-ng (3.25.1-3) unstable; urgency=medium
+
+  * Remove outdated pep8 build dependency.
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.org>  Tue, 03 Mar 2020 19:39:43 +0000
+
+syslog-ng (3.25.1-2) unstable; urgency=medium
+
+  * Update upstream bison update (closes: #949847).
+
+  [ Balazs Scheidler <bazsi77@gmail.com> ]
+  * Remove unneeded/empty Makefile.am file.
+  * Remove obsoleted sections from README.source .
+  * Update github URL in copyright.
+  * Change github url in the watch file.
+  * Add wants/after lines into syslog-ng.systemd unit file.
+  * Remove libgeoip-dev as build dependency.
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.org>  Sun, 01 Mar 2020 11:38:57 +0000
+
+syslog-ng (3.25.1-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Merge in syslog-ng-mod-journal (closes: #924264).
+  * Remove syslog-ng-mod-geoip module.
+  * Python3ify syslog-ng-mod-python (closes: #938618).
+  * Add upstream persist-tool manpage.
+  * Backport upstream bison update.
+  * Install all SCL files.
+  * Update configuration version.
+  * Update self-tests.
+  * Update Standards-Version to 4.4.1 .
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.org>  Sat, 21 Dec 2019 08:42:10 +0000
+
+syslog-ng (3.19.1-6) unstable; urgency=medium
+
+  * Sync with Ubuntu.
+
+  [ Dimitri John Ledkov <xnox@ubuntu.com> ]
+  * Fix FTBFS with bison 3.4.1 (closes: #931302).
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.org>  Tue, 09 Jul 2019 16:37:13 +0000
+
 syslog-ng (3.19.1-5pexip4) pexip; urgency=medium
 
   * Force removal of old config file on upgrade

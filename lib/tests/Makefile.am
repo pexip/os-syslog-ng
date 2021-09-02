@@ -8,7 +8,7 @@ lib_tests_TESTS		= \
 	lib/tests/test_hostname		\
 	lib/tests/test_rcptid		\
 	lib/tests/test_lexer        	\
-	lib/tests/test_logthrdestdrv	\
+	lib/tests/test_pragma        	\
 	lib/tests/test_str_format   	\
 	lib/tests/test_string_list	\
 	lib/tests/test_runid        	\
@@ -18,7 +18,11 @@ lib_tests_TESTS		= \
 	lib/tests/test_str-utils \
 	lib/tests/test_atomic_gssize \
 	lib/tests/test_window_size_counter \
-	lib/tests/test_apphook
+	lib/tests/test_apphook \
+	lib/tests/test_dynamic_window \
+	lib/tests/test_logqueue \
+	lib/tests/test_logsource \
+	lib/tests/test_persist_state
 
 EXTRA_DIST += lib/tests/CMakeLists.txt
 
@@ -78,9 +82,9 @@ lib_tests_test_lexer_CFLAGS	=	\
 lib_tests_test_lexer_LDADD	=	\
 	$(TEST_LDADD)
 
-lib_tests_test_logthrdestdrv_CFLAGS	=	\
+lib_tests_test_pragma_CFLAGS	=	\
 	$(TEST_CFLAGS)
-lib_tests_test_logthrdestdrv_LDADD	=	\
+lib_tests_test_pragma_LDADD	=	\
 	$(TEST_LDADD)
 
 lib_tests_test_runid_CFLAGS	=	\
@@ -129,6 +133,19 @@ lib_tests_test_apphook_CFLAGS	=	\
 lib_tests_test_apphook_LDADD	=	\
 	$(TEST_LDADD)
 
+lib_tests_test_dynamic_window_CFLAGS	=	\
+	$(TEST_CFLAGS)
+lib_tests_test_dynamic_window_LDADD	=	\
+	$(TEST_LDADD)
+
+lib_tests_test_logqueue_CFLAGS = $(TEST_CFLAGS)
+lib_tests_test_logqueue_LDADD = $(TEST_LDADD)
+
+lib_tests_test_logsource_CFLAGS = $(TEST_CFLAGS)
+lib_tests_test_logsource_LDADD = $(TEST_LDADD)
+
+lib_tests_test_persist_state_CFLAGS = $(TEST_CFLAGS)
+lib_tests_test_persist_state_LDADD = $(TEST_LDADD)
 
 CLEANFILES				+= \
 	test_values.persist		   \
@@ -142,17 +159,11 @@ lib_tests_test_userdb_LDADD	= \
 lib_tests_TESTS		+= \
 	lib/tests/test_cache		\
 	lib/tests/test_scratch_buffers 	\
-	lib/tests/test_timeutils	\
 	lib/tests/test_messages
 
 lib_tests_test_cache_CFLAGS	=	\
 	$(TEST_CFLAGS)
 lib_tests_test_cache_LDADD	=	\
-	$(TEST_LDADD)
-
-lib_tests_test_timeutils_CFLAGS	=	\
-	$(TEST_CFLAGS)
-lib_tests_test_timeutils_LDADD	=	\
 	$(TEST_LDADD)
 
 lib_tests_test_scratch_buffers_CFLAGS	=	\

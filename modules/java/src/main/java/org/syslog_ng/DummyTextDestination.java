@@ -35,9 +35,9 @@ public class DummyTextDestination extends TextLogDestination {
     InternalMessageSender.debug("Deinit");
   }
 
-  public void onMessageQueueEmpty() {
-    InternalMessageSender.debug("onMessageQueueEmpty");
-    return;
+  public int flush() {
+    InternalMessageSender.debug("Flush");
+    return SUCCESS;
   }
 
   public boolean init() {
@@ -64,9 +64,9 @@ public class DummyTextDestination extends TextLogDestination {
     InternalMessageSender.debug("close");
   }
 
-  public boolean send(String arg0) {
+  public int send(String arg0) {
     InternalMessageSender.debug("Incoming message: " + arg0);
-    return true;
+    return SUCCESS;
   }
 
   @Override

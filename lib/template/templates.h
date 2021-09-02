@@ -27,8 +27,9 @@
 
 #include "syslog-ng.h"
 #include "common-template-typedefs.h"
-#include "timeutils.h"
+#include "timeutils/zoneinfo.h"
 #include "type-hinting.h"
+#include "atomic.h"
 
 #define LTZ_LOCAL 0
 #define LTZ_SEND  1
@@ -56,13 +57,12 @@ typedef enum
 /* structure that represents an expandable syslog-ng template */
 typedef struct _LogTemplate
 {
-  gint ref_cnt;
+  GAtomicCounter ref_cnt;
   gchar *name;
   gchar *template;
   GList *compiled_template;
-  gboolean escape;
-  gboolean def_inline;
   GlobalConfig *cfg;
+  guint escape:1, def_inline:1, trivial:1;
   TypeHint type_hint;
 } LogTemplate;
 
@@ -77,6 +77,7 @@ struct _LogTemplateOptions
   gint ts_format;
   /* number of digits in the fraction of a second part, specified using frac_digits() */
   gint frac_digits;
+  gboolean use_fqdn;
 
   /* timezone for LTZ_LOCAL/LTZ_SEND settings */
   gchar *time_zone[LTZ_MAX];
@@ -91,6 +92,9 @@ struct _LogTemplateOptions
 void log_template_set_escape(LogTemplate *self, gboolean enable);
 gboolean log_template_set_type_hint(LogTemplate *self, const gchar *hint, GError **error);
 gboolean log_template_compile(LogTemplate *self, const gchar *template, GError **error);
+void log_template_compile_literal_string(LogTemplate *self, const gchar *literal);
+gboolean log_template_is_trivial(LogTemplate *self);
+const gchar *log_template_get_trivial_value(LogTemplate *self, LogMessage *msg, gssize *value_len);
 void log_template_format(LogTemplate *self, LogMessage *lm, const LogTemplateOptions *opts, gint tz, gint32 seq_num,
                          const gchar *context_id, GString *result);
 void log_template_append_format(LogTemplate *self, LogMessage *lm, const LogTemplateOptions *opts, gint tz,

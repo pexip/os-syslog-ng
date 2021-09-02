@@ -1,8 +1,9 @@
 #!/bin/bash
 
+. /dbld/functions.sh
+
 cd /source
 
-VERSION=`cat /source/VERSION`
 MODE=$1
 SYSLOGNG_DIR=syslog-ng-${VERSION}
 SYSLOGNG_TARBALL=${SYSLOGNG_DIR}.tar.gz
@@ -19,8 +20,10 @@ tar xfz $SYSLOGNG_TARBALL
 cp $SYSLOGNG_TARBALL ${SYSLOGNG_TARBALL}.orig
 cd $SYSLOGNG_DIR
 
-/source/dbld/generate-debian-directory $MODE
-/source/dbld/generate-rpm-specfile $MODE
+echo ${VERSION} > VERSION
+
+/dbld/generate-debian-directory $MODE
+/dbld/generate-rpm-specfile $MODE
 
 cd ..
 tar cfz $SYSLOGNG_TARBALL $SYSLOGNG_DIR

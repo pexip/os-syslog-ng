@@ -53,6 +53,7 @@ typedef enum
   TSO_NOTLSv1=0x0004,
   TSO_NOTLSv11=0x0008,
   TSO_NOTLSv12=0x0010,
+  TSO_NOTLSv13=0x0020,
 } TLSSslOptions;
 
 typedef enum
@@ -120,9 +121,11 @@ void tls_context_set_cert_file(TLSContext *self, const gchar *cert_file);
 void tls_context_set_pkcs12_file(TLSContext *self, const gchar *pkcs12_file);
 void tls_context_set_ca_dir(TLSContext *self, const gchar *ca_dir);
 void tls_context_set_crl_dir(TLSContext *self, const gchar *crl_dir);
+void tls_context_set_ca_file(TLSContext *self, const gchar *ca_file);
 void tls_context_set_cipher_suite(TLSContext *self, const gchar *cipher_suite);
 void tls_context_set_ecdh_curve_list(TLSContext *self, const gchar *ecdh_curve_list);
 void tls_context_set_dhparam_file(TLSContext *self, const gchar *dhparam_file);
+void tls_context_set_sni(TLSContext *self, const gchar *sni);
 const gchar *tls_context_get_key_file(TLSContext *self);
 EVTTAG *tls_context_format_tls_error_tag(TLSContext *self);
 EVTTAG *tls_context_format_location_tag(TLSContext *self);

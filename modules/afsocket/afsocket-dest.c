@@ -27,6 +27,9 @@
 #include "gsocket.h"
 #include "stats/stats-registry.h"
 #include "mainloop.h"
+#include "timeutils/misc.h"
+#include "hostname.h"
+#include "persist-state.h"
 
 #include <string.h>
 #include <sys/types.h>
@@ -82,6 +85,14 @@ afsocket_dd_set_keep_alive(LogDriver *s, gboolean enable)
   self->connections_kept_alive_across_reloads = enable;
 }
 
+void
+afsocket_dd_set_close_on_input(LogDriver *s, gboolean close_on_input)
+{
+  AFSocketDestDriver *self = (AFSocketDestDriver *) s;
+
+  self->close_on_input = close_on_input;
+}
+
 static const gchar *_module_name = "afsocket_dd";
 
 static const gchar *
@@ -95,6 +106,20 @@ _get_module_identifier(const AFSocketDestDriver *self)
 
   return self->super.super.super.persist_name ? self->super.super.super.persist_name
          : module_identifier;
+}
+
+static const gchar *
+_get_legacy_module_identifier(const AFSocketDestDriver *self)
+{
+  static gchar legacy_module_identifier[128];
+  const gchar *hostname = get_local_hostname_fqdn();
+
+  g_snprintf(legacy_module_identifier, sizeof(legacy_module_identifier), "%s,%s,%s",
+             (self->transport_mapper->sock_type == SOCK_STREAM) ? "stream" : "dgram",
+             afsocket_dd_get_dest_name(self),
+             hostname);
+
+  return legacy_module_identifier;
 }
 
 static const gchar *
@@ -126,6 +151,16 @@ afsocket_dd_format_connections_name(const AFSocketDestDriver *self)
              _get_module_identifier(self));
 
   return persist_name;
+}
+
+static const gchar *
+afsocket_dd_format_legacy_connection_name(const AFSocketDestDriver *self)
+{
+  static gchar legacy_persist_name[1024];
+  g_snprintf(legacy_persist_name, sizeof(legacy_persist_name), "%s_connection(%s)", _module_name,
+             _get_legacy_module_identifier(self));
+
+  return legacy_persist_name;
 }
 
 static gchar *
@@ -196,6 +231,22 @@ afsocket_dd_start_reconnect_timer(AFSocketDestDriver *self)
   self->reconnect_timer.expires = iv_now;
   timespec_add_msec(&self->reconnect_timer.expires, self->time_reopen * 1000L);
   iv_timer_register(&self->reconnect_timer);
+}
+
+static gboolean
+_update_legacy_connection_persist_name(AFSocketDestDriver *self)
+{
+  GlobalConfig *cfg = log_pipe_get_config(&self->super.super.super);
+  const gchar *current_persist_name = afsocket_dd_format_connections_name(self);
+  const gchar *legacy_persist_name = afsocket_dd_format_legacy_connection_name(self);
+
+  if (persist_state_entry_exists(cfg->state, current_persist_name))
+    return TRUE;
+
+  if (!persist_state_entry_exists(cfg->state, legacy_persist_name))
+    return TRUE;
+
+  return persist_state_move_entry(cfg->state, legacy_persist_name, current_persist_name);
 }
 
 static LogTransport *
@@ -298,8 +349,8 @@ afsocket_dd_start_connect(AFSocketDestDriver *self)
   g_assert(self->transport_mapper->transport);
   g_assert(self->bind_addr);
 
-  if (!transport_mapper_open_socket(self->transport_mapper, self->socket_options, self->bind_addr, AFSOCKET_DIR_SEND,
-                                    &sock))
+  if (!transport_mapper_open_socket(self->transport_mapper, self->socket_options, self->bind_addr, self->dest_addr,
+                                    AFSOCKET_DIR_SEND, &sock))
     {
       return FALSE;
     }
@@ -460,7 +511,7 @@ afsocket_dd_construct_writer_method(AFSocketDestDriver *self)
   guint32 writer_flags = 0;
 
   writer_flags |= LW_FORMAT_PROTO;
-  if (self->transport_mapper->sock_type == SOCK_STREAM)
+  if (self->transport_mapper->sock_type == SOCK_STREAM && self->close_on_input)
     writer_flags |= LW_DETECT_EOF;
 
   return log_writer_new(writer_flags, self->super.super.super.cfg);
@@ -577,6 +628,9 @@ afsocket_dd_init(LogPipe *s)
       return FALSE;
     }
 
+  if (!_update_legacy_connection_persist_name(self))
+    return FALSE;
+
   if (!_dd_init_socket(self))
     {
       return FALSE;
@@ -680,6 +734,7 @@ afsocket_dd_init_instance(AFSocketDestDriver *self,
   self->transport_mapper = transport_mapper;
   self->socket_options = socket_options;
   self->connections_kept_alive_across_reloads = TRUE;
+  self->close_on_input = TRUE;
   self->time_reopen = cfg->time_reopen;
   self->connection_initialized = FALSE;
 

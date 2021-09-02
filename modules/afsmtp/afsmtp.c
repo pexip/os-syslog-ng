@@ -28,7 +28,7 @@
 #include "stats/stats-registry.h"
 #include "logqueue.h"
 #include "plugin-types.h"
-#include "logthrdestdrv.h"
+#include "logthrdest/logthrdestdrv.h"
 
 #include <libesmtp.h>
 #include <signal.h>
@@ -79,9 +79,9 @@ afsmtp_wash_string (gchar *str)
   gint i;
 
   for (i = 0; i < strlen (str); i++)
-         if (str[i] == '\n' ||
-             str[i] == '\r')
-           str[i] = ' ';
+    if (str[i] == '\n' ||
+        str[i] == '\r')
+      str[i] = ' ';
 
   return str;
 }
@@ -349,26 +349,22 @@ static void
 afsmtp_dd_cb_monitor(const gchar *buf, gint buflen, gint writing,
                      AFSMTPDriver *self)
 {
-  gchar fmt[32];
-
-  g_snprintf(fmt, sizeof(fmt), "%%.%us", buflen);
-
   switch (writing)
     {
     case SMTP_CB_READING:
       msg_debug ("SMTP Session: SERVER",
                  evt_tag_str("driver", self->super.super.super.id),
-                 evt_tag_printf("message", fmt, buf));
+                 evt_tag_printf("message", "%.*s", buflen, buf));
       break;
     case SMTP_CB_WRITING:
       msg_debug("SMTP Session: CLIENT",
                 evt_tag_str("driver", self->super.super.super.id),
-                evt_tag_printf("message", fmt, buf));
+                evt_tag_printf("message", "%.*s", buflen, buf));
       break;
     case SMTP_CB_HEADERS:
       msg_debug("SMTP Session: HEADERS",
                 evt_tag_str("driver", self->super.super.super.id),
-                evt_tag_printf("data", fmt, buf));
+                evt_tag_printf("data", "%.*s", buflen, buf));
       break;
     }
 }
@@ -482,39 +478,35 @@ __send_message(AFSMTPDriver *self, smtp_session_t session)
   return success;
 }
 
-static worker_insert_result_t
+static LogThreadedResult
 afsmtp_worker_insert(LogThreadedDestDriver *s, LogMessage *msg)
 {
   AFSMTPDriver *self = (AFSMTPDriver *)s;
-  gboolean success = TRUE;
-  gboolean message_sent = TRUE;
-  smtp_session_t session = NULL;
-  smtp_message_t message;
 
   if (msg->flags & LF_MARK)
     {
       msg_debug("Mark messages are dropped by SMTP destination",
                 evt_tag_str("driver", self->super.super.super.id));
-      return WORKER_INSERT_RESULT_SUCCESS;
+      return LTR_SUCCESS;
     }
 
-  session = __build_session(self, msg);
-  message = __build_message(self, msg, session);
+  smtp_session_t session = __build_session(self, msg);
+  smtp_message_t message = __build_message(self, msg, session);
 
-  message_sent = __send_message(self, session);
-  success = message_sent && __check_transfer_status(self, message);
+  gboolean message_sent = __send_message(self, session);
+  gboolean success = message_sent && __check_transfer_status(self, message);
 
   smtp_destroy_session(session);
 
   if (!success)
     {
       if (!message_sent)
-        return WORKER_INSERT_RESULT_NOT_CONNECTED;
+        return LTR_NOT_CONNECTED;
       else
-        return WORKER_INSERT_RESULT_ERROR;
+        return LTR_ERROR;
     }
 
-  return WORKER_INSERT_RESULT_SUCCESS;
+  return LTR_SUCCESS;
 }
 
 static void
@@ -549,8 +541,8 @@ __check_rcpt_tos(AFSMTPDriver *self)
     {
       AFSMTPRecipient *rcpt = (AFSMTPRecipient *)l->data;
       gboolean rcpt_type_accepted = rcpt->type == AFSMTP_RCPT_TYPE_BCC ||
-      rcpt->type == AFSMTP_RCPT_TYPE_CC  ||
-      rcpt->type == AFSMTP_RCPT_TYPE_TO;
+                                    rcpt->type == AFSMTP_RCPT_TYPE_CC  ||
+                                    rcpt->type == AFSMTP_RCPT_TYPE_TO;
 
       if (rcpt->template && rcpt_type_accepted)
         {
@@ -673,7 +665,7 @@ afsmtp_dd_new(GlobalConfig *cfg)
   self->super.worker.insert = afsmtp_worker_insert;
 
   self->super.format_stats_instance = afsmtp_dd_format_stats_instance;
-  self->super.stats_source = SCS_SMTP;
+  self->super.stats_source = stats_register_type("smtp");
 
   afsmtp_dd_set_host((LogDriver *)self, "127.0.0.1");
   afsmtp_dd_set_port((LogDriver *)self, 25);

@@ -75,6 +75,7 @@ tf_graphite_parse_command_line_arguments(TFGraphiteState *self, gint *argc, gcha
 
   success = g_option_context_parse (ctx, argc, argv, &error);
   g_option_context_free (ctx);
+  g_error_free(error);
 
   return success;
 }
@@ -122,11 +123,11 @@ tf_graphite_foreach_func(const gchar *name, TypeHint type, const gchar *value,
   TFGraphiteForeachUserData *data = (TFGraphiteForeachUserData *) user_data;
 
   g_string_append(data->result, name);
-  g_string_append_c(data->result,' ');
+  g_string_append_c(data->result, ' ');
   g_string_append(data->result, value);
-  g_string_append_c(data->result,' ');
+  g_string_append_c(data->result, ' ');
   g_string_append(data->result, data->formatted_unixtime->str);
-  g_string_append_c(data->result,'\n');
+  g_string_append_c(data->result, '\n');
 
   return FALSE;
 }
@@ -144,7 +145,7 @@ tf_graphite_format(GString *result, ValuePairs *vp, LogMessage *msg, const LogTe
 
   return_value = value_pairs_foreach(vp, tf_graphite_foreach_func, msg, 0, time_zone_mode, template_options, &userdata);
 
-  g_string_free(userdata.formatted_unixtime, FALSE);
+  g_string_free(userdata.formatted_unixtime, TRUE);
   return return_value;
 }
 

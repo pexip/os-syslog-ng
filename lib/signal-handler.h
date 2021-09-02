@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2018 Balabit
- * Copyright (c) 2018 Kokan
+ * Copyright (c) 2020 Balabit
+ * Copyright (c) 2020 Attila Szakacs
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -21,11 +21,5 @@
  * COPYING for details.
  *
  */
-#ifndef SIGNAL_HANDLER_H_INCLUDED
-#define SIGNAL_HANDLER_H_INCLUDED
 
-#include <signal.h>
-
-void trigger_sigchld_handler_chain(int);
-
-#endif
+void signal_handler_exec_external_handler(gint signal);

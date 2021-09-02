@@ -27,8 +27,65 @@
 
 #include "syslog-ng.h"
 
-typedef struct _PersistState PersistState;
+typedef struct _PersistFileHeader
+{
+  union
+  {
+    struct
+    {
+      /* should contain SLP4, everything is Big-Endian */
+
+      /* 64 bytes for file header */
+      gchar magic[4];
+      /* should be zero, any non-zero value is not supported and causes the state to be dropped */
+      guint32 flags;
+      /* number of name-value keys in the file */
+      guint32 key_count;
+      /* space reserved for additional information in the header */
+      gchar __reserved1[52];
+      /* initial key store where the first couple of NV keys are stored, sized to align the header to 4k boundary */
+      gchar initial_key_store[4032];
+    };
+    gchar __padding[4096];
+  };
+} PersistFileHeader;
+
 typedef guint32 PersistEntryHandle;
+
+typedef struct
+{
+  void (*handler)(gpointer user_data);
+  gpointer cookie;
+} PersistStateErrorHandler;
+
+typedef struct _PersistEntry
+{
+  PersistEntryHandle ofs;
+} PersistEntry;
+
+struct _PersistState
+{
+  gint version;
+  gchar *committed_filename;
+  gchar *temp_filename;
+  gint fd;
+  gint mapped_counter;
+  GMutex *mapped_lock;
+  GCond *mapped_release_cond;
+  guint32 current_size;
+  guint32 current_ofs;
+  gpointer current_map;
+  PersistFileHeader *header;
+  PersistStateErrorHandler error_handler;
+
+  /* keys being used */
+  GHashTable *keys;
+  PersistEntryHandle current_key_block;
+  gint current_key_ofs;
+  gint current_key_size;
+};
+
+typedef struct _PersistState PersistState;
 
 gpointer persist_state_map_entry(PersistState *self, PersistEntryHandle handle);
 void persist_state_unmap_entry(PersistState *self, PersistEntryHandle handle);
@@ -36,10 +93,12 @@ void persist_state_unmap_entry(PersistState *self, PersistEntryHandle handle);
 PersistEntryHandle persist_state_alloc_entry(PersistState *self, const gchar *persist_name, gsize alloc_size);
 PersistEntryHandle persist_state_lookup_entry(PersistState *self, const gchar *persist_name, gsize *size,
                                               guint8 *version);
+gboolean persist_state_entry_exists(PersistState *self, const gchar *persist_name);
 gboolean persist_state_remove_entry(PersistState *self, const gchar *persist_name);
 
 gchar *persist_state_lookup_string(PersistState *self, const gchar *key, gsize *length, guint8 *version);
 gboolean persist_state_rename_entry(PersistState *self, const gchar *old_key, const gchar *new_key);
+gboolean persist_state_move_entry(PersistState *self, const gchar *old_key, const gchar *new_key);
 void persist_state_alloc_string(PersistState *self, const gchar *persist_name, const gchar *value, gssize len);
 
 void persist_state_free_entry(PersistEntryHandle handle);

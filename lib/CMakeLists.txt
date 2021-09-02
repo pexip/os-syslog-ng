@@ -9,6 +9,7 @@ bison_target(CfgGrammar
     COMPILE_FLAGS ${BISON_FLAGS})
 add_flex_bison_dependency(CfgLexer CfgGrammar)
 
+add_subdirectory(ack-tracker)
 add_subdirectory(compat)
 add_subdirectory(control)
 add_subdirectory(debugger)
@@ -23,11 +24,15 @@ add_subdirectory(transport)
 add_subdirectory(value-pairs)
 add_subdirectory(scanner)
 add_subdirectory(str-repr)
+add_subdirectory(timeutils)
 add_subdirectory(eventlog)
 add_subdirectory(secret-storage)
 add_subdirectory(logthrsource)
+add_subdirectory(logthrdest)
+add_subdirectory(signal-slot-connector)
 
 set(LIB_SUBDIR_HEADERS
+    ${ACK_TRACKER_HEADERS}
     ${COMPAT_HEADERS}
     ${CONTROL_HEADERS}
     ${DEBUGGER_HEADERS}
@@ -43,8 +48,12 @@ set(LIB_SUBDIR_HEADERS
     ${CSV_SCANNER_HEADERS}
     ${LIST_SCANNER_HEADERS}
     ${KV_SCANNER_HEADERS}
+    ${XML_SCANNER_HEADERS}
     ${STR_REPR_HEADERS}
+    ${TIMEUTILS_HEADERS}
+    ${LOGTHRDEST_HEADERS}
     ${LOGTHRSOURCE_HEADERS}
+    ${SIGNAL_SLOT_CONNECTOR_HEADERS}
     ${CMAKE_CURRENT_BINARY_DIR}/filter/filter-expr-grammar.h
     ${CMAKE_CURRENT_BINARY_DIR}/rewrite/rewrite-expr-grammar.h
     ${CMAKE_CURRENT_BINARY_DIR}/parser/parser-expr-grammar.h
@@ -65,11 +74,15 @@ set (LIB_HEADERS
     cfg-block.h
     cfg-block-generator.h
     cfg-parser.h
+    cfg-path.h
     cfg-tree.h
+    cfg-walker.h
     children.h
     crypto.h
     dnscache.h
     driver.h
+    dynamic-window-pool.h
+    dynamic-window.h
     fdhelpers.h
     file-perms.h
     find-crlf.h
@@ -78,6 +91,7 @@ set (LIB_HEADERS
     gsocket.h
     hostname.h
     host-resolve.h
+    list-adt.h
     logmatcher.h
     logmpx.h
     logpipe.h
@@ -85,11 +99,8 @@ set (LIB_HEADERS
     logqueue.h
     logreader.h
     logsource.h
-    logstamp.h
-    logthrdestdrv.h
     logwriter.h
     mainloop.h
-    signal-handler.h
     mainloop-call.h
     mainloop-worker.h
     mainloop-io-worker.h
@@ -97,7 +108,9 @@ set (LIB_HEADERS
     memtrace.h
     messages.h
     ml-batched-timer.h
+    mainloop-control.h
     msg-format.h
+    msg-stats.h
     parse-number.h
     pathutils.h
     persist-state.h
@@ -121,7 +134,6 @@ set (LIB_HEADERS
     syslog-names.h
     syslog-ng.h
     string-list.h
-    timeutils.h
     tls-support.h
     thread-utils.h
     tlscontext.h
@@ -130,9 +142,7 @@ set (LIB_HEADERS
     userdb.h
     utf8utils.h
     versioning.h
-    bookmark.h
     ringbuffer.h
-    ack_tracker.h
     host-id.h
     resolved-configurable-paths.h
     window-size-counter.h
@@ -155,10 +165,14 @@ set(LIB_SOURCES
     cfg-lexer.c
     cfg-lexer-subst.c
     cfg-parser.c
+    cfg-path.c
     cfg-tree.c
+    cfg-walker.c
     children.c
     dnscache.c
     driver.c
+    dynamic-window.c
+    dynamic-window-pool.c
     fdhelpers.c
     file-perms.c
     find-crlf.c
@@ -175,8 +189,6 @@ set(LIB_SOURCES
     logqueue-fifo.c
     logreader.c
     logsource.c
-    logstamp.c
-    logthrdestdrv.c
     logwriter.c
     mainloop.c
     signal-handler.c
@@ -187,7 +199,9 @@ set(LIB_SOURCES
     memtrace.c
     messages.c
     ml-batched-timer.c
+    mainloop-control.c
     msg-format.c
+    msg-stats.c
     parse-number.c
     pathutils.c
     persist-state.c
@@ -206,11 +220,8 @@ set(LIB_SOURCES
     str-utils.c
     syslog-names.c
     string-list.c
-    timeutils.c
     type-hinting.c
     ringbuffer.c
-    late_ack_tracker.c
-    early_ack_tracker.c
     crypto.c
     tlscontext.c
     uuid.c
@@ -219,6 +230,7 @@ set(LIB_SOURCES
     host-id.c
     resolved-configurable-paths.c
     window-size-counter.c
+    ${ACK_TRACKER_SOURCES}
     ${COMPAT_SOURCES}
     ${CONTROL_SOURCES}
     ${DEBUGGER_SOURCES}
@@ -233,7 +245,10 @@ set(LIB_SOURCES
     ${VALUE_PAIRS_SOURCES}
     ${SCANNER_SOURCES}
     ${STR_REPR_SOURCES}
+    ${TIMEUTILS_SOURCES}
+    ${LOGTHRDEST_SOURCES}
     ${LOGTHRSOURCE_SOURCES}
+    ${SIGNAL_SLOT_CONNECTOR_SOURCES}
     ${PROJECT_BINARY_DIR}/lib/cfg-grammar.c
     ${PROJECT_BINARY_DIR}/lib/block-ref-grammar.c
     ${PROJECT_BINARY_DIR}/lib/cfg-lex.c
@@ -279,19 +294,22 @@ bison_target(ParserExprGrammar
 add_flex_bison_dependency(CfgLexer ParserExprGrammar)
 
 set(CORE_INCLUDE_DIRS
-    ${GLIB_INCLUDE_DIRS}
     ${Gettext_INCLUDE_DIR}
     ${IVYKIS_INCLUDE_DIR}
     ${LIBPCRE_INCLUDE_DIRS}
-    ${LIBCAP_INCLUDE_DIR}
+    ${Libsystemd_INCLUDE_DIRS}
 )
 
 add_library(syslog-ng SHARED ${LIB_SOURCES})
 
 target_include_directories(syslog-ng
-  SYSTEM PUBLIC
+  PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+target_include_directories(syslog-ng
+  SYSTEM PUBLIC
     ${CORE_INCLUDE_DIRS}
 )
 
@@ -299,14 +317,15 @@ target_link_libraries(
     syslog-ng
   PUBLIC
     eventlog
-    ${GLIB_GMODULE_LIBRARIES}
-    ${GLIB_GTHREAD_LIBRARIES}
-    ${GLIB_LIBRARIES}
+    GLib::GLib
+    GLib::GThread
+    GLib::GModule
     ${Gettext_LIBRARIES}
     ${IVYKIS_LIBRARY}
-    ${RESOLV_LIBRARIES}
     ${LIBPCRE_LIBRARIES}
-    ${LIBCAP_LIBRARY}
+    ${Libsystemd_LIBRARIES}
+    resolv
+    libcap
     OpenSSL::SSL
     OpenSSL::Crypto
     Threads::Threads
@@ -338,7 +357,9 @@ install(FILES ${STATS_HEADERS} DESTINATION include/syslog-ng/stats)
 install(FILES ${TEMPLATE_HEADERS} DESTINATION include/syslog-ng/template)
 install(FILES ${TRANSPORT_HEADERS} DESTINATION include/syslog-ng/transport)
 install(FILES ${CSV_SCANNER_HEADERS} DESTINATION include/syslog-ng/scanner/csv-scanner)
+install(FILES ${LOGTHRDEST_HEADERS} DESTINATION include/syslog-ng/logthrdest)
 install(FILES ${LOGTHRSOURCE_HEADERS} DESTINATION include/syslog-ng/logthrsource)
+install(FILES ${SIGNAL_SLOT_CONNECTOR_HEADERS} DESTINATION include/syslog-ng/signal-slot-connector)
 
 set(TOOLS
     merge-grammar.py

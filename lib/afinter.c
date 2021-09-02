@@ -343,7 +343,7 @@ afinter_sd_init(LogPipe *s)
 
   log_source_options_init(&self->source_options, cfg, self->super.super.group);
   self->source_options.stats_level = STATS_LEVEL0;
-  self->source_options.stats_source = SCS_INTERNAL;
+  self->source_options.stats_source = stats_register_type("internal");
   self->source = afinter_source_new(self, &self->source_options);
   log_pipe_append(&self->source->super, s);
 
@@ -478,7 +478,7 @@ afinter_register_posted_hook(gint hook_type, gpointer user_data)
 void
 afinter_global_init(void)
 {
-  register_application_hook(AH_POST_CONFIG_LOADED, afinter_register_posted_hook, NULL);
+  register_application_hook(AH_CONFIG_CHANGED, afinter_register_posted_hook, NULL);
 }
 
 void

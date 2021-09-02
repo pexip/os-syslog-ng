@@ -35,7 +35,7 @@
 
 #include <glib.h>
 #include <stomp.h>
-#include "logthrdestdrv.h"
+#include "logthrdest/logthrdestdrv.h"
 
 typedef struct
 {
@@ -224,8 +224,8 @@ afstomp_dd_connect(STOMPDestDriver *self, gboolean reconnect)
       return FALSE;
     }
 
-  stomp_receive_frame(self->conn, &frame);
-  if (strcmp(frame.command, "CONNECTED"))
+  gboolean frame_read = stomp_receive_frame(self->conn, &frame);
+  if (!frame_read || strcmp(frame.command, "CONNECTED") != 0)
     {
       msg_debug("Error connecting to STOMP server, stomp server did not accept CONNECT request");
       stomp_frame_deinit(&frame);
@@ -318,18 +318,18 @@ afstomp_worker_publish(STOMPDestDriver *self, LogMessage *msg)
   return success;
 }
 
-static worker_insert_result_t
+static LogThreadedResult
 afstomp_worker_insert(LogThreadedDestDriver *s, LogMessage *msg)
 {
   STOMPDestDriver *self = (STOMPDestDriver *)s;
 
   if (!afstomp_dd_connect(self, TRUE))
-    return WORKER_INSERT_RESULT_NOT_CONNECTED;
+    return LTR_NOT_CONNECTED;
 
   if (!afstomp_worker_publish (self, msg))
-    return WORKER_INSERT_RESULT_ERROR;
+    return LTR_ERROR;
 
-  return WORKER_INSERT_RESULT_SUCCESS;
+  return LTR_SUCCESS;
 }
 
 static void
@@ -392,7 +392,7 @@ afstomp_dd_new(GlobalConfig *cfg)
   self->super.worker.insert = afstomp_worker_insert;
 
   self->super.format_stats_instance = afstomp_dd_format_stats_instance;
-  self->super.stats_source = SCS_STOMP;
+  self->super.stats_source = stats_register_type("stomp");
 
   afstomp_dd_set_host((LogDriver *) self, "127.0.0.1");
   afstomp_dd_set_port((LogDriver *) self, 61613);

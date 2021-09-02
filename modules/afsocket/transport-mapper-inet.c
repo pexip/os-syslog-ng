@@ -29,6 +29,7 @@
 #include "transport/multitransport.h"
 #include "transport/transport-factory-tls.h"
 #include "transport/transport-factory-socket.h"
+#include "transport/transport-udp-socket.h"
 #include "secret-storage/secret-storage.h"
 
 #include <sys/types.h>
@@ -132,7 +133,10 @@ _construct_plain_tcp_transport(TransportMapperInet *self, gint fd)
   if (self->super.create_multitransport)
     return _construct_multitransport_with_plain_tcp_factory(self, fd);
 
-  return transport_mapper_construct_log_transport_method(&self->super, fd);
+  if (self->super.sock_type == SOCK_DGRAM)
+    return log_transport_udp_socket_new(fd);
+  else
+    return log_transport_stream_socket_new(fd);
 }
 
 static LogTransport *
@@ -309,7 +313,7 @@ transport_mapper_tcp_new(void)
   self->super.sock_type = SOCK_STREAM;
   self->super.sock_proto = IPPROTO_TCP;
   self->super.logproto = "text";
-  self->super.stats_source = SCS_TCP;
+  self->super.stats_source = stats_register_type("tcp");
   self->server_port = TCP_PORT;
   self->require_tls_when_has_tls_context = TRUE;
   return &self->super;
@@ -321,7 +325,7 @@ transport_mapper_tcp6_new(void)
   TransportMapper *self = transport_mapper_tcp_new();
 
   self->address_family = AF_INET6;
-  self->stats_source = SCS_TCP6;
+  self->stats_source = stats_register_type("tcp6");
   return self;
 }
 
@@ -333,7 +337,7 @@ transport_mapper_udp_new(void)
   self->super.sock_type = SOCK_DGRAM;
   self->super.sock_proto = IPPROTO_UDP;
   self->super.logproto = "dgram";
-  self->super.stats_source = SCS_UDP;
+  self->super.stats_source = stats_register_type("udp");
   self->server_port = UDP_PORT;
   return &self->super;
 }
@@ -344,7 +348,7 @@ transport_mapper_udp6_new(void)
   TransportMapper *self = transport_mapper_udp_new();
 
   self->address_family = AF_INET6;
-  self->stats_source = SCS_UDP6;
+  self->stats_source = stats_register_type("udp6");
   return self;
 }
 
@@ -404,7 +408,7 @@ transport_mapper_network_new(void)
   TransportMapperInet *self = transport_mapper_inet_new_instance("tcp");
 
   self->super.apply_transport = transport_mapper_network_apply_transport;
-  self->super.stats_source = SCS_NETWORK;
+  self->super.stats_source = stats_register_type("network");
   return &self->super;
 }
 
@@ -421,7 +425,7 @@ transport_mapper_syslog_apply_transport(TransportMapper *s, GlobalConfig *cfg)
 
   if (strcasecmp(transport, "udp") == 0)
     {
-      if (cfg_is_config_version_older(cfg, 0x0303))
+      if (cfg_is_config_version_older(cfg, VERSION_VALUE_3_3))
         {
           self->server_port_change_warning = "WARNING: Default port for syslog(transport(udp)) has changed from 601 to 514 in "
                                              VERSION_3_3 ", please update your configuration";
@@ -443,7 +447,7 @@ transport_mapper_syslog_apply_transport(TransportMapper *s, GlobalConfig *cfg)
     }
   else if (strcasecmp(transport, "tls") == 0)
     {
-      if (cfg_is_config_version_older(cfg, 0x0303))
+      if (cfg_is_config_version_older(cfg, VERSION_VALUE_3_3))
         {
           self->server_port_change_warning = "WARNING: Default port for syslog(transport(tls))  has changed from 601 to 6514 in "
                                              VERSION_3_3 ", please update your configuration";
@@ -479,6 +483,6 @@ transport_mapper_syslog_new(void)
   TransportMapperInet *self = transport_mapper_inet_new_instance("tcp");
 
   self->super.apply_transport = transport_mapper_syslog_apply_transport;
-  self->super.stats_source = SCS_SYSLOG;
+  self->super.stats_source = stats_register_type("syslog");
   return &self->super;
 }

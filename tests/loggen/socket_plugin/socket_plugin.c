@@ -41,7 +41,7 @@
 #include <stdlib.h>
 #include <errno.h>
 
-static void           start(PluginOption *option);
+static gboolean       start(PluginOption *option);
 static void           stop(PluginOption *option);
 static gpointer       active_thread_func(gpointer user_data);
 static gpointer       idle_thread_func(gpointer user_data);
@@ -124,13 +124,30 @@ get_options(void)
   return loggen_options;
 }
 
-static void
+static gboolean
 start(PluginOption *option)
 {
   if (!option)
     {
       ERROR("invalid option refernce\n");
-      return;
+      return FALSE;
+    }
+
+  if (!is_plugin_activated())
+    return TRUE;
+
+  if (unix_socket_x)
+    {
+      if (!option->target)
+        {
+          ERROR("in case of unix domain socket please specify target parameter\n");
+          return FALSE;
+        }
+    }
+  else if (!option->target || !option->port)
+    {
+      ERROR("in case of TCP or UDP socket please specify target and port parameters\n");
+      return FALSE;
     }
 
   DEBUG("plugin (%d,%d,%d,%d)start\n",
@@ -146,21 +163,12 @@ start(PluginOption *option)
   thread_start = g_cond_new();
   thread_connected = g_cond_new();
 
-  if (!is_plugin_activated())
-    {
-      active_thread_count  = 0;
-      idle_thread_count  = 0;
-      return;
-    }
-  else
-    {
-      active_thread_count  = option->active_connections;
-      idle_thread_count = option->idle_connections;
-    }
+  active_thread_count  = option->active_connections;
+  idle_thread_count = option->idle_connections;
 
   connect_finished = 0;
 
-  for (int j=0 ; j<active_thread_count; j++)
+  for (int j = 0 ; j < option->active_connections; j++)
     {
       ThreadData *data = (ThreadData *)g_malloc0(sizeof(ThreadData));
       data->option = option;
@@ -170,7 +178,7 @@ start(PluginOption *option)
       g_ptr_array_add(thread_array, (gpointer) thread_id);
     }
 
-  for (int j=0; j<idle_thread_count; j++)
+  for (int j = 0; j < option->idle_connections; j++)
     {
       ThreadData *data = (ThreadData *)g_malloc0(sizeof(ThreadData));
       data->option = option;
@@ -185,11 +193,11 @@ start(PluginOption *option)
   end_time = g_get_monotonic_time () + CONNECTION_TIMEOUT_SEC * G_TIME_SPAN_SECOND;
 
   g_mutex_lock(thread_lock);
-  while (connect_finished != active_thread_count + idle_thread_count)
+  while (connect_finished != option->active_connections + option->idle_connections)
     {
       if (! g_cond_wait_until(thread_connected, thread_lock, end_time))
         {
-          ERROR("timeout ocured while waiting for connections\n");
+          ERROR("timeout occured while waiting for connections\n");
           break;
         }
     }
@@ -198,6 +206,8 @@ start(PluginOption *option)
   g_cond_broadcast(thread_start);
   thread_run = TRUE;
   g_mutex_unlock(thread_lock);
+
+  return TRUE;
 }
 
 static void
@@ -209,13 +219,16 @@ stop(PluginOption *option)
       return;
     }
 
+  if (!is_plugin_activated())
+    return;
+
   DEBUG("plugin stop\n");
   thread_run = FALSE;
 
   /* wait all threads to finish */
-  for (int j =0 ; j<active_thread_count+idle_thread_count; j++)
+  for (int j = 0; j < option->active_connections + option->idle_connections; j++)
     {
-      GThread *thread_id = g_ptr_array_index(thread_array,j);
+      GThread *thread_id = g_ptr_array_index(thread_array, j);
       if (!thread_id)
         continue;
 
@@ -225,16 +238,17 @@ stop(PluginOption *option)
   if (thread_lock)
     g_mutex_free(thread_lock);
 
-  DEBUG("all %d+%d threads have been stoped\n",
-        active_thread_count,
-        idle_thread_count);
+  DEBUG("all %d+%d threads have been stopped\n",
+        option->active_connections,
+        option->idle_connections);
 }
 
 gpointer
 idle_thread_func(gpointer user_data)
 {
-  PluginOption *option = ((ThreadData *)user_data)->option;
-  int thread_index = ((ThreadData *)user_data)->index;
+  ThreadData *thread_context = (ThreadData *)user_data;
+  PluginOption *option = thread_context->option;
+  int thread_index = thread_context->index;
 
   int sock_type = SOCK_STREAM;
 
@@ -251,33 +265,33 @@ idle_thread_func(gpointer user_data)
 
   if (fd<0)
     {
-      ERROR("can not connect to %s:%s (%p)\n",option->target, option->port,g_thread_self());
+      ERROR("can not connect to %s:%s (%p)\n", option->target, option->port, g_thread_self());
     }
   else
     {
-      DEBUG("(%d) connected to server on socket %d (%p)\n",thread_index,fd,g_thread_self());
+      DEBUG("(%d) connected to server on socket %d (%p)\n", thread_index, fd, g_thread_self());
     }
 
   g_mutex_lock(thread_lock);
   connect_finished++;
 
-  if (connect_finished == active_thread_count + idle_thread_count)
+  if (connect_finished == option->active_connections + option->idle_connections)
     g_cond_broadcast(thread_connected);
 
   g_mutex_unlock(thread_lock);
 
-  DEBUG("thread (%s,%p) created. wait for start ...\n",loggen_plugin_info.name,g_thread_self());
+  DEBUG("thread (%s,%p) created. wait for start ...\n", loggen_plugin_info.name, g_thread_self());
   g_mutex_lock(thread_lock);
   while (!thread_run)
     {
-      g_cond_wait(thread_start,thread_lock);
+      g_cond_wait(thread_start, thread_lock);
     }
   g_mutex_unlock(thread_lock);
 
-  DEBUG("thread (%s,%p) started. (r=%d,c=%d)\n",loggen_plugin_info.name,g_thread_self(),option->rate,
+  DEBUG("thread (%s,%p) started. (r=%d,c=%d)\n", loggen_plugin_info.name, g_thread_self(), option->rate,
         option->number_of_messages);
 
-  while (fd > 0 && thread_run && active_thread_count>0)
+  while (fd > 0 && thread_run && active_thread_count > 0)
     {
       g_usleep(10*1000);
     }
@@ -286,7 +300,10 @@ idle_thread_func(gpointer user_data)
   idle_thread_count--;
   g_mutex_unlock(thread_lock);
 
+  shutdown(fd, SHUT_RDWR);
   close(fd);
+
+  g_free(thread_context);
   g_thread_exit(NULL);
   return NULL;
 }
@@ -314,30 +331,30 @@ active_thread_func(gpointer user_data)
 
   if (fd<0)
     {
-      ERROR("can not connect to %s:%s (%p)\n",option->target, option->port,g_thread_self());
+      ERROR("can not connect to %s:%s (%p)\n", option->target, option->port, g_thread_self());
     }
   else
     {
-      DEBUG("(%d) connected to server on socket %d (%p)\n",thread_context->index,fd,g_thread_self());
+      DEBUG("(%d) connected to server on socket %d (%p)\n", thread_context->index, fd, g_thread_self());
     }
 
   g_mutex_lock(thread_lock);
   connect_finished++;
 
-  if (connect_finished == active_thread_count + idle_thread_count)
+  if (connect_finished == option->active_connections + option->idle_connections)
     g_cond_broadcast(thread_connected);
 
   g_mutex_unlock(thread_lock);
 
-  DEBUG("thread (%s,%p) created. wait for start ...\n",loggen_plugin_info.name,g_thread_self());
+  DEBUG("thread (%s,%p) created. wait for start ...\n", loggen_plugin_info.name, g_thread_self());
   g_mutex_lock(thread_lock);
   while (!thread_run)
     {
-      g_cond_wait(thread_start,thread_lock);
+      g_cond_wait(thread_start, thread_lock);
     }
   g_mutex_unlock(thread_lock);
 
-  DEBUG("thread (%s,%p) started. (r=%d,c=%d)\n",loggen_plugin_info.name,g_thread_self(),option->rate,
+  DEBUG("thread (%s,%p) started. (r=%d,c=%d)\n", loggen_plugin_info.name, g_thread_self(), option->rate,
         option->number_of_messages);
 
   unsigned long count = 0;
@@ -358,7 +375,7 @@ active_thread_func(gpointer user_data)
 
       if (!generate_message)
         {
-          ERROR("generate_message not yet set up(%p)\n",g_thread_self());
+          ERROR("generate_message not yet set up(%p)\n", g_thread_self());
           break;
         }
 
@@ -376,7 +393,7 @@ active_thread_func(gpointer user_data)
           ssize_t rc = send_plain(fd, message + sent, strlen(message) - sent);
           if (rc < 0)
             {
-              ERROR("error sending buffer on %d (rc=%zd)\n",fd,rc);
+              ERROR("error sending buffer on %d (rc=%zd)\n", fd, rc);
               errno = ECONNABORTED;
               connection_error = TRUE;
               break;
@@ -387,14 +404,17 @@ active_thread_func(gpointer user_data)
       thread_context->sent_messages++;
       thread_context->buckets--;
     }
-  DEBUG("thread (%s,%p) finished\n",loggen_plugin_info.name,g_thread_self());
+  DEBUG("thread (%s,%p) finished\n", loggen_plugin_info.name, g_thread_self());
 
   g_free((gpointer)message);
   g_mutex_lock(thread_lock);
   active_thread_count--;
   g_mutex_unlock(thread_lock);
 
+  shutdown(fd, SHUT_RDWR);
   close(fd);
+
+  g_free(thread_context);
   g_thread_exit(NULL);
   return NULL;
 }

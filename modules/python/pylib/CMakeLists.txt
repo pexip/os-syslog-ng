@@ -5,7 +5,7 @@ add_custom_target(BuildPylib
 )
 
 add_custom_target(SetupPylib
-    COMMAND ${PYTHON_EXECUTABLE} setup.py install --root=/ --prefix=${CMAKE_CURRENT_BINARY_DIR}/install
+    COMMAND ${PYTHON_EXECUTABLE} setup.py install --root=/ --install-lib=${CMAKE_CURRENT_BINARY_DIR}/install/lib/syslog-ng/python
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     DEPENDS BuildPylib
     VERBATIM
@@ -16,7 +16,8 @@ install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/install/ DESTINATION ${CMAKE_INSTA
 )
 
 if (BUILD_TESTING)
-add_test(test_pylib_unit ${CMAKE_COMMAND} -E env nosetests ${CMAKE_CURRENT_SOURCE_DIR}/syslogng)
-add_test(test_pylib_pep8 ${CMAKE_COMMAND} -E env pep8 --ignore=E501 ${CMAKE_CURRENT_SOURCE_DIR}/syslogng)
-add_test(test_pylib_pylint ${CMAKE_COMMAND} -E env pylint -r n --rcfile=${CMAKE_CURRENT_SOURCE_DIR}/pylintrc ${CMAKE_CURRENT_SOURCE_DIR}/syslogng)
+add_test(test_pylib_unit ${CMAKE_COMMAND} -E env ${NOSETESTS_BIN} ${CMAKE_CURRENT_SOURCE_DIR}/syslogng)
 endif()
+
+add_custom_target(python-pep8 COMMAND ${CMAKE_COMMAND} -E env pep8 --ignore=E501 ${CMAKE_CURRENT_SOURCE_DIR}/syslogng)
+add_custom_target(python-pylint COMMAND ${CMAKE_COMMAND} -E env ${PYLINT_BIN} -r n --rcfile=${CMAKE_CURRENT_SOURCE_DIR}/pylintrc ${CMAKE_CURRENT_SOURCE_DIR}/syslogng)

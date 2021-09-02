@@ -24,14 +24,13 @@
 SUBDIRS			=
 DIST_SUBDIRS		=
 AM_MAKEFLAGS		= --no-print-directory
-AM_YFLAGS		= -Wno-yacc -Wno-other
+AM_YFLAGS		= -Wno-yacc -Wno-other -Werror=conflicts-sr -Werror=conflicts-rr
 
-AM_TESTS_ENVIRONMENT	= top_srcdir="$(top_srcdir)"
+AM_TESTS_ENVIRONMENT	= top_srcdir="$(top_srcdir)" CRITERION_TEST_PATTERN='!(*/*performance*)'
 
 ACLOCAL_AMFLAGS		= -I m4 --install
 
 EXTRA_DIST		= ${BUILT_SOURCES} VERSION NEWS.md autogen.sh \
-			  syslog-ng.spec syslog-ng.spec.in \
 			  dist.conf dist.conf.in syslog-ng.pc.in \
 			  syslog-ng-config.h.in	\
 			  CONTRIBUTING.md	\
@@ -55,8 +54,7 @@ AM_CPPFLAGS		= -I$(top_srcdir)/lib -I$(top_srcdir)/modules -I$(top_builddir)/lib
 
 # Important warnings
 AM_CFLAGS = \
-	-Wshadow \
-	-fcommon
+	-Wshadow
 
 # Acceptable warnings
 AM_CFLAGS += \
@@ -71,11 +69,10 @@ AM_CFLAGS += \
 	-Wold-style-declaration \
 	-Wstrict-prototypes \
 	-Wswitch-default \
+	-Wimplicit-int \
 	-Wall \
-	-Wmissing-parameter-type \
 	-Wuninitialized \
 	-Wunused-but-set-parameter \
-	-Wcast-align \
 	-Wdeprecated \
 	-Wdeprecated-declarations \
 	-Woverflow \
@@ -84,7 +81,10 @@ AM_CFLAGS += \
 	-Wpointer-arith \
 	-Wpointer-sign \
 	-Wmissing-format-attribute \
-	-Wsuggest-attribute=noreturn
+	-Wold-style-definition \
+	-Wundef \
+	-Wignored-qualifiers \
+	-Woverride-init
 endif
 
 TEST_CFLAGS		= -I$(top_srcdir)/libtest -DTOP_SRCDIR=\"$(abs_top_srcdir)\" $(AM_CFLAGS) $(CRITERION_CFLAGS)
@@ -184,6 +184,7 @@ help:
 	@echo " modules              Builds all syslog-ng modules."
 	@echo " syslog-ng            Build syslog-ng itself, only."
 	@echo " populate-makefiles   populate build directory with stub Makefiles"
+	@echo " check-commits        check commits format"
 	@echo " check-copyright      check copyright/license statements in files"
 	@echo " style-check          check formatting of source files (astyle)"
 	@echo " style-format         reformat source files (astyle)"
@@ -215,17 +216,20 @@ include tests/Makefile.am
 include doc/Makefile.am
 include contrib/Makefile.am
 include scl/Makefile.am
-include packaging/debian/Makefile.am
+include packaging/Makefile.am
 include dbld/Makefile.am
 include cmake/Makefile.am
 include dev-utils/plugin_skeleton_creator/Makefile.am
+include persist-tool/Makefile.am
 
 TEST_EXTENSIONS = .sh
 @VALGRIND_CHECK_RULES@
 
 VALGRIND_SUPPRESSIONS_FILES = $(top_srcdir)/tests/valgrind/unit-test-leak.supp
 EXTRA_DIST += syslog-ng.supp	\
-	ISSUE_TEMPLATE.md	\
+	.github/ISSUE_TEMPLATE/10-bug-report.md	\
+	.github/ISSUE_TEMPLATE/20-documentation-issue.md	\
+	.github/ISSUE_TEMPLATE/30-feature-request.md	\
 	GPL.txt	\
 	LGPL.txt	\
 	CMakeLists.txt

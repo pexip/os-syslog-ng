@@ -24,6 +24,7 @@ set(PATTERNDB_SOURCES
     pdb-ratelimit.c
     pdb-ratelimit.h
     pdb-lookup-params.h
+    pdb-lookup-params.c
     correllation.c
     correllation.h
     correllation-key.c
@@ -63,24 +64,15 @@ set(DBPARSER_SOURCES
     dbparser-plugin.c
     groupingby.c
     groupingby.h
-    ${CMAKE_CURRENT_BINARY_DIR}/dbparser-grammar.c
-    ${CMAKE_CURRENT_BINARY_DIR}/dbparser-grammar.h
 )
 
-generate_y_from_ym(modules/dbparser/dbparser-grammar)
+add_module(
+  TARGET dbparser
+  GRAMMAR dbparser-grammar
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR} ${PATTERNDB_INCLUDE_DIR}
+  DEPENDS patterndb
+  SOURCES ${DBPARSER_SOURCES}
+)
 
-bison_target(DBParserGrammar
-    ${CMAKE_CURRENT_BINARY_DIR}/dbparser-grammar.y
-    ${CMAKE_CURRENT_BINARY_DIR}/dbparser-grammar.c
-    COMPILE_FLAGS ${BISON_FLAGS})
-
-add_library(dbparser SHARED ${DBPARSER_SOURCES})
-target_link_libraries(dbparser PRIVATE patterndb)
-target_include_directories(dbparser PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-target_link_libraries(dbparser PRIVATE syslog-ng)
-
-install(TARGETS dbparser
-        LIBRARY DESTINATION lib/syslog-ng/
-        COMPONENT dbparser)
 add_subdirectory(pdbtool)
 add_test_subdirectory(tests)

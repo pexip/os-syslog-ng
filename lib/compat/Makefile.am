@@ -1,7 +1,8 @@
 compatincludedir		= ${pkgincludedir}/compat
 
 EXTRA_DIST += \
-	lib/compat/CMakeLists.txt
+	lib/compat/CMakeLists.txt	\
+	lib/compat/glib-g_mkdtemp.c
 
 compatinclude_HEADERS		= 	\
 	lib/compat/compat.h		\
@@ -17,7 +18,7 @@ compatinclude_HEADERS		= 	\
 	lib/compat/getent.h		\
 	lib/compat/getent-sun.h		\
 	lib/compat/getent-generic.h	\
-	lib/compat/un.h
+	lib/compat/un.h			
 
 compat_sources			= 	\
 	lib/compat/getutent.c		\

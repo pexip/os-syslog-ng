@@ -23,8 +23,30 @@
 
 #include "compat-python.h"
 #include "python-helpers.h"
+#include "syslog-ng.h"
+#include "reloc.h"
 
-#include <datetime.h>
+void
+_set_python_home(const gchar *python_home)
+{
+  Py_SetPythonHome(Py_DecodeLocale(python_home, NULL));
+}
+
+void
+_force_python_home(const gchar *python_home)
+{
+  const gchar *resolved_python_home = get_installation_path_for(python_home);
+  _set_python_home(resolved_python_home);
+}
+
+void
+py_setup_python_home(void)
+{
+#ifdef SYSLOG_NG_PYTHON3_HOME_DIR
+  if (strlen(SYSLOG_NG_PYTHON3_HOME_DIR) > 0)
+    _force_python_home(SYSLOG_NG_PYTHON3_HOME_DIR);
+#endif
+}
 
 void
 py_init_argv(void)
@@ -39,47 +61,14 @@ int_as_pyobject(gint num)
   return PyLong_FromLong(num);
 };
 
-void
-py_datetime_init(void)
+gint
+pyobject_as_int(PyObject *object)
 {
-  PyDateTime_IMPORT;
-}
+  return PyLong_AsLong(object);
+};
 
 gboolean
-py_datetime_to_logstamp(PyObject *py_timestamp, LogStamp *logstamp)
+py_object_is_integer(PyObject *object)
 {
-  if (!PyDateTime_Check(py_timestamp))
-    {
-      PyErr_Format(PyExc_TypeError, "datetime expected in the first parameter");
-      return FALSE;
-    }
-
-  PyObject *py_posix_timestamp = _py_invoke_method_by_name(py_timestamp, "timestamp", NULL,
-                                                           "PyDateTime", "py_datetime_to_logstamp");
-  if (!py_posix_timestamp)
-    {
-      PyErr_Format(PyExc_ValueError, "Error calculating POSIX timestamp");
-      return FALSE;
-    }
-
-  PyObject *py_utcoffset = _py_invoke_method_by_name(py_timestamp, "utcoffset", NULL,
-                                                     "PyDateTime", "py_datetime_to_logstamp");
-  if (!py_utcoffset)
-    {
-      Py_DECREF(py_posix_timestamp);
-      PyErr_Format(PyExc_ValueError, "Error retrieving utcoffset");
-      return FALSE;
-    }
-
-  gdouble posix_timestamp = PyFloat_AsDouble(py_posix_timestamp);
-  gint zone_offset = py_utcoffset == Py_None ? 0 : PyDateTime_DELTA_GET_SECONDS(py_utcoffset);
-
-  Py_DECREF(py_utcoffset);
-  Py_DECREF(py_posix_timestamp);
-
-  logstamp->tv_sec = (time_t) posix_timestamp;
-  logstamp->tv_usec = posix_timestamp * 10e5 - logstamp->tv_sec * 10e5;
-  logstamp->zone_offset = zone_offset;
-
-  return TRUE;
+  return PyLong_Check(object);
 }

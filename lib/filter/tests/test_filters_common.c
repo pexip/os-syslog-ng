@@ -36,6 +36,7 @@
 #include "logmsg/logmsg.h"
 #include "apphook.h"
 #include "plugin.h"
+#include "scratch-buffers.h"
 #include <criterion/criterion.h>
 
 #include <time.h>
@@ -54,7 +55,7 @@ facility_bits(const gchar *fac)
 gint
 level_bits(const gchar *lev)
 {
-  return 1 << syslog_name_lookup_level_by_name(lev);
+  return 1 << syslog_name_lookup_severity_by_name(lev);
 }
 
 gint
@@ -62,26 +63,27 @@ level_range(const gchar *from, const gchar *to)
 {
   int r1, r2;
 
-  r1 = syslog_name_lookup_level_by_name(from);
-  r2 = syslog_name_lookup_level_by_name(to);
+  r1 = syslog_name_lookup_severity_by_name(from);
+  r2 = syslog_name_lookup_severity_by_name(to);
   return syslog_make_range(r1, r2);
 }
 
 FilterExprNode *
-compile_pattern(FilterRE *f, const gchar *regexp, const gchar *type, gint flags)
+compile_pattern(FilterExprNode *f, const gchar *regexp, const gchar *type, gint flags)
 {
+  LogMatcherOptions *matcher_options = filter_re_get_matcher_options(f);
   gboolean result;
 
-  log_matcher_options_defaults(&f->matcher_options);
-  f->matcher_options.flags = flags;
-  log_matcher_options_set_type(&f->matcher_options, type);
+  log_matcher_options_defaults(matcher_options);
+  matcher_options->flags = flags;
+  log_matcher_options_set_type(matcher_options, type);
 
-  result = filter_re_compile_pattern(f, configuration, regexp, NULL);
+  result = filter_re_compile_pattern(f, regexp, NULL);
 
   if (result)
-    return &f->super;
+    return f;
 
-  filter_expr_unref(&f->super);
+  filter_expr_unref(f);
   return NULL;
 }
 
@@ -141,8 +143,8 @@ testcase_with_socket(const gchar *msg, const gchar *sockaddr,
   res = filter_expr_init(f, configuration);
   cr_assert(res, "Filter init failed; msg='%s'\n", msg);
 
-  logmsg = log_msg_new(msg, strlen(msg), NULL, &parse_options);
-  logmsg->saddr = _get_sockaddr(sockaddr);
+  logmsg = log_msg_new(msg, strlen(msg), &parse_options);
+  log_msg_set_saddr_ref(logmsg, _get_sockaddr(sockaddr));
 
   res = filter_expr_eval(f, logmsg);
   cr_assert_eq(res, expected_result, "Filter test failed; msg='%s'\n", msg);
@@ -180,8 +182,8 @@ testcase_with_backref_chk(const gchar *msg,
   gssize msglen;
   gchar buf[1024];
 
-  logmsg = log_msg_new(msg, strlen(msg), NULL, &parse_options);
-  logmsg->saddr = g_sockaddr_inet_new("10.10.0.1", 5000);
+  logmsg = log_msg_new(msg, strlen(msg), &parse_options);
+  log_msg_set_saddr_ref(logmsg, g_sockaddr_inet_new("10.10.0.1", 5000));
 
   /* NOTE: we test how our filters cope with non-zero terminated values. We don't change message_len, only the value */
   g_snprintf(buf, sizeof(buf), "%sAAAAAAAAAAAA", log_msg_get_value(logmsg, LM_V_MESSAGE, &msglen));
@@ -233,6 +235,7 @@ setup(void)
 void
 teardown(void)
 {
+  scratch_buffers_explicit_gc();
   app_shutdown();
 }
 

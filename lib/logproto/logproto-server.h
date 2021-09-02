@@ -28,7 +28,7 @@
 #include "logproto.h"
 #include "persist-state.h"
 #include "transport/transport-aux-data.h"
-#include "bookmark.h"
+#include "ack-tracker/bookmark.h"
 
 typedef struct _LogProtoServer LogProtoServer;
 typedef struct _LogProtoServerOptions LogProtoServerOptions;
@@ -49,6 +49,7 @@ struct _LogProtoServerOptions
   gchar *encoding;
   /* maximum message length in bytes */
   gint max_msg_size;
+  gboolean trim_large_messages;
   gint max_buffer_size;
   gint init_buffer_size;
   gboolean position_tracking_enabled;
@@ -194,6 +195,7 @@ void log_proto_server_free(LogProtoServer *s);
 static inline void
 log_proto_server_set_ack_tracker(LogProtoServer *s, AckTracker *ack_tracker)
 {
+  g_assert(ack_tracker);
   s->ack_tracker = ack_tracker;
 }
 

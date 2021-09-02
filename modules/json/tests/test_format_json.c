@@ -55,7 +55,7 @@ Test(format_json, test_format_json)
   assert_template_format("$(format-json MSG=$escaping)",
                          "{\"MSG\":\"binary stuff follows \\\"\\\\xad árvíztűrőtükörfúrógép\"}");
   assert_template_format("$(format-json MSG=$escaping2)", "{\"MSG\":\"\\\\xc3\"}");
-  assert_template_format("$(format-json MSG=$null)", "{\"MSG\":\"binary\\u0000stuff\"}");
+  assert_template_format("$(format-json MSG=$null)", "{\"MSG\":\"binary\\\\x00stuff\"}");
   assert_template_format_with_context("$(format-json MSG=$MSG)",
                                       "{\"MSG\":\"árvíztűrőtükörfúrógép\"}{\"MSG\":\"árvíztűrőtükörfúrógép\"}");
   assert_template_format("$(format-json --scope rfc3164)",
@@ -116,6 +116,17 @@ Test(format_json, test_format_json_rekey)
                          "{\"_msg\":{\"text\":\"dotted\"}}");
 }
 
+Test(format_json, test_format_json_omit_empty_values)
+{
+  assert_template_format("$(format-json --omit-empty-values msg.set=value msg.unset='')",
+                         "{\"msg\":{\"set\":\"value\"}}");
+
+  assert_template_format("$(format-json --omit-empty-values msg.set=value --key empty_value)",
+                         "{\"msg\":{\"set\":\"value\"}}");
+  assert_template_format("$(format-json msg.set=value --key empty_value)",
+                         "{\"msg\":{\"set\":\"value\"},\"empty_value\":\"\"}");
+}
+
 Test(format_json, test_format_json_with_type_hints)
 {
   assert_template_format("$(format-json i32=int32(1234))",
@@ -124,10 +135,13 @@ Test(format_json, test_format_json_with_type_hints)
                          "{\"i\":\"ifoo(\"}");
   assert_template_format("$(format-json b=boolean(TRUE))",
                          "{\"b\":true}");
+  assert_template_format("$(format-json l=list($comma_value))",
+                         "{\"l\":[\"value\",\"with\",\"a\",\"comma\"]}");
   assert_template_format("$(format-json b=literal(whatever))",
                          "{\"b\":whatever}");
   assert_template_format("$(format-json b=literal($(format-json subkey=bar)))",
                          "{\"b\":{\"subkey\":\"bar\"}}");
+
 }
 
 Test(format_json, test_format_json_on_error)
@@ -135,9 +149,19 @@ Test(format_json, test_format_json_on_error)
   configuration->template_options.on_error = ON_ERROR_DROP_MESSAGE | ON_ERROR_SILENT;
   assert_template_format("$(format-json x=y bad=boolean(blah) foo=bar)",
                          "");
+  assert_template_format("$(format-json x=y bad=boolean($unsetvalue) foo=bar)",
+                         "");
   assert_template_format("$(format-json x=y bad=int32(blah) foo=bar)",
                          "");
+  assert_template_format("$(format-json x=y bad=int32($unsetvalue) foo=bar)",
+                         "");
   assert_template_format("$(format-json x=y bad=int64(blah) foo=bar)",
+                         "");
+  assert_template_format("$(format-json x=y bad=int64($unsetvalue) foo=bar)",
+                         "");
+  assert_template_format("$(format-json x=y bad=double(blah) foo=bar)",
+                         "");
+  assert_template_format("$(format-json x=y bad=double($unsetvalue) foo=bar)",
                          "");
 
   configuration->template_options.on_error = ON_ERROR_DROP_PROPERTY | ON_ERROR_SILENT;
@@ -146,6 +170,8 @@ Test(format_json, test_format_json_on_error)
   assert_template_format("$(format-json x=y bad=boolean(blah))",
                          "{\"x\":\"y\"}");
   assert_template_format("$(format-json x=y bad=int32(blah))",
+                         "{\"x\":\"y\"}");
+  assert_template_format("$(format-json x=y bad=int32($unsetvalue))",
                          "{\"x\":\"y\"}");
   assert_template_format("$(format-json x=y bad=int64(blah))",
                          "{\"x\":\"y\"}");
@@ -157,6 +183,8 @@ Test(format_json, test_format_json_on_error)
                          "{\"x\":\"y\",\"bad\":\"blah\"}");
   assert_template_format("$(format-json x=y bad=int32(blah))",
                          "{\"x\":\"y\",\"bad\":\"blah\"}");
+  assert_template_format("$(format-json x=y bad=int32($unsetvalue))",
+                         "{\"x\":\"y\",\"bad\":\"\"}");
   assert_template_format("$(format-json x=y bad=int64(blah))",
                          "{\"x\":\"y\",\"bad\":\"blah\"}");
 
@@ -173,6 +201,44 @@ Test(format_json, test_format_json_with_utf8)
   assert_template_format_msg("$(format-json MSG=\"${UTF8-C3}\")", "{\"MSG\":\"\xc3\x88 \xc3\x90\"}", msg);
 
   log_msg_unref(msg);
+}
+
+Test(format_json, test_format_flat_json)
+{
+  LogMessage *msg = create_empty_message();
+
+  assert_template_format_msg("$(format-flat-json a.b.c1=abc a.b.d=abd a.bc=abc)",
+                             "{\"a.bc\":\"abc\",\"a.b.d\":\"abd\",\"a.b.c1\":\"abc\"}",
+                             msg);
+
+  log_msg_unref(msg);
+}
+
+Test(format_json, test_format_flat_json_direct)
+{
+  LogMessage *msg = create_empty_message();
+
+  assert_template_format_msg("$(format-flat-json a=b c=d)",
+                             "{\"c\":\"d\",\"a\":\"b\"}",
+                             msg);
+
+  log_msg_unref(msg);
+}
+
+Test(format_json, test_format_flat_json_with_type_hints)
+{
+  assert_template_format("$(format-flat-json i32=int32(1234))",
+                         "{\"i32\":1234}");
+  assert_template_format("$(format-flat-json \"i=ifoo(\")",
+                         "{\"i\":\"ifoo(\"}");
+  assert_template_format("$(format-flat-json b=boolean(TRUE))",
+                         "{\"b\":true}");
+  assert_template_format("$(format-flat-json l=list($comma_value))",
+                         "{\"l\":[\"value\",\"with\",\"a\",\"comma\"]}");
+  assert_template_format("$(format-flat-json b=literal(whatever))",
+                         "{\"b\":whatever}");
+  assert_template_format("$(format-flat-json b=literal($(format-flat-json subkey=bar)))",
+                         "{\"b\":{\"subkey\":\"bar\"}}");
 }
 
 Test(format_json, test_format_json_performance)

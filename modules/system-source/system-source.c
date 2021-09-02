@@ -23,6 +23,7 @@
 
 #include "cfg.h"
 #include "cfg-block-generator.h"
+#include "block-ref-parser.h"
 #include "messages.h"
 #include "plugin.h"
 #include "plugin-types.h"
@@ -39,7 +40,7 @@
 #include <iv.h>
 #include "service-management.h"
 
-#if __FreeBSD__
+#if defined (__FreeBSD__)
 #include <sys/sysctl.h>
 #include <inttypes.h>
 #endif
@@ -131,7 +132,7 @@ system_sysblock_add_pipe(GString *sysblock, const gchar *path, gint pad_size)
   g_string_append(sysblock, ");\n");
 }
 
-#if __FreeBSD__
+#if defined (__FreeBSD__)
 static gboolean
 system_freebsd_is_jailed(void)
 {
@@ -185,33 +186,30 @@ _is_fd_pollable(gint fd)
 static gboolean
 _detect_linux_dev_kmsg(void)
 {
-  gint fd;
+  gint fd = open("/dev/kmsg", O_RDONLY);
 
-  if ((fd = open("/dev/kmsg", O_RDONLY)) != -1)
-    {
-      if ((lseek (fd, 0, SEEK_END) != -1) && _is_fd_pollable(fd))
-        {
-          return TRUE;
-        }
-      close (fd);
-    }
-  return FALSE;
+  if (fd == -1)
+    return FALSE;
+
+  gboolean seekable = lseek(fd, 0, SEEK_END) != -1;
+  gboolean pollable = _is_fd_pollable(fd);;
+
+  close(fd);
+  return seekable && pollable;
 }
 
 static gboolean
 _detect_linux_proc_kmsg(void)
 {
-  gint fd;
+  gint fd = open("/proc/kmsg", O_RDONLY);
 
-  if ((fd = open("/proc/kmsg", O_RDONLY)) != -1)
-    {
-      if (_is_fd_pollable(fd))
-        {
-          return TRUE;
-        }
-      close (fd);
-    }
-  return FALSE;
+  if (fd == -1)
+    return FALSE;
+
+  gboolean pollable = _is_fd_pollable(fd);
+
+  close(fd);
+  return pollable;
 }
 
 static void
@@ -338,41 +336,41 @@ system_generate_app_parser(GlobalConfig *cfg, GString *sysblock, CfgArgs *args)
                          "channel {\n"
                          "  channel {\n"
                          "    parser {\n"
-                         "      app-parser(topic(system-unix) %s);\n"
                          "      app-parser(topic(syslog) %s);\n"
                          "    };\n"
                          "    flags(final);\n"
                          "  };\n"
                          "  channel { flags(final); };\n"
                          "};\n",
-                         varargs, varargs);
+                         varargs);
   g_free(varargs);
 }
 
 static gboolean
-system_source_generate(CfgBlockGenerator *self, GlobalConfig *cfg, CfgArgs *args, GString *sysblock,
+system_source_generate(CfgBlockGenerator *self, GlobalConfig *cfg, gpointer args, GString *sysblock,
                        const gchar *reference)
 {
   gboolean result = FALSE;
+  CfgArgs *cfgargs = (CfgArgs *)args;
 
   /* NOTE: we used to have an exclude-kmsg() option that was removed, still
    * we need to ignore it */
 
-  if (args)
-    cfg_args_remove(args, "exclude-kmsg");
+  if (cfgargs)
+    cfg_args_remove(cfgargs, "exclude-kmsg");
 
   g_string_append(sysblock,
                   "channel {\n"
                   "    source {\n");
 
-  if (!system_generate_system_transports(sysblock, args))
+  if (!system_generate_system_transports(sysblock, cfgargs))
     {
       goto exit;
     }
 
   g_string_append(sysblock, "    }; # source\n");
 
-  system_generate_app_parser(cfg, sysblock, args);
+  system_generate_app_parser(cfg, sysblock, cfgargs);
 
   g_string_append(sysblock, "}; # channel\n");
   result = TRUE;
@@ -402,7 +400,8 @@ Plugin system_plugins[] =
   {
     .type = LL_CONTEXT_SOURCE | LL_CONTEXT_FLAG_GENERATOR,
     .name = "system",
-    .construct = system_source_construct
+    .construct = system_source_construct,
+    .parser = &block_ref_parser
   }
 };
 

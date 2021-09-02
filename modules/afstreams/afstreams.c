@@ -185,8 +185,8 @@ afstreams_sd_init(LogPipe *s)
         }
       g_fd_set_nonblock(fd, TRUE);
       self->reader = log_reader_new(cfg);
-      log_reader_reopen(self->reader, log_proto_dgram_server_new(log_transport_streams_new(fd),
-                                                                 &self->reader_options.proto_options.super), poll_fd_events_new(fd));
+      log_reader_open(self->reader, log_proto_dgram_server_new(log_transport_streams_new(fd),
+                                                               &self->reader_options.proto_options.super), poll_fd_events_new(fd));
       log_reader_set_options(self->reader,
                              s,
                              &self->reader_options,
@@ -276,6 +276,6 @@ afstreams_sd_new(gchar *filename, GlobalConfig *cfg)
   self->reader_options.parse_options.flags |= LP_LOCAL;
   self->reader_options.parse_options.flags &= ~LP_EXPECT_HOSTNAME;
   self->reader_options.super.stats_level = STATS_LEVEL1;
-  self->reader_options.super.stats_source = SCS_SUN_STREAMS;
+  self->reader_options.super.stats_source = stats_register_type("sun-streams");
   return &self->super.super;
 }

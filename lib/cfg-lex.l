@@ -33,15 +33,14 @@
 #include <string.h>
 #include <strings.h>
 
-static gint
-yy_input_run_backtick_substitution(CfgLexer *self, gchar *buf, gsize buf_size)
+static gboolean
+yy_input_run_backtick_substitution(CfgLexer *self, gchar *buf, gsize buf_size, gsize *len)
 {
   gchar *res;
-  gsize len;
   GError *error = NULL;
   YYLTYPE *cur_lloc = &self->include_stack[self->include_depth].lloc;
 
-  res = cfg_lexer_subst_args_in_input(self->cfg->globals, NULL, NULL, buf, -1, &len, &error);
+  res = cfg_lexer_subst_args_in_input(self->cfg->globals, NULL, NULL, buf, -1, len, &error);
   if (!res)
     {
       msg_error("Error performing backtick substitution in configuration file",
@@ -53,23 +52,86 @@ yy_input_run_backtick_substitution(CfgLexer *self, gchar *buf, gsize buf_size)
     }
   else
     {
-      if (len > buf_size)
+      if (*len > buf_size)
         {
-          msg_error("Error performing backtick substitution in configuration file",
-                    evt_tag_str("error", "lexer buffer is too small to hold substituted result"),
+          msg_error("Error performing backtick substitution in configuration file, the target buffer is too small",
+                    evt_tag_int("buf_size", buf_size),
                     evt_tag_str("filename", cur_lloc->level->name),
                     evt_tag_printf("line", "%d:%d", cur_lloc->first_line, cur_lloc->first_column));
           goto error;
         }
       else
         {
-          memcpy(buf, res, len);
+          memcpy(buf, res, *len);
         }
       g_free(res);
-      return len;
+      return TRUE;
     }
  error:
-  return -1;
+  return FALSE;
+}
+
+static gboolean
+yy_patch_include_statement(CfgLexer *self, gchar *buf, gsize buf_size, gsize *len)
+{
+  YYLTYPE *cur_lloc = &self->include_stack[self->include_depth].lloc;
+
+  gchar *p = buf;
+  p += strspn(p, " \t");
+  if (strncmp(p, "include", 7) != 0)
+    return TRUE;
+  p += 7;
+  if (*p != ' ' && *p != '\t')
+    return TRUE;
+
+  p = strrchr(p, ';');
+  if (!p)
+    return TRUE;
+  *p = ' ';
+
+  if (!cfg_is_config_version_older(configuration, VERSION_VALUE_3_20))
+    {
+      msg_error("Error parsing old style include statement (e.g. the one without the '@' prefix), "
+                "support for it was removed in " VERSION_3_20 ", just add a '@' in front or revert to @version "
+                VERSION_3_19 " or older",
+                evt_tag_str("filename", cur_lloc->level->name),
+                evt_tag_printf("line", "%d:%d", cur_lloc->first_line, cur_lloc->first_column));
+
+      return FALSE;
+    }
+
+  if (*len + 1 > buf_size)
+    {
+      msg_error("Error performing the `include' patching to @include, the target buffer is too small",
+                evt_tag_int("buf_size", buf_size),
+                evt_tag_str("filename", cur_lloc->level->name),
+                evt_tag_printf("line", "%d:%d", cur_lloc->first_line, cur_lloc->first_column));
+      return FALSE;
+    }
+
+  memmove(buf + 1, buf, *len);
+  buf[0] = '@';
+  *len += 1;
+
+  msg_warning("WARNING: the `include' keyword based inclusion syntax (e.g. the one without a '@' "
+              "character in front) has been removed in " VERSION_3_20 ". Please prepend a '@' "
+              "character in front of your include statement while updating your configuration "
+              "to match the new version",
+              evt_tag_str("filename", cur_lloc->level->name),
+              evt_tag_printf("line", "%d:%d", cur_lloc->first_line, cur_lloc->first_column));
+  return TRUE;
+}
+
+static gint
+yy_filter_input(CfgLexer *self, gchar *buf, gsize buf_size)
+{
+  gsize len = strlen(buf);
+
+  if (!yy_input_run_backtick_substitution(self, buf, buf_size, &len))
+    return -1;
+  if (!yy_patch_include_statement(self, buf, buf_size, &len))
+    return -1;
+  return len;
 }
 
 #define YY_INPUT(buf, result, max_size)                                 \
@@ -82,11 +144,10 @@ yy_input_run_backtick_substitution(CfgLexer *self, gchar *buf, gsize buf_size)
       else                                                              \
         {                                                               \
           gint rc;                                                      \
-          rc = yy_input_run_backtick_substitution(yyextra, buf, max_size); \
+          rc = yy_filter_input(yyextra, buf, max_size); 		\
           if (rc < 0)                                                   \
             {                                                           \
-              YY_FATAL_ERROR("backtick substitution failure");          \
-              result = YY_NULL;                                         \
+              YY_FATAL_ERROR("configuration input filtering failure");  \
             }                                                           \
           else                                                          \
             {                                                           \
@@ -220,7 +281,8 @@ word	[^ \#'"\(\)\{\}\[\]\\;\r\n\t,|\.@:]
                              return LL_PRAGMA;
                            }
 
-<*>\\\r?\n                 { _cfg_lex_extend_token_location_to_next_line(yyextra); }
+    /* continuation line: just move the location and skip the newline character */
+\\\r?\n                    { _cfg_lex_extend_token_location_to_next_line(yyextra); }
 \r?\n                      {
                              *yylloc = yyextra->include_stack[yyextra->include_depth].lloc;
                              _cfg_lex_move_token_location_to_new_line(yyextra);
@@ -232,6 +294,7 @@ word	[^ \#'"\(\)\{\}\[\]\\;\r\n\t,|\.@:]
 {white}+		   ;
 \.\.                       { return LL_DOTDOT; }
 \.\.\.                     { return LL_DOTDOTDOT; }
+=>                         { return LL_ARROW; }
 (-|\+)?{digit}+\.{digit}+  { yylval->fnum = strtod(yytext, NULL); return LL_FLOAT; }
 0x{xdigit}+ 		   {
                              if (!parse_number_with_suffix(yytext, &yylval->num))
@@ -255,15 +318,6 @@ word	[^ \#'"\(\)\{\}\[\]\\;\r\n\t,|\.@:]
                              return LL_NUMBER;
                            }
 ({word}+(\.)?)*{word}+ 	   { return cfg_lexer_lookup_keyword(yyextra, yylval, yylloc, yytext); }
-\(	      		   |
-\)			   |
-\;			   |
-\{			   |
-\}			   |
-\[			   |
-\]			   |
-\:			   |
-\|			   { return yytext[0]; }
 \,			   ;
 
 \"                         {
@@ -274,6 +328,10 @@ word	[^ \#'"\(\)\{\}\[\]\\;\r\n\t,|\.@:]
 			     g_string_truncate(yyextra->string_buffer, 0);
 			     yy_push_state(qstring, yyscanner);
 			   }
+.                          { return (unsigned char) yytext[0]; }
+
+    /* continuation line within a string: just move the location and skip the newline character as if it was never there */
+<string,qstring>\\\r?\n    { _cfg_lex_extend_token_location_to_next_line(yyextra); }
 <string>\\a		   { g_string_append_c(yyextra->string_buffer, 7); }
 <string>\\n	   	   { g_string_append_c(yyextra->string_buffer, 10); }
 <string>\\r		   { g_string_append_c(yyextra->string_buffer, 13); }
@@ -322,10 +380,16 @@ word	[^ \#'"\(\)\{\}\[\]\\;\r\n\t,|\.@:]
                              _cfg_lex_extend_token_location_to_next_line(yyextra);
                            }
 
+    /* continuation line within blocks: in the block header we just ignore
+     * the continuation line, whereas in string/qstring we retain them
+     * literally.  */
+
+<block,block_content>\\\r?\n          { _cfg_lex_extend_token_location_to_next_line(yyextra); }
+<block_string,block_qstring>\\\r?\n   { g_string_append(yyextra->string_buffer, yytext); _cfg_lex_extend_token_location_to_next_line(yyextra); }
 
     /* rules to parse a block as a LL_BLOCK token */
 <block>{white}+            ;
-<block>[^{( \t\r\n]+       { YY_FATAL_ERROR("Expected opening bracket as block boundary, e.g. opening brace or parenthesis"); return LL_ERROR; }
+<block>[^{( \t\r\n]+       { YY_FATAL_ERROR("Expected opening bracket as block boundary, e.g. opening brace or parenthesis"); }
 <block>\r?\n		   { _cfg_lex_move_token_location_to_new_line(yyextra); };
 <block>\({white}*\)        { yy_pop_state(yyscanner); yylval->cptr = NULL; return LL_BLOCK; }
 <block>\({white}*\"\"{white}*\) { yy_pop_state(yyscanner); yylval->cptr = g_strdup(""); return LL_BLOCK; }
@@ -381,10 +445,13 @@ word	[^ \#'"\(\)\{\}\[\]\\;\r\n\t,|\.@:]
 
                            }
 
-<block_content>[^{}()\"\'\n\r#]+   { g_string_append(yyextra->string_buffer, yytext); }
 
-<block_string>[^"\r\n]+    { g_string_append(yyextra->string_buffer, yytext); }
-<block_string>\\\"         { g_string_append(yyextra->string_buffer, yytext); }
+<block_content>[^{}()\"\'\n\r#]+   {
+                             g_string_append(yyextra->string_buffer, yytext);
+                           }
+
+<block_string>[^\\"\r\n]+  { g_string_append(yyextra->string_buffer, yytext); }
+<block_string>\\.          { g_string_append(yyextra->string_buffer, yytext); }
 <block_string>\"           {
                              g_string_append_c(yyextra->string_buffer, yytext[0]);
                              yy_pop_state(yyscanner);

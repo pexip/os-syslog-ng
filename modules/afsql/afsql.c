@@ -31,7 +31,6 @@
 #include "seqnum.h"
 #include "stats/stats-registry.h"
 #include "apphook.h"
-#include "timeutils.h"
 #include "mainloop-worker.h"
 #include "str-utils.h"
 
@@ -846,7 +845,7 @@ afsql_dd_should_begin_new_transaction(const AFSqlDestDriver *self)
 }
 
 static gint
-_batch_size(const AFSqlDestDriver *self)
+_batch_lines(const AFSqlDestDriver *self)
 {
   if (self->super.batch_lines <= 0)
     return DEFAULT_SQL_TX_SIZE;
@@ -854,20 +853,14 @@ _batch_size(const AFSqlDestDriver *self)
   return self->super.batch_lines;
 }
 
-static inline gboolean
-afsql_dd_should_commit_transaction(const AFSqlDestDriver *self)
-{
-  return afsql_dd_is_transaction_handling_enabled(self) && self->super.worker.instance.batch_size >= _batch_size(self);
-}
-
-static worker_insert_result_t
+static LogThreadedResult
 afsql_dd_handle_insert_row_error_depending_on_connection_availability(AFSqlDestDriver *self)
 {
   const gchar *dbi_error, *error_message;
 
   if (dbi_conn_ping(self->dbi_ctx) == 1)
     {
-      return WORKER_INSERT_RESULT_ERROR;
+      return LTR_ERROR;
     }
 
   if (afsql_dd_is_transaction_handling_enabled(self))
@@ -889,24 +882,24 @@ afsql_dd_handle_insert_row_error_depending_on_connection_availability(AFSqlDestD
             evt_tag_str("database", self->database),
             evt_tag_str("error", dbi_error));
 
-  return WORKER_INSERT_RESULT_ERROR;
+  return LTR_ERROR;
 }
 
-static worker_insert_result_t
+static LogThreadedResult
 afsql_dd_flush(LogThreadedDestDriver *s)
 {
   AFSqlDestDriver *self = (AFSqlDestDriver *) s;
 
   if (!afsql_dd_is_transaction_handling_enabled(self))
-    return WORKER_INSERT_RESULT_SUCCESS;
+    return LTR_SUCCESS;
 
   if (!afsql_dd_commit_transaction(self))
     {
       /* Assuming that in case of error, the queue is rewound by afsql_dd_commit_transaction() */
       afsql_dd_rollback_transaction(self);
-      return WORKER_INSERT_RESULT_ERROR;
+      return LTR_ERROR;
     }
-  return WORKER_INSERT_RESULT_SUCCESS;
+  return LTR_SUCCESS;
 }
 
 static gboolean
@@ -928,12 +921,12 @@ afsql_dd_run_insert_query(AFSqlDestDriver *self, GString *table, LogMessage *msg
  * Returns: FALSE to indicate that the connection should be closed and
  * this destination suspended for time_reopen() time.
  **/
-static worker_insert_result_t
+static LogThreadedResult
 afsql_dd_insert(LogThreadedDestDriver *s, LogMessage *msg)
 {
   AFSqlDestDriver *self = (AFSqlDestDriver *) s;
   GString *table = NULL;
-  worker_insert_result_t retval = WORKER_INSERT_RESULT_ERROR;
+  LogThreadedResult retval = LTR_ERROR;
 
   table = afsql_dd_ensure_accessible_database_table(self, msg);
   if (!table)
@@ -948,16 +941,9 @@ afsql_dd_insert(LogThreadedDestDriver *s, LogMessage *msg)
       goto error;
     }
 
-  if (afsql_dd_should_commit_transaction(self))
-    {
-      retval = afsql_dd_flush(s);
-    }
-  else
-    {
-      retval = afsql_dd_is_transaction_handling_enabled(self)
-               ? WORKER_INSERT_RESULT_QUEUED
-               : WORKER_INSERT_RESULT_SUCCESS;
-    }
+  retval = afsql_dd_is_transaction_handling_enabled(self)
+           ? LTR_QUEUED
+           : LTR_SUCCESS;
 
 error:
 
@@ -992,6 +978,34 @@ afsql_dd_format_persist_name(const LogPipe *s)
                self->host, self->port, self->database, self->table->template);
 
   return persist_name;
+}
+
+static const gchar *
+_afsql_dd_format_legacy_persist_name(const AFSqlDestDriver *self)
+{
+  static gchar legacy_persist_name[256];
+
+  g_snprintf(legacy_persist_name, sizeof(legacy_persist_name),
+             "afsql_dd_qfile(%s,%s,%s,%s,%s)",
+             self->type, self->host, self->port, self->database, self->table->template);
+
+  return legacy_persist_name;
+}
+
+static gboolean
+_update_legacy_persist_name_if_exists(AFSqlDestDriver *self)
+{
+  GlobalConfig *cfg = log_pipe_get_config(&self->super.super.super.super);
+  const gchar *current_persist_name = afsql_dd_format_persist_name(&self->super.super.super.super);
+  const gchar *legacy_persist_name = _afsql_dd_format_legacy_persist_name(self);
+
+  if (persist_state_entry_exists(cfg->state, current_persist_name))
+    return TRUE;
+
+  if (!persist_state_entry_exists(cfg->state, legacy_persist_name))
+    return TRUE;
+
+  return persist_state_move_entry(cfg->state, legacy_persist_name, current_persist_name);
 }
 
 static gboolean
@@ -1102,6 +1116,8 @@ afsql_dd_init(LogPipe *s)
 
   if (!log_threaded_dest_driver_init_method(s))
     return FALSE;
+  if (!_update_legacy_persist_name_if_exists(self))
+    return FALSE;
   if (!_initialize_dbi())
     return FALSE;
 
@@ -1122,6 +1138,10 @@ afsql_dd_init(LogPipe *s)
     return FALSE;
 
   log_template_options_init(&self->template_options, cfg);
+
+  if (afsql_dd_is_transaction_handling_enabled(self))
+    log_threaded_dest_driver_set_batch_lines((LogDriver *)self, _batch_lines(self));
+
   return log_threaded_dest_driver_start_workers(&self->super);
 }
 
@@ -1199,7 +1219,7 @@ afsql_dd_new(GlobalConfig *cfg)
   self->dbd_options_numeric = g_hash_table_new_full(g_str_hash, g_int_equal, g_free, NULL);
 
   log_template_options_defaults(&self->template_options);
-  self->super.stats_source = SCS_SQL;
+  self->super.stats_source = stats_register_type("sql");
 
   return &self->super.super.super;
 }

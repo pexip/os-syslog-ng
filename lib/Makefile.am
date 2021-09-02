@@ -1,5 +1,6 @@
-DIST_SUBDIRS				+= @IVYKIS_SUBDIRS@
+DIST_SUBDIRS				+= @IVYKIS_SUBDIRS@ @JSON_SUBDIRS@
 
+include lib/ack-tracker/Makefile.am
 include lib/eventlog/src/Makefile.am
 include lib/eventlog/tests/Makefile.am
 include lib/transport/Makefile.am
@@ -17,9 +18,13 @@ include lib/logmsg/Makefile.am
 include lib/scanner/csv-scanner/Makefile.am
 include lib/scanner/list-scanner/Makefile.am
 include lib/scanner/kv-scanner/Makefile.am
+include lib/scanner/xml-scanner/Makefile.am
 include lib/str-repr/Makefile.am
+include lib/timeutils/Makefile.am
 include lib/secret-storage/Makefile.am
 include lib/logthrsource/Makefile.am
+include lib/logthrdest/Makefile.am
+include lib/signal-slot-connector/Makefile.am
 
 LSNG_RELEASE		= $(shell echo @PACKAGE_VERSION@ | cut -d. -f1,2)
 
@@ -104,11 +109,15 @@ pkginclude_HEADERS			+= \
 	lib/cfg-block.h			\
 	lib/cfg-block-generator.h	\
 	lib/cfg-parser.h		\
+	lib/cfg-path.h			\
 	lib/cfg-tree.h			\
+	lib/cfg-walker.h		\
 	lib/children.h			\
 	lib/crypto.h			\
 	lib/dnscache.h			\
 	lib/driver.h			\
+	lib/dynamic-window-pool.h \
+	lib/dynamic-window.h \
 	lib/fdhelpers.h			\
 	lib/file-perms.h		\
 	lib/find-crlf.h			\
@@ -117,6 +126,7 @@ pkginclude_HEADERS			+= \
 	lib/gsocket.h			\
 	lib/hostname.h			\
 	lib/host-resolve.h		\
+	lib/list-adt.h \
 	lib/logmatcher.h		\
 	lib/logmpx.h			\
 	lib/logpipe.h			\
@@ -124,19 +134,18 @@ pkginclude_HEADERS			+= \
 	lib/logqueue.h			\
 	lib/logreader.h			\
 	lib/logsource.h			\
-	lib/logstamp.h			\
-	lib/logthrdestdrv.h		\
 	lib/logwriter.h			\
 	lib/mainloop.h			\
-	lib/signal-handler.h		\
 	lib/mainloop-call.h		\
 	lib/mainloop-worker.h		\
 	lib/mainloop-io-worker.h	\
+	lib/mainloop-control.h		\
 	lib/module-config.h		\
 	lib/memtrace.h			\
 	lib/messages.h			\
 	lib/ml-batched-timer.h		\
 	lib/msg-format.h		\
+	lib/msg-stats.h			\
 	lib/parse-number.h		\
 	lib/pathutils.h         \
 	lib/persist-state.h		\
@@ -155,13 +164,13 @@ pkginclude_HEADERS			+= \
 	lib/serialize.h			\
 	lib/service-management.h	\
 	lib/seqnum.h			\
+	lib/signal-handler.h		\
 	lib/str-format.h		\
 	lib/str-utils.h			\
 	lib/syslog-names.h		\
 	lib/syslog-ng.h			\
 	lib/misc.h                      \
 	lib/string-list.h		\
-	lib/timeutils.h			\
 	lib/tls-support.h		\
 	lib/thread-utils.h		\
 	lib/tlscontext.h  		\
@@ -170,10 +179,7 @@ pkginclude_HEADERS			+= \
 	lib/userdb.h			\
 	lib/utf8utils.h			\
 	lib/versioning.h		\
-	lib/bookmark.h			\
 	lib/ringbuffer.h		\
-	lib/ack_tracker.h		\
-	lib/late_ack_tracker.h \
 	lib/host-id.h			\
 	lib/resolved-configurable-paths.h \
 	lib/pe-versioning.h \
@@ -193,10 +199,14 @@ lib_libsyslog_ng_la_SOURCES		= \
 	lib/cfg-lexer.c			\
 	lib/cfg-lexer-subst.c		\
 	lib/cfg-parser.c		\
+	lib/cfg-path.c			\
 	lib/cfg-tree.c			\
+	lib/cfg-walker.c		\
 	lib/children.c			\
 	lib/dnscache.c			\
 	lib/driver.c			\
+	lib/dynamic-window.c \
+	lib/dynamic-window-pool.c \
 	lib/fdhelpers.c			\
 	lib/file-perms.c		\
 	lib/find-crlf.c			\
@@ -213,19 +223,19 @@ lib_libsyslog_ng_la_SOURCES		= \
 	lib/logqueue-fifo.c		\
 	lib/logreader.c			\
 	lib/logsource.c			\
-	lib/logstamp.c			\
-	lib/logthrdestdrv.c		\
 	lib/logwriter.c			\
 	lib/mainloop.c			\
 	lib/signal-handler.c		\
 	lib/mainloop-call.c		\
 	lib/mainloop-worker.c		\
 	lib/mainloop-io-worker.c	\
+	lib/mainloop-control.c		\
 	lib/module-config.c		\
 	lib/memtrace.c			\
 	lib/messages.c			\
 	lib/ml-batched-timer.c		\
 	lib/msg-format.c		\
+	lib/msg-stats.c			\
 	lib/parse-number.c		\
 	lib/pathutils.c         \
 	lib/persist-state.c		\
@@ -244,11 +254,8 @@ lib_libsyslog_ng_la_SOURCES		= \
 	lib/str-utils.c			\
 	lib/syslog-names.c		\
 	lib/string-list.c		\
-	lib/timeutils.c			\
 	lib/type-hinting.c		\
 	lib/ringbuffer.c		\
-	lib/late_ack_tracker.c		\
-	lib/early_ack_tracker.c		\
 	lib/crypto.c			\
 	lib/tlscontext.c		\
 	lib/uuid.c			\
@@ -257,15 +264,16 @@ lib_libsyslog_ng_la_SOURCES		= \
 	$(transport_crypto_sources)	\
 	lib/host-id.c			\
 	lib/resolved-configurable-paths.c \
-	lib/window-size-counter.c \
-					\
+	lib/window-size-counter.c       \
 	lib/cfg-lex.l			\
 	lib/cfg-grammar.y		\
 	lib/block-ref-grammar.y		\
 	lib/pragma-grammar.y		\
+	$(ack_tracker_sources) \
 	$(csvscanner_sources)		\
 	$(kvscanner_sources)		\
 	$(listscanner_sources)		\
+	$(xmlscanner_sources)		\
 	$(transport_sources)		\
 	$(logproto_sources)		\
 	$(filter_sources)		\
@@ -279,12 +287,15 @@ lib_libsyslog_ng_la_SOURCES		= \
 	$(compat_sources)     		\
 	$(logmsg_sources)		\
 	$(str_repr_sources)		\
-	$(logthrsource_sources)
+	$(timeutils_sources)		\
+	$(logthrsource_sources)		\
+	$(logthrdest_sources) \
+	$(signal_slot_connector_sources)
 
 lib_libsyslog_ng_la_CFLAGS		= \
 	$(AM_CFLAGS) \
-	@UUID_CFLAGS@ $(libsystemd_CFLAGS)
-lib_libsyslog_ng_la_LIBADD		+= @OPENSSL_LIBS@ @UUID_LIBS@
+	$(libsystemd_CFLAGS)
+lib_libsyslog_ng_la_LIBADD		+= @OPENSSL_LIBS@
 
 # each line with closely related files (e.g. the ones generated from the same source)
 BUILT_SOURCES += lib/cfg-lex.c lib/cfg-lex.h						\

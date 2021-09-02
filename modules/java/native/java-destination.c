@@ -71,6 +71,27 @@ Java_org_syslog_1ng_LogDestination_getSeqNum(JNIEnv *env, jobject obj, jlong han
   return (jint)(self->super.worker.instance.seq_num);
 }
 
+JNIEXPORT jint JNICALL
+Java_org_syslog_1ng_LogDestination_getBatchLines(JNIEnv *env, jobject obj, jlong handle)
+{
+  JavaDestDriver *self = (JavaDestDriver *)handle;
+  return (jint)(self->super.batch_lines);
+}
+
+JNIEXPORT void JNICALL
+Java_org_syslog_1ng_LogDestination_setBatchLines(JNIEnv *env, jobject obj, jlong handle, jlong batch_size)
+{
+  JavaDestDriver *self = (JavaDestDriver *)handle;
+  self->super.batch_lines = batch_size;
+}
+
+JNIEXPORT void JNICALL
+Java_org_syslog_1ng_LogDestination_setBatchTimeout(JNIEnv *env, jobject obj, jlong handle, jlong timeout)
+{
+  JavaDestDriver *self = (JavaDestDriver *)handle;
+  self->super.batch_timeout = timeout;
+}
+
 JNIEXPORT jlong JNICALL
 Java_org_syslog_1ng_LogPipe_getConfigHandle(JNIEnv *env, jobject obj, jlong handle)
 {
@@ -126,6 +147,7 @@ java_dd_init(LogPipe *s)
       msg_error("Can't compile template",
                 evt_tag_str("template", self->template_string),
                 evt_tag_str("error", error->message));
+      g_error_free(error);
       return FALSE;
     }
 
@@ -149,10 +171,19 @@ java_dd_deinit(LogPipe *s)
   return log_threaded_dest_driver_deinit_method(s);
 }
 
-gboolean
+gint
 java_dd_send_to_object(JavaDestDriver *self, LogMessage *msg)
 {
-  return java_destination_proxy_send(self->proxy, msg);
+  gint result = java_destination_proxy_send(self->proxy, msg);
+  if (result < 0 || result >= LTR_MAX)
+    {
+      msg_error("java_destination: worker insert result out of range. Retrying message later",
+                log_pipe_location_tag((LogPipe *)self),
+                evt_tag_int("result", result));
+      return LTR_ERROR;
+    }
+
+  return result;
 }
 
 gboolean
@@ -176,30 +207,24 @@ java_dd_close(LogThreadedDestDriver *s)
     }
 }
 
-static worker_insert_result_t
+static LogThreadedResult
 java_worker_insert(LogThreadedDestDriver *s, LogMessage *msg)
 {
   JavaDestDriver *self = (JavaDestDriver *)s;
 
   if (!java_dd_open(s))
     {
-      return WORKER_INSERT_RESULT_NOT_CONNECTED;
+      return LTR_NOT_CONNECTED;
     }
 
-  gboolean sent = java_dd_send_to_object(self, msg);
-  return sent ? WORKER_INSERT_RESULT_SUCCESS : WORKER_INSERT_RESULT_ERROR;
+  return java_dd_send_to_object(self, msg);
 }
 
-static worker_insert_result_t
+static LogThreadedResult
 java_worker_flush(LogThreadedDestDriver *d)
 {
   JavaDestDriver *self = (JavaDestDriver *)d;
-  java_destination_proxy_on_message_queue_empty(self->proxy);
-
-  /* FIXME: the java API as we published does not yet support returning a
-   * status from this call, so return success */
-
-  return WORKER_INSERT_RESULT_SUCCESS;
+  return java_destination_proxy_flush(self->proxy);
 }
 
 static void
@@ -284,7 +309,7 @@ java_dd_new(GlobalConfig *cfg)
   self->super.worker.flush = java_worker_flush;
 
   self->super.format_stats_instance = java_dd_format_stats_instance;
-  self->super.stats_source = SCS_JAVA;
+  self->super.stats_source = stats_register_type("java");
 
   self->template = log_template_new(cfg, NULL);
   self->class_path = g_string_new(".");
