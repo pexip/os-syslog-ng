@@ -1,1 +1,2 @@
 systemd_default_prio.patch
+openssl3-support.patch
