@@ -1,3 +1,9 @@
+syslog-ng (3.28.1-2pexip5) pexip; urgency=medium
+
+  * OpenSSL 3 support
+
+ -- John-Mark Bell <jmb@pexip.com>  Fri, 13 May 2022 16:33:39 +0100
+
 syslog-ng (3.28.1-2pexip4) pexip-bullseye; urgency=medium
 
   * Bullseye rebuild for ARM64 inclusion
