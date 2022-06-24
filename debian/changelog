@@ -1,3 +1,9 @@
+syslog-ng (3.28.1-2pexip3) pexip-bullseye; urgency=medium
+
+  * Main bullseye build
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Fri, 24 Jun 2022 14:04:53 +0100
+
 syslog-ng (3.28.1-2pexip2) pexip; urgency=medium
 
   * Initial bullseye build
