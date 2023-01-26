@@ -1,3 +1,9 @@
+syslog-ng (3.28.1-2pexip6) pexip; urgency=medium
+
+  * Merge openssl3 changes to bullseye
+
+ -- Steve McIntyre <steve.mcintyre@pexip.com>  Thu, 26 Jan 2023 17:03:41 +0000
+
 syslog-ng (3.28.1-2pexip5) pexip-bullseye-openssl3; urgency=medium
 
   * OpenSSL 3 support
