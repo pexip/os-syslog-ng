@@ -52,7 +52,7 @@ struct _LogProtoServerOptions
   gboolean trim_large_messages;
   gint max_buffer_size;
   gint init_buffer_size;
-  gboolean position_tracking_enabled;
+  AckTrackerFactory *ack_tracker_factory;
 };
 
 typedef union LogProtoServerOptionsStorage
@@ -63,10 +63,10 @@ typedef union LogProtoServerOptionsStorage
 
 gboolean log_proto_server_options_validate(const LogProtoServerOptions *options);
 gboolean log_proto_server_options_set_encoding(LogProtoServerOptions *s, const gchar *encoding);
+void log_proto_server_options_set_ack_tracker_factory(LogProtoServerOptions *s, AckTrackerFactory *factory);
 void log_proto_server_options_defaults(LogProtoServerOptions *options);
 void log_proto_server_options_init(LogProtoServerOptions *options, GlobalConfig *cfg);
 void log_proto_server_options_destroy(LogProtoServerOptions *options);
-
 
 typedef void (*LogProtoServerWakeupFunc)(gpointer user_data);
 typedef struct _LogProtoServerWakeupCallback
@@ -81,9 +81,9 @@ struct _LogProtoServer
   const LogProtoServerOptions *options;
   LogTransport *transport;
   AckTracker *ack_tracker;
+
   LogProtoServerWakeupCallback wakeup_callback;
   /* FIXME: rename to something else */
-  gboolean (*is_position_tracked)(LogProtoServer *s);
   LogProtoPrepareAction (*prepare)(LogProtoServer *s, GIOCondition *cond, gint *timeout);
   gboolean (*restart_with_state)(LogProtoServer *s, PersistState *state, const gchar *persist_name);
   LogProtoStatus (*fetch)(LogProtoServer *s, const guchar **msg, gsize *msg_len, gboolean *may_read,
@@ -164,15 +164,6 @@ log_proto_server_reset_error(LogProtoServer *s)
   s->status = LPS_SUCCESS;
 }
 
-static inline gboolean
-log_proto_server_is_position_tracked(LogProtoServer *s)
-{
-  if (s->is_position_tracked)
-    return s->is_position_tracked(s);
-
-  return FALSE;
-}
-
 static inline void
 log_proto_server_set_wakeup_cb(LogProtoServer *s, LogProtoServerWakeupFunc wakeup, gpointer user_data)
 {
@@ -187,6 +178,9 @@ log_proto_server_wakeup_cb_call(LogProtoServerWakeupCallback *wakeup_callback)
     wakeup_callback->func(wakeup_callback->user_data);
 }
 
+AckTrackerFactory *log_proto_server_get_ack_tracker_factory(LogProtoServer *s);
+gboolean log_proto_server_is_position_tracked(LogProtoServer *s);
+
 gboolean log_proto_server_validate_options_method(LogProtoServer *s);
 void log_proto_server_init(LogProtoServer *s, LogTransport *transport, const LogProtoServerOptions *options);
 void log_proto_server_free_method(LogProtoServer *s);
@@ -199,12 +193,13 @@ log_proto_server_set_ack_tracker(LogProtoServer *s, AckTracker *ack_tracker)
   s->ack_tracker = ack_tracker;
 }
 
-#define DEFINE_LOG_PROTO_SERVER(prefix) \
+#define DEFINE_LOG_PROTO_SERVER(prefix, options...) \
   static gpointer                                                       \
   prefix ## _server_plugin_construct(Plugin *self)                      \
   {                                                                     \
     static LogProtoServerFactory proto = {                              \
       .construct = prefix ## _server_new,                       \
+      ##options \
     };                                                                  \
     return &proto;                                                      \
   }

@@ -22,12 +22,12 @@
  */
 
 #include <criterion/criterion.h>
+#include "libtest/grab-logging.h"
 
 #include "syslog-names.h"
 #include "apphook.h"
 #include "rewrite/rewrite-set-facility.h"
 #include "logmsg/logmsg.h"
-#include "grab-logging.h"
 
 GlobalConfig *cfg = NULL;
 LogMessage *msg;
@@ -37,7 +37,7 @@ _create_template(const gchar *str)
 {
   GError *error = NULL;
   LogTemplate *template = log_template_new(cfg, NULL);
-  log_template_compile(template, str, &error);
+  cr_assert(log_template_compile(template, str, &error));
 
   cr_expect_null(error);
 

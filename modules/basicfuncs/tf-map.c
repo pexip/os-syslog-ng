@@ -56,7 +56,8 @@ tf_map_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent, gint 
 }
 
 static void
-tf_map_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *args, GString *result)
+tf_map_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *args, GString *result,
+            LogMessageValueType *type)
 {
   ListScanner scanner;
   gsize initial_len = result->len;
@@ -64,6 +65,7 @@ tf_map_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *
   GString *lst = args->argv[0];
   LogMessage *msg = args->messages[0];
 
+  *type = LM_VT_LIST;
   list_scanner_init(&scanner);
   list_scanner_input_string(&scanner, lst->str, lst->len);
 
@@ -75,7 +77,9 @@ tf_map_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *
       const gchar *current_value = list_scanner_get_current_value(&scanner);
       _append_comma_between_list_elements_if_needed(result, initial_len);
       GString *buffer = scratch_buffers_alloc();
-      log_template_format(state->template, msg, NULL, LTZ_LOCAL, 0, current_value, buffer);
+      LogTemplateEvalOptions options = *args->options;
+      options.context_id = current_value;
+      log_template_format(state->template, msg, &options, buffer);
       str_repr_encode_append(result, buffer->str, -1, ",");
     }
   list_scanner_deinit(&scanner);

@@ -31,14 +31,13 @@
 
 #include "afstreams.h"
 #include "cfg-parser.h"
-#include "afstreams-grammar.h"
 #include "messages.h"
 
 extern LogDriver *last_driver;
 
 }
 
-%name-prefix "afstreams_"
+%define api.prefix {afstreams_}
 
 /* this parameter is needed in order to instruct bison to use a complete
  * argument list for yylex/yyerror */
@@ -65,7 +64,7 @@ start
   ;
 
 source_afstreams
-	: KW_SUN_STREAMS '(' source_afstreams_params ')'	{ $$ = $3; }
+	: KW_SUN_STREAMS '(' _inner_src_context_push source_afstreams_params _inner_src_context_pop ')'	{ $$ = $4; }
 	;
 
 source_afstreams_params

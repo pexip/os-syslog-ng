@@ -43,15 +43,16 @@
 #include "secret-storage/nondumpable-allocator.h"
 #include "secret-storage/secret-storage.h"
 #include "transport/transport-factory-id.h"
+#include "timeutils/timeutils.h"
 #include "msg-stats.h"
 
 #include <iv.h>
 #include <iv_work.h>
-#include <resolv.h>
 
 typedef struct _ApplicationHookEntry
 {
   gint type;
+  ApplicationHookRunMode run_mode;
   ApplicationHookFunc func;
   gpointer user_data;
 } ApplicationHookEntry;
@@ -72,7 +73,7 @@ app_is_shutting_down(void)
 }
 
 void
-register_application_hook(gint type, ApplicationHookFunc func, gpointer user_data)
+register_application_hook(gint type, ApplicationHookFunc func, gpointer user_data, ApplicationHookRunMode run_mode)
 {
   if (type > __AH_STATE_MAX || current_state < type)
     {
@@ -81,6 +82,7 @@ register_application_hook(gint type, ApplicationHookFunc func, gpointer user_dat
       entry->type = type;
       entry->func = func;
       entry->user_data = user_data;
+      entry->run_mode = run_mode;
 
       application_hooks = g_list_prepend(application_hooks, entry);
     }
@@ -120,9 +122,17 @@ run_application_hook(gint type)
         {
           l_next = l->next;
           e->func(type, e->user_data);
-          application_hooks = g_list_remove_link(application_hooks, l);
-          g_free(e);
-          g_list_free_1(l);
+
+          if (e->run_mode == AHM_RUN_ONCE)
+            {
+              application_hooks = g_list_remove_link(application_hooks, l);
+              g_free(e);
+              g_list_free_1(l);
+            }
+          else
+            {
+              g_assert(e->run_mode == AHM_RUN_REPEAT);
+            }
         }
       else
         {
@@ -161,7 +171,6 @@ app_startup(void)
   afinter_global_init();
   child_manager_init();
   alarm_init();
-  g_thread_init(NULL);
   main_loop_thread_resource_init();
   stats_init();
   tzset();
@@ -177,6 +186,7 @@ app_startup(void)
   transport_factory_id_global_init();
   scratch_buffers_global_init();
   msg_stats_init();
+  timeutils_global_init();
 }
 
 void
@@ -239,10 +249,15 @@ app_shutdown(void)
 }
 
 void
+app_config_stopped(void)
+{
+  run_application_hook(AH_CONFIG_STOPPED);
+}
+
+void
 app_config_changed(void)
 {
   run_application_hook(AH_CONFIG_CHANGED);
-  res_init();
 }
 
 void

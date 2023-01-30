@@ -37,15 +37,11 @@
  * several times. */
 typedef struct _LogTemplateInvokeArgs
 {
-  /* context in case of correllation */
+  /* context in case of correlation */
   LogMessage **messages;
   gint num_messages;
 
-  /* options for recursive template evaluation, inherited from the parent */
-  const LogTemplateOptions *opts;
-  gint tz;
-  gint seq_num;
-  const gchar *context_id;
+  LogTemplateEvalOptions *options;
   GString *argv[TEMPLATE_INVOKE_MAX_ARGS];
 } LogTemplateInvokeArgs;
 
@@ -67,7 +63,8 @@ struct _LogTemplateFunction
   void (*eval)(LogTemplateFunction *self, gpointer state, LogTemplateInvokeArgs *args);
 
   /* call the function */
-  void (*call)(LogTemplateFunction *self, gpointer state, const LogTemplateInvokeArgs *args, GString *result);
+  void (*call)(LogTemplateFunction *self, gpointer state, const LogTemplateInvokeArgs *args, GString *result,
+               LogMessageValueType *type);
 
   /* free data in state */
   void (*free_state)(gpointer s);

@@ -30,6 +30,7 @@
 #include "msg-stats.h"
 #include "logmsg/tags.h"
 #include "ack-tracker/ack_tracker.h"
+#include "ack-tracker/ack_tracker_factory.h"
 #include "timeutils/misc.h"
 #include "scratch-buffers.h"
 
@@ -218,7 +219,7 @@ log_source_dynamic_window_update_statistics(LogSource *self)
 static void
 _reclaim_dynamic_window(LogSource *self, gsize window_size)
 {
-  g_assert(self->full_window_size - window_size >= self->options->init_window_size);
+  g_assert(self->full_window_size - window_size >= self->initial_window_size);
   atomic_gssize_set(&self->window_size_to_be_reclaimed, window_size);
 }
 
@@ -227,7 +228,7 @@ _release_dynamic_window(LogSource *self)
 {
   g_assert(self->ack_tracker == NULL);
 
-  gsize dynamic_part = self->full_window_size - self->options->init_window_size;
+  gsize dynamic_part = self->full_window_size - self->initial_window_size;
   msg_trace("Releasing dynamic part of the window", evt_tag_int("dynamic_window_to_be_released", dynamic_part),
             log_pipe_location_tag(&self->super));
 
@@ -304,8 +305,8 @@ static gboolean
 _reclaim_window_instead_of_rebalance(LogSource *self)
 {
   //check pending_reclaimed
-  gssize total_reclaim = (gssize)atomic_gssize_set_and_get(&self->pending_reclaimed, 0);
-  gssize to_be_reclaimed = (gssize)atomic_gssize_get(&self->window_size_to_be_reclaimed);
+  gssize total_reclaim = atomic_gssize_set_and_get(&self->pending_reclaimed, 0);
+  gssize to_be_reclaimed = atomic_gssize_get(&self->window_size_to_be_reclaimed);
   gboolean reclaim_in_progress = (to_be_reclaimed > 0);
 
   if (total_reclaim > 0)
@@ -333,7 +334,7 @@ _reclaim_window_instead_of_rebalance(LogSource *self)
 static void
 _dynamic_window_rebalance(LogSource *self)
 {
-  gsize current_dynamic_win = self->full_window_size - self->options->init_window_size;
+  gsize current_dynamic_win = self->full_window_size - self->initial_window_size;
   gboolean have_to_increase = current_dynamic_win < self->dynamic_window.pool->balanced_window;
   gboolean have_to_decrease = current_dynamic_win > self->dynamic_window.pool->balanced_window;
 
@@ -342,7 +343,7 @@ _dynamic_window_rebalance(LogSource *self)
             evt_tag_printf("connection", "%p", self),
             evt_tag_int("full_window", self->full_window_size),
             evt_tag_int("dynamic_win", current_dynamic_win),
-            evt_tag_int("static_window", self->options->init_window_size),
+            evt_tag_int("static_window", self->initial_window_size),
             evt_tag_int("balanced_window", self->dynamic_window.pool->balanced_window),
             evt_tag_int("avg_free", dynamic_window_stat_get_avg(&self->dynamic_window.stat)));
 
@@ -452,10 +453,9 @@ _create_ack_tracker_if_not_exists(LogSource *self)
 {
   if (!self->ack_tracker)
     {
-      if (self->pos_tracked)
-        self->ack_tracker = late_ack_tracker_new(self);
-      else
-        self->ack_tracker = early_ack_tracker_new(self);
+      if (!self->ack_tracker_factory)
+        self->ack_tracker_factory = instant_ack_tracker_bookmarkless_factory_new();
+      self->ack_tracker = ack_tracker_factory_create(self->ack_tracker_factory, self);
     }
 }
 
@@ -465,6 +465,11 @@ log_source_init(LogPipe *s)
   LogSource *self = (LogSource *) s;
 
   _create_ack_tracker_if_not_exists(self);
+  if (!ack_tracker_init(self->ack_tracker))
+    {
+      msg_error("Failed to initialize AckTracker");
+      return FALSE;
+    }
 
   stats_lock();
   StatsClusterKey sc_key;
@@ -484,6 +489,7 @@ gboolean
 log_source_deinit(LogPipe *s)
 {
   LogSource *self = (LogSource *) s;
+  ack_tracker_deinit(self->ack_tracker);
 
   stats_lock();
   StatsClusterKey sc_key;
@@ -605,7 +611,7 @@ log_source_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options
   msg_diagnostics(">>>>>> Source side message processing begin",
                   evt_tag_str("instance", self->stats_instance ? self->stats_instance : "internal"),
                   log_pipe_location_tag(s),
-                  evt_tag_printf("msg", "%p", msg));
+                  evt_tag_msg_reference(msg));
 
   /* $HOST setup */
   log_source_mangle_hostname(self, msg);
@@ -654,7 +660,7 @@ log_source_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options
   msg_diagnostics("<<<<<< Source side message processing finish",
                   evt_tag_str("instance", self->stats_instance ? self->stats_instance : "internal"),
                   log_pipe_location_tag(s),
-                  evt_tag_printf("msg", "%p", msg));
+                  evt_tag_msg_reference(msg));
 
   msg_set_context(NULL);
 }
@@ -664,6 +670,8 @@ _initialize_window(LogSource *self, gint init_window_size)
 {
   self->window_initialized = TRUE;
   window_size_counter_set(&self->window_size, init_window_size);
+
+  self->initial_window_size = init_window_size;
   self->full_window_size = init_window_size;
 }
 
@@ -676,7 +684,7 @@ _is_window_initialized(LogSource *self)
 void
 log_source_set_options(LogSource *self, LogSourceOptions *options,
                        const gchar *stats_id, const gchar *stats_instance,
-                       gboolean threaded, gboolean pos_tracked, LogExprNode *expr_node)
+                       gboolean threaded, LogExprNode *expr_node)
 {
   /* NOTE: we don't adjust window_size even in case it was changed in the
    * configuration and we received a SIGHUP.  This means that opened
@@ -693,10 +701,16 @@ log_source_set_options(LogSource *self, LogSourceOptions *options,
     g_free(self->stats_instance);
   self->stats_instance = stats_instance ? g_strdup(stats_instance): NULL;
   self->threaded = threaded;
-  self->pos_tracked = pos_tracked;
 
   log_pipe_detach_expr_node(&self->super);
   log_pipe_attach_expr_node(&self->super, expr_node);
+}
+
+void
+log_source_set_ack_tracker_factory(LogSource *self, AckTrackerFactory *factory)
+{
+  ack_tracker_factory_unref(self->ack_tracker_factory);
+  self->ack_tracker_factory = factory;
 }
 
 void
@@ -715,6 +729,7 @@ log_source_init_instance(LogSource *self, GlobalConfig *cfg)
   self->super.init = log_source_init;
   self->super.deinit = log_source_deinit;
   self->window_initialized = FALSE;
+  self->ack_tracker_factory = instant_ack_tracker_bookmarkless_factory_new();
   self->ack_tracker = NULL;
 }
 
@@ -723,15 +738,16 @@ log_source_free(LogPipe *s)
 {
   LogSource *self = (LogSource *) s;
 
+  ack_tracker_free(self->ack_tracker);
+  self->ack_tracker = NULL;
+
   g_free(self->name);
   g_free(self->stats_id);
   g_free(self->stats_instance);
   log_pipe_detach_expr_node(&self->super);
   log_pipe_free_method(s);
 
-  ack_tracker_free(self->ack_tracker);
-  self->ack_tracker = NULL;
-
+  ack_tracker_factory_unref(self->ack_tracker_factory);
   if (G_UNLIKELY(dynamic_window_is_enabled(&self->dynamic_window)))
     _release_dynamic_window(self);
 }

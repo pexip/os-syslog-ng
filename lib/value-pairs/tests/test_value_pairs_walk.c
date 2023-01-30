@@ -22,17 +22,14 @@
  *
  */
 
-#include <value-pairs/value-pairs.h>
-
 #include <criterion/criterion.h>
-#include <libtest/testutils.h>
 
-#include <apphook.h>
-#include <plugin.h>
-#include <cfg.h>
+#include "value-pairs/value-pairs.h"
+#include "apphook.h"
+#include "plugin.h"
+#include "cfg.h"
 #include "logmsg/logmsg.h"
 
-MsgFormatOptions parse_options;
 LogTemplateOptions template_options;
 GlobalConfig *cfg;
 
@@ -100,7 +97,7 @@ test_vp_obj_stop(const gchar *name,
 
 static gboolean
 test_vp_value(const gchar *name, const gchar *prefix,
-              TypeHint type, const gchar *value, gsize value_len,
+              LogMessageValueType type, const gchar *value, gsize value_len,
               gpointer *prefix_data, gpointer user_data)
 {
   cr_expect_str_eq(prefix, "root.test", "Wrong prefix");
@@ -117,16 +114,17 @@ Test(value_pairs_walker, prefix_dat)
   const char *value = "value";
 
   log_template_options_init(&template_options, cfg);
-  msg_format_options_init(&parse_options, cfg);
 
-  vp = value_pairs_new();
+  vp = value_pairs_new(cfg);
   value_pairs_add_glob_pattern(vp, "root.*", TRUE);
-  msg = log_msg_new("test", 4, &parse_options);
+  msg = log_msg_new_empty();
+  log_msg_set_value_by_name(msg, "PROGRAM", "test", -1);
 
   log_msg_set_value_by_name(msg, "root.test.alma", value, strlen(value));
   log_msg_set_value_by_name(msg, "root.test.korte", value, strlen(value));
 
-  value_pairs_walk(vp, test_vp_obj_start, test_vp_value, test_vp_obj_stop, msg, 0, LTZ_LOCAL, &template_options, NULL);
+  LogTemplateEvalOptions options = {&template_options, LTZ_LOCAL, 0, NULL, LM_VT_STRING};
+  value_pairs_walk(vp, test_vp_obj_start, test_vp_value, test_vp_obj_stop, msg, &options, 0, NULL);
   value_pairs_unref(vp);
   log_msg_unref(msg);
 };
@@ -139,9 +137,6 @@ setup(void)
   app_startup();
 
   cfg = cfg_new_snippet();
-  cfg_load_module(cfg, "syslogformat");
-  msg_format_options_defaults(&parse_options);
-  msg_format_options_init(&parse_options, cfg);
 }
 
 void
@@ -151,4 +146,3 @@ teardown(void)
 }
 
 TestSuite(value_pairs_walker, .init = setup, .fini = teardown);
-

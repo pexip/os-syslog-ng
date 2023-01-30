@@ -35,7 +35,7 @@
 
 }
 
-%name-prefix "pragma_"
+%define api.prefix {pragma_}
 %lex-param {CfgLexer *lexer}
 %parse-param {CfgLexer *lexer}
 %parse-param {gpointer *result}
@@ -44,6 +44,7 @@
 /* INCLUDE_DECLS */
 
 %token KW_VERSION
+%token KW_VERSION_CURRENT
 %token KW_DEFINE
 %token KW_MODULE
 %token KW_REQUIRES
@@ -58,6 +59,30 @@
 
 CfgArgs *last_module_args = NULL;
 
+static void
+_report_define_deprecations(const gchar *name, const gchar *value)
+{
+  if (strcmp(name, "autoload-compiled-modules") == 0 && atoi(value) == 0)
+    msg_warning("WARNING: disabling plugin discovery via the autoload-compiled-modules "
+                "@define has become unsupported in " VERSION_3_37
+                ", use the syslog-ng command line option --no-module-discovery instead");
+  else if (strcmp(name, "module-path") == 0)
+    msg_warning("WARNING: changing the path to runtime loaded modules via the module-path "
+                "@define has become unsupported in " VERSION_3_37
+                ", use the command line option --module-path instead");
+}
+
+static void
+pragma_define_global(GlobalConfig *cfg, const gchar *name, const gchar *value)
+{
+  msg_debug("Global value changed",
+            evt_tag_str("define", name),
+            evt_tag_str("value", value));
+
+  _report_define_deprecations(name, value);
+  cfg_args_set(cfg->globals, name, value);
+}
+
 }
 
 %type   <cptr> requires_message
@@ -67,7 +92,7 @@ CfgArgs *last_module_args = NULL;
 
 start
         : { PRAGMA_BEGIN(); }
-          stmt                                  { if (yychar != YYEMPTY) { cfg_lexer_unput_token(lexer, &yylval); } PRAGMA_END(); YYACCEPT; }
+          stmt                                  { if (yychar != PRAGMA_EMPTY) { cfg_lexer_unput_token(lexer, &yylval); } PRAGMA_END(); YYACCEPT; }
 
 stmt
 	: stmt_without_eol LL_EOL
@@ -88,7 +113,12 @@ stmt_with_eol
         ;
 
 version_stmt
-        : KW_VERSION ':' string_or_number
+        : KW_VERSION ':' KW_VERSION_CURRENT
+        {
+          if (!cfg_set_current_version(configuration))
+            PRAGMA_ERROR();
+        }
+        | KW_VERSION ':' string_or_number
           {
             guint parsed_version = process_version_string($3);
             free($3);
@@ -101,10 +131,7 @@ version_stmt
 define_stmt
 	: KW_DEFINE LL_IDENTIFIER string_or_number
           {
-            msg_debug("Global value changed",
-                      evt_tag_str("define", $2),
-                      evt_tag_str("value", $3));
-	    cfg_args_set(configuration->globals, $2, $3);
+            pragma_define_global(configuration, $2, $3);
             free($2);
             free($3);
           }

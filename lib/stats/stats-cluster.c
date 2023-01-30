@@ -78,13 +78,17 @@ stats_cluster_deinit(void)
   stats_types = NULL;
 }
 
-static StatsClusterKey *
-_clone_stats_cluster_key(StatsClusterKey *dst, const StatsClusterKey *src)
+StatsClusterKey *
+stats_cluster_key_clone(StatsClusterKey *dst, const StatsClusterKey *src)
 {
   dst->component = src->component;
   dst->id = g_strdup(src->id ? : "");
   dst->instance = g_strdup(src->instance ? : "");
-  dst->counter_group_init = src->counter_group_init;
+
+  if (src->counter_group_init.clone)
+    src->counter_group_init.clone(&dst->counter_group_init, &src->counter_group_init);
+  else
+    dst->counter_group_init = src->counter_group_init;
 
   return dst;
 }
@@ -99,11 +103,14 @@ stats_cluster_key_set(StatsClusterKey *self, guint16 component, const gchar *id,
   self->counter_group_init = counter_group_init;
 }
 
-static void
-_stats_cluster_key_cloned_free(StatsClusterKey *self)
+void
+stats_cluster_key_cloned_free(StatsClusterKey *self)
 {
   g_free((gchar *)(self->id));
   g_free((gchar *)(self->instance));
+
+  if (self->counter_group_init.cloned_free)
+    self->counter_group_init.cloned_free(&self->counter_group_init);
 }
 
 void
@@ -179,7 +186,7 @@ stats_counter_group_init_equals(const StatsCounterGroupInit *self, const StatsCo
   if (self->equals)
     return self->equals(self, other);
 
-  return (self->init == other->init) && (self->counter_names == other->counter_names);
+  return (self->init == other->init) && (self->counter.names == other->counter.names);
 }
 
 gboolean
@@ -288,7 +295,7 @@ stats_cluster_new(const StatsClusterKey *key)
 {
   StatsCluster *self = g_new0(StatsCluster, 1);
 
-  _clone_stats_cluster_key(&self->key, key);
+  stats_cluster_key_clone(&self->key, key);
   self->use_count = 0;
   self->query_key = _stats_build_query_key(self);
   key->counter_group_init.init(&self->key.counter_group_init, &self->counter_group);
@@ -323,7 +330,7 @@ void
 stats_cluster_free(StatsCluster *self)
 {
   stats_cluster_foreach_counter(self, stats_cluster_free_counter, NULL);
-  _stats_cluster_key_cloned_free(&self->key);
+  stats_cluster_key_cloned_free(&self->key);
   g_free(self->query_key);
   stats_counter_group_free(&self->counter_group);
   g_free(self);

@@ -28,6 +28,7 @@
 #include "logmsg/logmsg.h"
 #include "template/templates.h"
 #include "timeutils/misc.h"
+#include "ack-tracker/ack_tracker_factory.h"
 
 #include <iv.h>
 
@@ -100,7 +101,7 @@ _add_name_value(gpointer key, gpointer value, gpointer data)
   LogTemplate *val = (LogTemplate *) value;
   LogMessage *msg = (LogMessage *) data;
   GString *msg_body = g_string_sized_new(128);
-  log_template_format(val, msg, NULL, LTZ_LOCAL, 0, NULL, msg_body);
+  log_template_format(val, msg, &DEFAULT_TEMPLATE_EVAL_OPTIONS, msg_body);
   log_msg_set_value_by_name(msg, name, msg_body->str, msg_body->len);
   g_string_free(msg_body, TRUE);
 
@@ -119,7 +120,7 @@ _send_generated_message(MsgGeneratorSource *self)
   if (self->options->template)
     {
       GString *msg_body = g_string_sized_new(128);
-      log_template_format(self->options->template, msg, NULL, LTZ_LOCAL, 0, NULL, msg_body);
+      log_template_format(self->options->template, msg, &DEFAULT_TEMPLATE_EVAL_OPTIONS, msg_body);
       log_msg_set_value(msg, LM_V_MESSAGE, msg_body->str, msg_body->len);
       g_string_free(msg_body, TRUE);
     }
@@ -172,7 +173,11 @@ msg_generator_source_set_options(MsgGeneratorSource *self, MsgGeneratorSourceOpt
                                  const gchar *stats_id, const gchar *stats_instance, gboolean threaded,
                                  gboolean pos_tracked, LogExprNode *expr_node)
 {
-  log_source_set_options(&self->super, &options->super, stats_id, stats_instance, threaded, pos_tracked, expr_node);
+  log_source_set_options(&self->super, &options->super, stats_id, stats_instance, threaded, expr_node);
+
+  AckTrackerFactory *factory = pos_tracked ? consecutive_ack_tracker_factory_new() :
+                               instant_ack_tracker_bookmarkless_factory_new();
+  log_source_set_ack_tracker_factory(&self->super, factory);
 
   self->options = options;
 }

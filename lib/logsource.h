@@ -66,13 +66,13 @@ struct _LogSource
   LogPipe super;
   LogSourceOptions *options;
   gboolean threaded;
-  gboolean pos_tracked;
   gchar *name;
   gchar *stats_id;
   gchar *stats_instance;
   WindowSizeCounter window_size;
   DynamicWindow dynamic_window;
   gboolean window_initialized;
+  gsize initial_window_size;
   /* full_window_size = static + dynamic */
   gsize full_window_size;
   atomic_gssize window_size_to_be_reclaimed;
@@ -88,6 +88,7 @@ struct _LogSource
   guint32 ack_count;
   glong window_full_sleep_nsec;
   struct timespec last_ack_rate_time;
+  AckTrackerFactory *ack_tracker_factory;
   AckTracker *ack_tracker;
 
   void (*wakeup)(LogSource *s);
@@ -103,7 +104,7 @@ log_source_free_to_send(LogSource *self)
 static inline gint
 log_source_get_init_window_size(LogSource *self)
 {
-  return self->options->init_window_size;
+  return self->initial_window_size;
 }
 
 static inline void
@@ -120,7 +121,8 @@ gboolean log_source_deinit(LogPipe *s);
 void log_source_post(LogSource *self, LogMessage *msg);
 
 void log_source_set_options(LogSource *self, LogSourceOptions *options, const gchar *stats_id,
-                            const gchar *stats_instance, gboolean threaded, gboolean pos_tracked, LogExprNode *expr_node);
+                            const gchar *stats_instance, gboolean threaded, LogExprNode *expr_node);
+void log_source_set_ack_tracker_factory(LogSource *self, AckTrackerFactory *factory);
 void log_source_set_name(LogSource *self, const gchar *name);
 void log_source_mangle_hostname(LogSource *self, LogMessage *msg);
 void log_source_init_instance(LogSource *self, GlobalConfig *cfg);

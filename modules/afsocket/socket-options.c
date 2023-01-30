@@ -86,7 +86,16 @@ _setup_keepalive(gint fd)
 static gboolean
 _setup_reuseport(gint fd)
 {
-#ifdef SO_REUSEPORT
+#if defined(SO_REUSEPORT_LB)
+  gint on = 1;
+  if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT_LB, &on, sizeof(on)) < 0)
+    {
+      msg_error("The kernel refused our SO_REUSEPORT_LB setting, which should be supported by FreeBSD 12.0+",
+                evt_tag_error("error"));
+      return FALSE;
+    }
+  return TRUE;
+#elif defined(SO_REUSEPORT)
   gint on = 1;
   if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &on, sizeof(on)) < 0)
     {
@@ -125,10 +134,19 @@ socket_options_setup_socket_method(SocketOptions *self, gint fd, GSockAddr *bind
   return TRUE;
 }
 
+gboolean
+socket_options_setup_peer_socket_method(SocketOptions *self, gint fd, GSockAddr *bind_addr)
+{
+  if (self->so_keepalive && !_setup_keepalive(fd))
+    return FALSE;
+  return TRUE;
+}
+
 void
 socket_options_init_instance(SocketOptions *self)
 {
   self->setup_socket = socket_options_setup_socket_method;
+  self->setup_peer_socket = socket_options_setup_peer_socket_method;
   self->free = g_free;
 }
 

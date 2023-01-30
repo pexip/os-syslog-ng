@@ -95,8 +95,8 @@ volatile gint main_loop_workers_running;
  */
 
 ThreadId main_thread_handle;
-GCond *thread_halt_cond;
-GStaticMutex workers_running_lock = G_STATIC_MUTEX_INIT;
+GCond thread_halt_cond;
+GMutex workers_running_lock;
 
 struct _MainLoop
 {
@@ -142,7 +142,6 @@ struct _MainLoop
   struct iv_signal sigusr1_poll;
 
   struct iv_event exit_requested;
-  struct iv_task revert_config;
 
   struct iv_timer exit_timer;
 
@@ -254,13 +253,6 @@ main_loop_reload_config_revert(gpointer user_data)
   main_loop_reload_config_finished(self);
 }
 
-static void
-_revert_config(gpointer user_data)
-{
-  MainLoop *self = (MainLoop *) user_data;
-  main_loop_worker_sync_call(main_loop_reload_config_revert, self);
-}
-
 /* called to apply the new configuration once all I/O worker threads have finished */
 static void
 main_loop_reload_config_apply(gpointer user_data)
@@ -277,16 +269,25 @@ main_loop_reload_config_apply(gpointer user_data)
       is_reloading_scheduled = FALSE;
       return;
     }
+
   self->old_config->persist = persist_config_new();
   cfg_deinit(self->old_config);
   cfg_persist_config_move(self->old_config, self->new_config);
+
+  /* The threads have stopped, deinit methods were called, but
+   * self->current_configuration still points to the old config.  We either
+   * go to the new config is cfg_init() is successful (just below) or revert
+   * to the old one if it's not.
+   * */
+
+  app_config_stopped();
 
   self->last_config_reload_successful = cfg_init(self->new_config);
   if (!self->last_config_reload_successful)
     {
       msg_error("Error initializing new configuration, reverting to old config");
       service_management_publish_status("Error initializing new configuration, using the old config");
-      iv_task_register(&self->revert_config);
+      main_loop_reload_config_revert(self);
       return;
     }
 
@@ -366,15 +367,12 @@ main_loop_reload_config(MainLoop *self)
 static void
 block_till_workers_exit(void)
 {
-  GTimeVal end_time;
+  gint64 end_time = g_get_monotonic_time() + 15 * G_USEC_PER_SEC;
 
-  g_get_current_time(&end_time);
-  g_time_val_add(&end_time, 15 * G_USEC_PER_SEC);
-
-  g_static_mutex_lock(&workers_running_lock);
+  g_mutex_lock(&workers_running_lock);
   while (main_loop_workers_running)
     {
-      if (!g_cond_timed_wait(thread_halt_cond, g_static_mutex_get_mutex(&workers_running_lock), &end_time))
+      if (!g_cond_wait_until(&thread_halt_cond, &workers_running_lock, end_time))
         {
           /* timeout has passed. */
           fprintf(stderr, "Main thread timed out (15s) while waiting workers threads to exit. "
@@ -383,13 +381,19 @@ block_till_workers_exit(void)
         }
     }
 
-  g_static_mutex_unlock(&workers_running_lock);
+  g_mutex_unlock(&workers_running_lock);
 }
 
 GlobalConfig *
 main_loop_get_current_config(MainLoop *self)
 {
   return self->current_configuration;
+}
+
+GlobalConfig *
+main_loop_get_pending_new_config(MainLoop *self)
+{
+  return self->new_config;
 }
 
 /* main_loop_verify_config
@@ -421,7 +425,7 @@ main_loop_verify_config(GString *result, MainLoop *self)
 }
 
 /************************************************************************************
- * syncronized exit
+ * synchronized exit
  ************************************************************************************/
 
 static void
@@ -451,6 +455,8 @@ main_loop_exit_initiate(gpointer user_data)
 
   if (main_loop_is_terminating(self))
     return;
+
+  control_server_cancel_workers(self->control_server);
 
   app_pre_shutdown();
 
@@ -585,6 +591,7 @@ main_loop_init(MainLoop *self, MainLoopOptions *options)
 {
   service_management_publish_status("Starting up...");
 
+  g_mutex_init(&workers_running_lock);
   self->options = options;
   scratch_buffers_automatic_gc_init();
   main_loop_worker_init();
@@ -594,11 +601,10 @@ main_loop_init(MainLoop *self, MainLoopOptions *options)
   main_loop_init_events(self);
   setup_signals(self);
 
-  IV_TASK_INIT(&self->revert_config);
-  self->revert_config.handler = _revert_config;
-  self->revert_config.cookie = self;
-
   self->current_configuration = cfg_new(0);
+
+  if (self->options->disable_module_discovery)
+    self->current_configuration->use_plugin_discovery = FALSE;
 }
 
 /*
@@ -619,6 +625,7 @@ main_loop_read_and_init_config(MainLoop *self)
       return 0;
     }
 
+  app_config_stopped();
   if (!main_loop_initialize_state(self->current_configuration, resolvedConfigurablePaths.persist_file))
     {
       return 2;
@@ -649,7 +656,7 @@ main_loop_deinit(MainLoop *self)
   main_loop_worker_deinit();
   block_till_workers_exit();
   scratch_buffers_automatic_gc_deinit();
-  g_static_mutex_free(&workers_running_lock);
+  g_mutex_clear(&workers_running_lock);
 }
 
 void
@@ -680,14 +687,20 @@ main_loop_add_options(GOptionContext *ctx)
 void
 main_loop_thread_resource_init(void)
 {
-  thread_halt_cond = g_cond_new();
+  g_cond_init(&thread_halt_cond);
   main_thread_handle = get_thread_id();
 }
 
 void
 main_loop_thread_resource_deinit(void)
 {
-  g_cond_free(thread_halt_cond);
+  g_cond_clear(&thread_halt_cond);
+}
+
+gboolean
+main_loop_is_control_server_running(MainLoop *self)
+{
+  return self->control_server != NULL;
 }
 
 GQuark

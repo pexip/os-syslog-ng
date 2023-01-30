@@ -68,7 +68,7 @@ log_rewrite_subst_process(LogRewrite *s, LogMessage **pmsg, const LogPathOptions
       msg_trace("Performing subst() rewrite",
                 evt_tag_str("rule", s->name),
                 evt_tag_str("value", log_msg_get_value_name(s->value_handle, NULL)),
-                evt_tag_printf("input", "%.*s", (gint) length, value),
+                evt_tag_mem("input", value, length),
                 evt_tag_str("type", self->matcher_options.type),
                 evt_tag_str("pattern", self->matcher->pattern),
                 evt_tag_str("replacement", self->replacement->template),
@@ -80,7 +80,7 @@ log_rewrite_subst_process(LogRewrite *s, LogMessage **pmsg, const LogPathOptions
       msg_trace("Performing subst() rewrite failed, pattern did not match",
                 evt_tag_str("rule", s->name),
                 evt_tag_str("value", log_msg_get_value_name(s->value_handle, NULL)),
-                evt_tag_printf("input", "%.*s", (gint) length, value),
+                evt_tag_mem("input", value, length),
                 evt_tag_str("type", self->matcher_options.type),
                 evt_tag_str("pattern", self->matcher->pattern),
                 evt_tag_str("replacement", self->replacement->template),
@@ -117,9 +117,7 @@ log_rewrite_subst_clone(LogPipe *s)
   cloned = (LogRewriteSubst *) log_rewrite_subst_new(self->replacement, s->cfg);
   cloned->matcher = log_matcher_ref(self->matcher);
   cloned->super.value_handle = self->super.value_handle;
-
-  if (self->super.condition)
-    cloned->super.condition = filter_expr_ref(self->super.condition);
+  cloned->super.condition = filter_expr_clone(self->super.condition);
 
   return &cloned->super.super;
 }

@@ -45,6 +45,15 @@ _setup_ts_processed(UnixTime *timestamps, const UnixTime *processed)
     timestamps[LM_TS_PROCESSED] = timestamps[LM_TS_RECVD];
 }
 
+static void
+nv_table_serialize_with_compaction(LogMessageSerializationState *state, NVTable *old)
+{
+  NVTable *payload;
+  payload = nv_table_compact(old);
+  nv_table_serialize(state, payload);
+  nv_table_unref(payload);
+};
+
 static gboolean
 _serialize_message(LogMessageSerializationState *state)
 {
@@ -70,15 +79,10 @@ _serialize_message(LogMessageSerializationState *state)
   serialize_write_uint8(sa, msg->alloc_sdata);
   serialize_write_uint32_array(sa, (guint32 *) msg->sdata, msg->num_sdata);
 
-  NVTable *payload;
-
   if (state->flags & LMSF_COMPACTION)
-    payload = nv_table_compact(msg->payload);
+    nv_table_serialize_with_compaction(state, msg->payload);
   else
-    payload = nv_table_ref(msg->payload);
-
-  nv_table_serialize(state, payload);
-  nv_table_unref(payload);
+    nv_table_serialize(state, msg->payload);
   return TRUE;
 }
 
@@ -289,7 +293,7 @@ log_msg_read_matches_details(LogMessage *self, SerializeArchive *sa)
               !serialize_read_uint16(sa, &ofs) ||
               !serialize_read_uint16(sa, &len))
             return FALSE;
-          log_msg_set_match_indirect(self, i, builtin_value, type, ofs, len);
+          log_msg_set_match_indirect_with_type(self, i, builtin_value, ofs, len, type);
         }
       else
         {

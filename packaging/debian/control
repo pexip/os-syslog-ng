@@ -9,6 +9,7 @@ Build-Depends: debhelper (>= 10~),
                autoconf-archive,
                tzdata,
                pkg-config, flex, bison (>= 3.4.2),
+               libcriterion-dev <!sng-nocriterion>,
                xsltproc, docbook-xsl,
                libesmtp-dev,
                libivykis-dev (>= 0.36.1~),
@@ -28,16 +29,17 @@ Build-Depends: debhelper (>= 10~),
                librabbitmq-dev,
                python <sng-python2>, python-dev <sng-python2>, python-setuptools <sng-python2>,
                python3, python3-dev, dh-python,
-               python3-nose, python3-ply, python3-setuptools,
+               python3-ply, python3-setuptools,
                dh-exec (>= 0.13~),
                libxml2-utils, geoip-database,
                libmaxminddb-dev,
                libcurl4-openssl-dev,
                libsnappy-dev,
                libsnmp-dev [linux-any hurd-i386],
-               librdkafka-dev (>= 1.0.0) <!sng-nokafka>,
+               librdkafka-dev (>= 1.1.0) <!sng-nokafka>,
                openjdk-8-jdk <!nojava>,
-               gradle (>= 3.5.1~) <!nojava>
+               gradle (>= 3.5.1~) <!nojava>,
+               libpaho-mqtt-dev <!sng-nomqtt>
 Build-Conflicts: autoconf2.13
 Standards-Version: 4.4.1
 Homepage: https://www.syslog-ng.com/
@@ -768,3 +770,27 @@ Description: Enhanced system logging daemon (HTTP destination implemented in Jav
  .
  This package provides an HTTP destination, allowing one to send syslog messages as HTTP
  PUT messages to an http server.
+
+Package: syslog-ng-mod-mqtt
+Architecture: any
+Multi-Arch: foreign
+Depends: ${shlibs:Depends}, ${misc:Depends}, syslog-ng-core (>= ${source:Version}), syslog-ng-core (<< ${source:Version}.1~)
+Description: Enhanced system logging daemon (MQTT plugins)
+ syslog-ng is an enhanced log daemon, supporting a wide range of input
+ and output methods: syslog, unstructured text, message queues,
+ databases (SQL and NoSQL alike) and more.
+ .
+ Key features:
+ .
+  * receive and send RFC3164 and RFC5424 style syslog messages
+  * work with any kind of unstructured data
+  * receive and send JSON formatted messages
+  * classify and structure logs with builtin parsers (csv-parser(),
+    db-parser(), etc.)
+  * normalize, crunch and process logs as they flow through the system
+  * hand on messages for further processing using message queues (like
+    AMQP), files or databases (like PostgreSQL or MongoDB).
+ .
+ This package provides the MQTT plugin, that allows receiving and sending 
+ MQTT messages.
+ 

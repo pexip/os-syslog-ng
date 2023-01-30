@@ -54,22 +54,24 @@ static GPtrArray      *thread_array = NULL;
 
 static gboolean thread_run;
 static generate_message_func generate_message;
-static GMutex *thread_lock = NULL;
-static GCond *thread_start = NULL;
-static GCond *thread_connected = NULL;
+static GMutex thread_lock;
+static GCond thread_start;
+static GCond thread_connected;
 static gint connect_finished;
 static gint active_thread_count;
 static gint idle_thread_count;
 
 static int use_ssl = 0;
+static int proxied_tls_passthrough = 0;
 
 static GOptionEntry loggen_options[] =
 {
   { "use-ssl", 'U', 0, G_OPTION_ARG_NONE, &use_ssl,  "Use ssl layer", NULL },
+  { "proxied-tls-passthrough", 0, 0, G_OPTION_ARG_NONE, &proxied_tls_passthrough, "Send the PROXY protocol v1 header before the encrypted payload", NULL },
   { NULL }
 };
 
-PluginInfo loggen_plugin_info =
+PluginInfo ssl_loggen_plugin_info =
 {
   .name = "ssl-plugin",
   .get_options_list = get_options,
@@ -101,13 +103,9 @@ set_generate_message(generate_message_func gen_message)
 static gint
 get_thread_count(void)
 {
-  if (!thread_lock)
-    return 0;
-
-  int num;
-  g_mutex_lock(thread_lock);
-  num = active_thread_count + idle_thread_count;
-  g_mutex_unlock(thread_lock);
+  g_mutex_lock(&thread_lock);
+  int num = active_thread_count + idle_thread_count;
+  g_mutex_unlock(&thread_lock);
 
   return num;
 }
@@ -123,7 +121,7 @@ start(PluginOption *option)
 {
   if (!option)
     {
-      ERROR("invalid option refernce\n");
+      ERROR("invalid option reference\n");
       return FALSE;
     }
 
@@ -145,9 +143,9 @@ start(PluginOption *option)
 
   thread_array = g_ptr_array_new();
 
-  thread_lock = g_mutex_new();
-  thread_start = g_cond_new();
-  thread_connected = g_cond_new();
+  g_mutex_init(&thread_lock);
+  g_cond_init(&thread_start);
+  g_cond_init(&thread_connected);
 
   active_thread_count = option->active_connections;
   idle_thread_count = option->idle_connections;
@@ -161,7 +159,7 @@ start(PluginOption *option)
       data->option = option;
       data->index = j;
 
-      GThread *thread_id = g_thread_new(loggen_plugin_info.name, active_thread_func, (gpointer)data);
+      GThread *thread_id = g_thread_new(ssl_loggen_plugin_info.name, active_thread_func, (gpointer)data);
       g_ptr_array_add(thread_array, (gpointer) thread_id);
     }
 
@@ -171,7 +169,7 @@ start(PluginOption *option)
       data->option = option;
       data->index = j;
 
-      GThread *thread_id = g_thread_new(loggen_plugin_info.name, idle_thread_func, (gpointer)data);
+      GThread *thread_id = g_thread_new(ssl_loggen_plugin_info.name, idle_thread_func, (gpointer)data);
       g_ptr_array_add(thread_array, (gpointer) thread_id);
     }
 
@@ -180,21 +178,21 @@ start(PluginOption *option)
   gint64 end_time;
   end_time = g_get_monotonic_time () + CONNECTION_TIMEOUT_SEC * G_TIME_SPAN_SECOND;
 
-  g_mutex_lock(thread_lock);
+  g_mutex_lock(&thread_lock);
   while (connect_finished != option->active_connections + option->idle_connections)
     {
-      if (! g_cond_wait_until(thread_connected, thread_lock, end_time))
+      if (! g_cond_wait_until(&thread_connected, &thread_lock, end_time))
         {
-          ERROR("timeout occured while waiting for connections\n");
+          ERROR("timeout occurred while waiting for connections\n");
           break;
         }
     }
 
   /* start all threads */
-  g_cond_broadcast(thread_start);
+  g_cond_broadcast(&thread_start);
   thread_run = TRUE;
 
-  g_mutex_unlock(thread_lock);
+  g_mutex_unlock(&thread_lock);
 
   return TRUE;
 }
@@ -204,7 +202,7 @@ stop(PluginOption *option)
 {
   if (!option)
     {
-      ERROR("invalid option refernce\n");
+      ERROR("invalid option reference\n");
       return;
     }
 
@@ -226,14 +224,9 @@ stop(PluginOption *option)
 
   crypto_deinit();
 
-  if (thread_lock)
-    g_mutex_free(thread_lock);
-
-  if (thread_start)
-    g_cond_free(thread_start);
-
-  if (thread_connected)
-    g_cond_free(thread_connected);
+  g_mutex_clear(&thread_lock);
+  g_cond_clear(&thread_start);
+  g_cond_clear(&thread_connected);
 
   DEBUG("all %d+%d threads have been stopped\n",
         option->active_connections,
@@ -247,7 +240,7 @@ idle_thread_func(gpointer user_data)
   PluginOption *option = thread_context->option;
   int thread_index = thread_context->index;
 
-  int sock_fd = connect_ip_socket(SOCK_STREAM, option->target, option->port, option->use_ipv6);;
+  int sock_fd = connect_ip_socket(SOCK_STREAM, option->target, option->port, option->use_ipv6);
 
   SSL *ssl = open_ssl_connection(sock_fd);
   if (ssl == NULL)
@@ -259,23 +252,23 @@ idle_thread_func(gpointer user_data)
       DEBUG("(%d) connected to server on socket (%p)\n", thread_index, g_thread_self());
     }
 
-  g_mutex_lock(thread_lock);
+  g_mutex_lock(&thread_lock);
   connect_finished++;
 
   if (connect_finished == option->active_connections + option->idle_connections)
-    g_cond_broadcast(thread_connected);
+    g_cond_broadcast(&thread_connected);
 
-  g_mutex_unlock(thread_lock);
+  g_mutex_unlock(&thread_lock);
 
-  DEBUG("thread (%s,%p) created. wait for start ...\n", loggen_plugin_info.name, g_thread_self());
-  g_mutex_lock(thread_lock);
+  DEBUG("thread (%s,%p) created. wait for start ...\n", ssl_loggen_plugin_info.name, g_thread_self());
+  g_mutex_lock(&thread_lock);
   while (!thread_run)
     {
-      g_cond_wait(thread_start, thread_lock);
+      g_cond_wait(&thread_start, &thread_lock);
     }
-  g_mutex_unlock(thread_lock);
+  g_mutex_unlock(&thread_lock);
 
-  DEBUG("thread (%s,%p) started. (r=%d,c=%d)\n", loggen_plugin_info.name, g_thread_self(), option->rate,
+  DEBUG("thread (%s,%p) started. (r=%d,c=%d)\n", ssl_loggen_plugin_info.name, g_thread_self(), option->rate,
         option->number_of_messages);
 
   while (thread_run && active_thread_count>0)
@@ -283,9 +276,9 @@ idle_thread_func(gpointer user_data)
       g_usleep(10*1000);
     }
 
-  g_mutex_lock(thread_lock);
+  g_mutex_lock(&thread_lock);
   idle_thread_count--;
-  g_mutex_unlock(thread_lock);
+  g_mutex_unlock(&thread_lock);
 
   close_ssl_connection(ssl);
   shutdown(sock_fd, SHUT_RDWR);
@@ -296,6 +289,32 @@ idle_thread_func(gpointer user_data)
   return NULL;
 }
 
+static inline void
+send_plaintext_proxy_header(ThreadData *thread_context, int sock_fd, char *buf, size_t buf_size)
+{
+  PluginOption *option = thread_context->option;
+
+  int proxy_header_len = generate_proxy_header(buf, buf_size, thread_context->index, option->proxy_src_ip,
+                                               option->proxy_dst_ip, option->proxy_src_port, option->proxy_dst_port);
+
+  DEBUG("Generated PROXY protocol v1 header; len=%d\n", proxy_header_len);
+
+  size_t sent = 0;
+  while (sent < proxy_header_len)
+    {
+      int rc = send(sock_fd, buf + sent, proxy_header_len - sent, 0);
+      if (rc < 0)
+        {
+          ERROR("Error sending buffer on %d (rc=%d)\n", sock_fd, rc);
+          return;
+        }
+
+      sent += rc;
+    }
+
+  DEBUG("Sent PROXY protocol v1 header; len=%d\n", proxy_header_len);
+}
+
 gpointer
 active_thread_func(gpointer user_data)
 {
@@ -304,7 +323,10 @@ active_thread_func(gpointer user_data)
 
   char *message = g_malloc0(MAX_MESSAGE_LENGTH+1);
 
-  int sock_fd = connect_ip_socket(SOCK_STREAM, option->target, option->port, option->use_ipv6);;
+  int sock_fd = connect_ip_socket(SOCK_STREAM, option->target, option->port, option->use_ipv6);
+
+  if(proxied_tls_passthrough)
+    send_plaintext_proxy_header(thread_context, sock_fd, message, MAX_MESSAGE_LENGTH);
 
   SSL *ssl = open_ssl_connection(sock_fd);
 
@@ -317,23 +339,23 @@ active_thread_func(gpointer user_data)
       DEBUG("(%d) connected to server on socket (%p)\n", thread_context->index, g_thread_self());
     }
 
-  g_mutex_lock(thread_lock);
+  g_mutex_lock(&thread_lock);
   connect_finished++;
 
   if (connect_finished == option->active_connections + option->idle_connections)
-    g_cond_broadcast(thread_connected);
+    g_cond_broadcast(&thread_connected);
 
-  g_mutex_unlock(thread_lock);
+  g_mutex_unlock(&thread_lock);
 
-  DEBUG("thread (%s,%p) created. wait for start ...\n", loggen_plugin_info.name, g_thread_self());
-  g_mutex_lock(thread_lock);
+  DEBUG("thread (%s,%p) created. wait for start ...\n", ssl_loggen_plugin_info.name, g_thread_self());
+  g_mutex_lock(&thread_lock);
   while (!thread_run)
     {
-      g_cond_wait(thread_start, thread_lock);
+      g_cond_wait(&thread_start, &thread_lock);
     }
-  g_mutex_unlock(thread_lock);
+  g_mutex_unlock(&thread_lock);
 
-  DEBUG("thread (%s,%p) started. (r=%d,c=%d)\n", loggen_plugin_info.name, g_thread_self(), option->rate,
+  DEBUG("thread (%s,%p) started. (r=%d,c=%d)\n", ssl_loggen_plugin_info.name, g_thread_self(), option->rate,
         option->number_of_messages);
 
   unsigned long count = 0;
@@ -358,7 +380,7 @@ active_thread_func(gpointer user_data)
           break;
         }
 
-      int str_len = generate_message(message, MAX_MESSAGE_LENGTH, thread_context->index, count++);
+      int str_len = generate_message(message, MAX_MESSAGE_LENGTH, thread_context, count++);
 
       if (str_len < 0)
         {
@@ -367,9 +389,9 @@ active_thread_func(gpointer user_data)
         }
 
       ssize_t sent = 0;
-      while (sent < strlen(message))
+      while (sent < str_len)
         {
-          ssize_t rc = SSL_write(ssl, message + sent, strlen(message) - sent);
+          ssize_t rc = SSL_write(ssl, message + sent, str_len - sent);
           if (rc < 0)
             {
               ERROR("error sending buffer on %p (rc=%zd)\n", ssl, rc);
@@ -380,14 +402,47 @@ active_thread_func(gpointer user_data)
           sent += rc;
         }
 
-      thread_context->sent_messages++;
-      thread_context->buckets--;
-    }
-  DEBUG("thread (%s,%p) finished\n", loggen_plugin_info.name, g_thread_self());
+      if(!connection_error)
+        {
+          thread_context->sent_messages++;
+          thread_context->buckets--;
+        }
 
-  g_mutex_lock(thread_lock);
+      if(connection_error && option->reconnect)
+        {
+          close_ssl_connection(ssl);
+          shutdown(sock_fd, SHUT_RDWR);
+          close(sock_fd);
+
+          ERROR("destination connection %s:%s (%p) is lost, try to reconnect\n", option->target, option->port, g_thread_self());
+          sock_fd = connect_ip_socket(SOCK_STREAM, option->target, option->port, option->use_ipv6);
+          if(proxied_tls_passthrough)
+            send_plaintext_proxy_header(thread_context, sock_fd, message, MAX_MESSAGE_LENGTH);
+          ssl = open_ssl_connection(sock_fd);
+
+          while(ssl == NULL && !thread_check_exit_criteria(thread_context))
+            {
+              ERROR("can not reconnect to %s:%s (%p), try again after %d sec\n", option->target, option->port, g_thread_self(), 1);
+              g_usleep(1e6);
+
+              sock_fd = connect_ip_socket(SOCK_STREAM, option->target, option->port, option->use_ipv6);
+              if(proxied_tls_passthrough)
+                send_plaintext_proxy_header(thread_context, sock_fd, message, MAX_MESSAGE_LENGTH);
+              ssl = open_ssl_connection(sock_fd);
+            }
+
+          if(ssl != NULL)
+            {
+              DEBUG("(%d) reconnected to server on socket (%p)\n", thread_context->index, g_thread_self());
+              connection_error = FALSE;
+            }
+        }
+    }
+  DEBUG("thread (%s,%p) finished\n", ssl_loggen_plugin_info.name, g_thread_self());
+
+  g_mutex_lock(&thread_lock);
   active_thread_count--;
-  g_mutex_unlock(thread_lock);
+  g_mutex_unlock(&thread_lock);
 
   g_free((gpointer)message);
   close_ssl_connection(ssl);

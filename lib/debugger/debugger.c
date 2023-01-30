@@ -44,7 +44,10 @@ struct _Debugger
 };
 
 static gboolean
-_format_nvpair(NVHandle handle, const gchar *name, const gchar *value, gssize length, gpointer user_data)
+_format_nvpair(NVHandle handle,
+               const gchar *name,
+               const gchar *value, gssize length,
+               LogMessageValueType type, gpointer user_data)
 {
   printf("%s=%.*s\n", name, (gint) length, value);
   return FALSE;
@@ -57,7 +60,7 @@ _display_msg_details(Debugger *self, LogMessage *msg)
 
   log_msg_values_foreach(msg, _format_nvpair, NULL);
   g_string_truncate(output, 0);
-  log_msg_print_tags(msg, output);
+  log_msg_format_tags(msg, output);
   printf("TAGS=%s\n", output->str);
   printf("\n");
   g_string_free(output, TRUE);
@@ -68,7 +71,7 @@ _display_msg_with_template(Debugger *self, LogMessage *msg, LogTemplate *templat
 {
   GString *output = g_string_sized_new(128);
 
-  log_template_format(template, msg, NULL, LTZ_LOCAL, 0, NULL, output);
+  log_template_format(template, msg, &DEFAULT_TEMPLATE_EVAL_OPTIONS, output);
   printf("%s\n", output->str);
   g_string_free(output, TRUE);
 }
@@ -330,7 +333,7 @@ _interactive_console_thread_func(Debugger *self)
 void
 debugger_start_console(Debugger *self)
 {
-  g_thread_create((GThreadFunc) _interactive_console_thread_func, self, FALSE, NULL);
+  g_thread_new(NULL, (GThreadFunc) _interactive_console_thread_func, self);
 }
 
 gboolean

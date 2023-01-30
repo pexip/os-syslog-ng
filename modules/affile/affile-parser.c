@@ -47,6 +47,7 @@ static CfgLexerKeyword affile_keywords[] =
   { "fsync",              KW_FSYNC },
   { "remove_if_older",    KW_OVERWRITE_IF_OLDER, KWS_OBSOLETE, "overwrite_if_older" },
   { "overwrite_if_older", KW_OVERWRITE_IF_OLDER },
+  { "symlink_as",         KW_SYMLINK_AS },
   { "follow_freq",        KW_FOLLOW_FREQ },
   { "multi_line_mode",    KW_MULTI_LINE_MODE  },
   { "multi_line_prefix",  KW_MULTI_LINE_PREFIX },
@@ -68,4 +69,4 @@ CfgParser affile_parser =
   .cleanup = (void (*)(gpointer)) log_pipe_unref,
 };
 
-CFG_PARSER_IMPLEMENT_LEXER_BINDING(affile_, LogDriver **)
+CFG_PARSER_IMPLEMENT_LEXER_BINDING(affile_, AFFILE_, LogDriver **)

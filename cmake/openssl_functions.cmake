@@ -41,7 +41,10 @@ function (openssl_set_defines)
     X509_get_extension_flags
     DH_set0_pqg
     BN_get_rfc3526_prime_2048
-    SSL_CTX_set_num_tickets)
+    SSL_CTX_set_num_tickets
+    SSL_CTX_set_ciphersuites
+    SSL_CTX_set1_sigalgs_list
+    SSL_CTX_set1_client_sigalgs_list)
 
   foreach (symbol ${symbol_list})
     string(TOUPPER ${symbol} SYMBOL_UPPERCASE)

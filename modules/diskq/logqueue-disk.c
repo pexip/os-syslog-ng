@@ -29,6 +29,7 @@
 #include "stats/stats-registry.h"
 #include "reloc.h"
 #include "qdisk.h"
+#include "scratch-buffers.h"
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -41,124 +42,6 @@
 #include <stdlib.h>
 
 QueueType log_queue_disk_type = "DISK";
-
-static gint64
-_get_length(LogQueue *s)
-{
-  LogQueueDisk *self = (LogQueueDisk *) s;
-  gint64 qdisk_length = 0;
-
-  if (qdisk_started(self->qdisk) && self->get_length)
-    {
-      qdisk_length = self->get_length(self);
-    }
-  return qdisk_length;
-}
-
-static void
-_push_tail(LogQueue *s, LogMessage *msg, const LogPathOptions *path_options)
-{
-  LogQueueDisk *self = (LogQueueDisk *) s;
-  LogPathOptions local_options = *path_options;
-  g_static_mutex_lock(&self->super.lock);
-  if (self->push_tail)
-    {
-      if (self->push_tail(self, msg, &local_options, path_options))
-        {
-          log_queue_push_notify (&self->super);
-          log_queue_queued_messages_inc(&self->super);
-          log_msg_ack(msg, &local_options, AT_PROCESSED);
-          log_msg_unref(msg);
-          g_static_mutex_unlock(&self->super.lock);
-          return;
-        }
-    }
-  stats_counter_inc (self->super.dropped_messages);
-
-  if (path_options->flow_control_requested)
-    log_msg_ack(msg, path_options, AT_SUSPENDED);
-  else
-    log_msg_drop(msg, path_options, AT_PROCESSED);
-
-  g_static_mutex_unlock(&self->super.lock);
-}
-
-static void
-_push_head(LogQueue *s, LogMessage *msg, const LogPathOptions *path_options)
-{
-  LogQueueDisk *self = (LogQueueDisk *) s;
-
-  g_static_mutex_lock(&self->super.lock);
-  if (self->push_head)
-    {
-      self->push_head(self, msg, path_options);
-    }
-  g_static_mutex_unlock(&self->super.lock);
-}
-
-static LogMessage *
-_pop_head(LogQueue *s, LogPathOptions *path_options)
-{
-  LogQueueDisk *self = (LogQueueDisk *) s;
-  LogMessage *msg = NULL;
-
-  msg = NULL;
-  g_static_mutex_lock(&self->super.lock);
-  if (self->pop_head)
-    {
-      msg = self->pop_head(self, path_options);
-    }
-  if (msg != NULL)
-    {
-      log_queue_queued_messages_dec(&self->super);
-    }
-  g_static_mutex_unlock(&self->super.lock);
-  return msg;
-}
-
-static void
-_ack_backlog(LogQueue *s, gint num_msg_to_ack)
-{
-  LogQueueDisk *self = (LogQueueDisk *) s;
-
-  g_static_mutex_lock(&self->super.lock);
-
-  if (self->ack_backlog)
-    {
-      self->ack_backlog(self, num_msg_to_ack);
-    }
-
-  g_static_mutex_unlock(&self->super.lock);
-}
-
-static void
-_rewind_backlog(LogQueue *s, guint rewind_count)
-{
-  LogQueueDisk *self = (LogQueueDisk *) s;
-  g_static_mutex_lock(&self->super.lock);
-
-  if (self->rewind_backlog)
-    {
-      self->rewind_backlog (self, rewind_count);
-    }
-
-  g_static_mutex_unlock(&self->super.lock);
-}
-
-void
-_backlog_all(LogQueue *s)
-{
-  LogQueueDisk *self = (LogQueueDisk *) s;
-
-  g_static_mutex_lock(&self->super.lock);
-
-  if (self->rewind_backlog)
-    {
-      self->rewind_backlog(self, -1);
-    }
-
-  g_static_mutex_unlock(&self->super.lock);
-}
 
 gboolean
 log_queue_disk_save_queue(LogQueue *s, gboolean *persistent)
@@ -189,15 +72,6 @@ log_queue_disk_load_queue(LogQueue *s, const gchar *filename)
   return FALSE;
 }
 
-gboolean
-log_queue_disk_is_reliable(LogQueue *s)
-{
-  LogQueueDisk *self = (LogQueueDisk *) s;
-  if (self->is_reliable)
-    return self->is_reliable(self);
-  return FALSE;
-}
-
 const gchar *
 log_queue_disk_get_filename(LogQueue *s)
 {
@@ -205,101 +79,86 @@ log_queue_disk_get_filename(LogQueue *s)
   return qdisk_get_filename(self->qdisk);
 }
 
-static void
-_free(LogQueue *s)
+void
+log_queue_disk_free_method(LogQueueDisk *self)
 {
-  LogQueueDisk *self = (LogQueueDisk *) s;
-
-  if (self->free_fn)
-    self->free_fn(self);
-
   qdisk_stop(self->qdisk);
   qdisk_free(self->qdisk);
 
-  log_queue_free_method(s);
+  log_queue_free_method(&self->super);
 }
 
 static gboolean
 _pop_disk(LogQueueDisk *self, LogMessage **msg)
 {
-  GString *serialized;
-  SerializeArchive *sa;
-
-  *msg = NULL;
-
   if (!qdisk_started(self->qdisk))
     return FALSE;
 
-  serialized = g_string_sized_new(64);
-  if (!qdisk_pop_head(self->qdisk, serialized))
+  ScratchBuffersMarker marker;
+  GString *read_serialized = scratch_buffers_alloc_and_mark(&marker);
+
+  gint64 read_head = qdisk_get_next_head_position(self->qdisk);
+
+  if (!qdisk_pop_head(self->qdisk, read_serialized))
     {
-      g_string_free(serialized, TRUE);
+      msg_error("Cannot read correct message from disk-queue file",
+                evt_tag_str("filename", qdisk_get_filename(self->qdisk)),
+                evt_tag_int("read_head", read_head));
+      scratch_buffers_reclaim_marked(marker);
       return FALSE;
     }
 
-  sa = serialize_string_archive_new(serialized);
-  *msg = log_msg_new_empty();
-
-  if (!log_msg_deserialize(*msg, sa))
+  if (!log_queue_disk_deserialize_msg(self, read_serialized, msg))
     {
-      g_string_free(serialized, TRUE);
-      serialize_archive_free(sa);
-      log_msg_unref(*msg);
-      *msg = NULL;
-      msg_error("Can't read correct message from disk-queue file",
+      msg_error("Cannot read correct message from disk-queue file",
                 evt_tag_str("filename", qdisk_get_filename(self->qdisk)),
-                evt_tag_long("read_position", qdisk_get_reader_head(self->qdisk)));
-      return TRUE;
+                evt_tag_int("read_head", read_head));
+      *msg = NULL;
     }
 
-  serialize_archive_free(sa);
+  scratch_buffers_reclaim_marked(marker);
 
-  g_string_free(serialized, TRUE);
   return TRUE;
 }
 
-static LogMessage *
-_read_message(LogQueueDisk *self, LogPathOptions *path_options)
+LogMessage *
+log_queue_disk_read_message(LogQueueDisk *self, LogPathOptions *path_options)
 {
   LogMessage *msg = NULL;
   do
     {
-      if (qdisk_get_length (self->qdisk) == 0)
+      if (qdisk_get_length(self->qdisk) == 0)
         {
           break;
         }
-      if (!_pop_disk (self, &msg))
+      if (!_pop_disk(self, &msg))
         {
           msg_error("Error reading from disk-queue file, dropping disk queue",
                     evt_tag_str("filename", qdisk_get_filename(self->qdisk)));
           log_queue_disk_restart_corrupted(self);
           if (msg)
-            log_msg_unref (msg);
+            log_msg_unref(msg);
           msg = NULL;
           return NULL;
         }
     }
   while (msg == NULL);
+
+  if (msg)
+    path_options->ack_needed = FALSE;
+
   return msg;
 }
 
-static gboolean
-_write_message(LogQueueDisk *self, LogMessage *msg)
+void
+log_queue_disk_drop_message(LogQueueDisk *self, LogMessage *msg, const LogPathOptions *path_options)
 {
-  GString *serialized;
-  SerializeArchive *sa;
-  DiskQueueOptions *options = qdisk_get_options(self->qdisk);
-  gboolean consumed = FALSE;
-  if (qdisk_started(self->qdisk) && qdisk_is_space_avail(self->qdisk, 64))
-    {
-      serialized = g_string_sized_new(64);
-      sa = serialize_string_archive_new(serialized);
-      log_msg_serialize(msg, sa, options->compaction ? LMSF_COMPACTION : 0);
-      consumed = qdisk_push_tail(self->qdisk, serialized);
-      serialize_archive_free(sa);
-      g_string_free(serialized, TRUE);
-    }
-  return consumed;
+  stats_counter_inc(self->super.dropped_messages);
+
+  if (path_options->flow_control_requested)
+    log_msg_drop(msg, path_options, AT_SUSPENDED);
+  else
+    log_msg_drop(msg, path_options, AT_PROCESSED);
 }
 
 static void
@@ -333,25 +192,75 @@ void
 log_queue_disk_restart_corrupted(LogQueueDisk *self)
 {
   _restart_diskq(self);
+  log_queue_queued_messages_reset(&self->super);
 }
 
 
 void
-log_queue_disk_init_instance(LogQueueDisk *self, const gchar *persist_name)
+log_queue_disk_init_instance(LogQueueDisk *self, DiskQueueOptions *options, const gchar *qdisk_file_id,
+                             const gchar *persist_name)
 {
   log_queue_init_instance(&self->super, persist_name);
-  self->qdisk = qdisk_new();
-
   self->super.type = log_queue_disk_type;
-  self->super.get_length = _get_length;
-  self->super.push_tail = _push_tail;
-  self->super.push_head = _push_head;
-  self->super.pop_head = _pop_head;
-  self->super.ack_backlog = _ack_backlog;
-  self->super.rewind_backlog = _rewind_backlog;
-  self->super.rewind_backlog_all = _backlog_all;
-  self->super.free_fn = _free;
 
-  self->read_message = _read_message;
-  self->write_message = _write_message;
+  self->compaction = options->compaction;
+
+  self->qdisk = qdisk_new(options, qdisk_file_id);
+}
+
+static gboolean
+_serialize_msg(SerializeArchive *sa, gpointer user_data)
+{
+  LogQueueDisk *self = ((gpointer *) user_data)[0];
+  LogMessage *msg = ((gpointer *) user_data)[1];
+
+  return log_msg_serialize(msg, sa, self->compaction ? LMSF_COMPACTION : 0);
+}
+
+gboolean
+log_queue_disk_serialize_msg(LogQueueDisk *self, LogMessage *msg, GString *serialized)
+{
+  gpointer user_data[] = { self, msg };
+  GError *error = NULL;
+
+  if (!qdisk_serialize(serialized, _serialize_msg, user_data, &error))
+    {
+      msg_error("Error serializing message for the disk-queue file",
+                evt_tag_str("error", error->message),
+                evt_tag_str("persist-name", self->super.persist_name));
+      g_error_free(error);
+      return FALSE;
+    }
+
+  return TRUE;
+}
+
+static gboolean
+_deserialize_msg(SerializeArchive *sa, gpointer user_data)
+{
+  LogMessage *msg = user_data;
+
+  return log_msg_deserialize(msg, sa);
+}
+
+gboolean
+log_queue_disk_deserialize_msg(LogQueueDisk *self, GString *serialized, LogMessage **msg)
+{
+  LogMessage *local_msg = log_msg_new_empty();
+  gpointer user_data = local_msg;
+  GError *error = NULL;
+
+  if (!qdisk_deserialize(serialized, _deserialize_msg, user_data, &error))
+    {
+      msg_error("Error deserializing message from the disk-queue file",
+                evt_tag_str("error", error->message),
+                evt_tag_str("persist-name", self->super.persist_name));
+      log_msg_unref(local_msg);
+      g_error_free(error);
+      return FALSE;
+    }
+
+  *msg = local_msg;
+
+  return TRUE;
 }

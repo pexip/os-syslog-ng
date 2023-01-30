@@ -22,8 +22,8 @@
  */
 
 #include <criterion/criterion.h>
-
 #include "libtest/cr_template.h"
+
 #include "apphook.h"
 #include "plugin.h"
 #include "cfg.h"
@@ -51,6 +51,7 @@ TestSuite(format_json, .init = setup, .fini = teardown);
 
 Test(format_json, test_format_json)
 {
+  /* version 3.x behavior, should be changed once VERSION_VALUE becomes 4.0 */
   assert_template_format("$(format-json MSG=$MSG)", "{\"MSG\":\"árvíztűrőtükörfúrógép\"}");
   assert_template_format("$(format-json MSG=$escaping)",
                          "{\"MSG\":\"binary stuff follows \\\"\\\\xad árvíztűrőtükörfúrógép\"}");
@@ -92,6 +93,11 @@ Test(format_json, test_format_json)
                          "{\".program\":{\"@name\":\"syslog-ng\"}}");
   assert_template_format("$(format-json .program.@name=${PROGRAM} .program.foo .program.bar --key .program.* --shift-levels 2 --add-prefix _)",
                          "{\"_@name\":\"syslog-ng\"}");
+
+  cfg_set_version_without_validation(configuration, VERSION_VALUE_4_0);
+
+  assert_template_format("$(format-json --scope selected_macros)",
+                         "{\"TAGS\":[\"alma\",\"korte\",\"citrom\",\"tag,containing,comma\"],\"SOURCEIP\":\"10.11.12.13\",\"SEQNUM\":\"999\",\"PROGRAM\":\"syslog-ng\",\"PRIORITY\":\"err\",\"PID\":\"23323\",\"MESSAGE\":\"árvíztűrőtükörfúrógép\",\"HOST\":\"bzorp\",\"FACILITY\":\"local3\",\"DATE\":\"Feb 11 10:34:56\"}");
 }
 
 Test(format_json, test_format_json_key)
@@ -102,8 +108,8 @@ Test(format_json, test_format_json_key)
   assert_template_format("$(format-json --key HOST --key MESSAGE)",
                          "{\"MESSAGE\":\"árvíztűrőtükörfúrógép\",\"HOST\":\"bzorp\"}");
 
-  assert_template_format("$(format-json --scope selected-macros --key MSG)",
-                         "{\"TAGS\":\"alma,korte,citrom,\\\"tag,containing,comma\\\"\",\"SOURCEIP\":\"10.11.12.13\",\"SEQNUM\":\"999\",\"PROGRAM\":\"syslog-ng\",\"PRIORITY\":\"err\",\"PID\":\"23323\",\"MSG\":\"árvíztűrőtükörfúrógép\",\"MESSAGE\":\"árvíztűrőtükörfúrógép\",\"HOST\":\"bzorp\",\"FACILITY\":\"local3\",\"DATE\":\"Feb 11 10:34:56\"}");
+  assert_template_format("$(format-json --scope selected-macros --key MSG --exclude TAGS)",
+                         "{\"SOURCEIP\":\"10.11.12.13\",\"SEQNUM\":\"999\",\"PROGRAM\":\"syslog-ng\",\"PRIORITY\":\"err\",\"PID\":\"23323\",\"MSG\":\"árvíztűrőtükörfúrógép\",\"MESSAGE\":\"árvíztűrőtükörfúrógép\",\"HOST\":\"bzorp\",\"FACILITY\":\"local3\",\"DATE\":\"Feb 11 10:34:56\"}");
 
   assert_template_format("$(format-json --key MSG)", "{\"MSG\":\"árvíztűrőtükörfúrógép\"}");
   assert_template_format("$(format-json --key DATE)", "{\"DATE\":\"Feb 11 10:34:56\"}");
@@ -135,6 +141,12 @@ Test(format_json, test_format_json_with_type_hints)
                          "{\"i\":\"ifoo(\"}");
   assert_template_format("$(format-json b=boolean(TRUE))",
                          "{\"b\":true}");
+  assert_template_format("$(format-json null=null())",
+                         "{\"null\":null}");
+  assert_template_format("$(format-json null=null(whatever))",
+                         "{\"null\":null}");
+  assert_template_format("$(format-json null=null($DATE))",
+                         "{\"null\":null}");
   assert_template_format("$(format-json l=list($comma_value))",
                          "{\"l\":[\"value\",\"with\",\"a\",\"comma\"]}");
   assert_template_format("$(format-json b=literal(whatever))",
@@ -142,6 +154,131 @@ Test(format_json, test_format_json_with_type_hints)
   assert_template_format("$(format-json b=literal($(format-json subkey=bar)))",
                          "{\"b\":{\"subkey\":\"bar\"}}");
 
+}
+
+Test(format_json, test_v3x_value_pairs_yields_string_values)
+{
+  /* in 3.x mode, numbers remain strings */
+
+  /* template */
+  assert_template_format("$(format-json foo=$number1)",
+                         "{\"foo\":\"123\"}");
+
+  /* name value pair */
+  assert_template_format("$(format-json number1)",
+                         "{\"number1\":\"123\"}");
+
+  /* macro */
+  assert_template_format("$(format-json FACILITY_NUM)",
+                         "{\"FACILITY_NUM\":\"19\"}");
+
+
+  /* auto-cast is the same but suppresses warning */
+
+  /* template */
+  assert_template_format("$(format-json --auto-cast foo=$number1)",
+                         "{\"foo\":\"123\"}");
+
+  /* name value pair */
+  assert_template_format("$(format-json --auto-cast number1)",
+                         "{\"number1\":\"123\"}");
+
+  /* macro */
+  assert_template_format("$(format-json --auto-cast FACILITY_NUM)",
+                         "{\"FACILITY_NUM\":\"19\"}");
+}
+
+Test(format_json, test_v40_value_pairs_yields_typed_values)
+{
+  cfg_set_version_without_validation(configuration, VERSION_VALUE_4_0);
+
+  /* in 4.x mode, numbers become numbers */
+
+  /* template */
+  assert_template_format("$(format-json foo=$number1)",
+                         "{\"foo\":123}");
+
+  /* name value pair */
+  assert_template_format("$(format-json number1)",
+                         "{\"number1\":123}");
+
+  /* macro */
+  assert_template_format("$(format-json FACILITY_NUM)",
+                         "{\"FACILITY_NUM\":19}");
+
+  /* auto-cast is the same but suppresses warning */
+
+  /* template */
+  assert_template_format("$(format-json --auto-cast foo=$number1)",
+                         "{\"foo\":123}");
+
+  /* name value pair */
+  assert_template_format("$(format-json --auto-cast number1)",
+                         "{\"number1\":123}");
+
+  /* macro */
+  assert_template_format("$(format-json --auto-cast FACILITY_NUM)",
+                         "{\"FACILITY_NUM\":19}");
+}
+
+Test(format_json, test_cast_option_always_yields_strings_regardless_of_versions)
+{
+  /* template */
+  assert_template_format("$(format-json --cast foo=$number1)",
+                         "{\"foo\":\"123\"}");
+
+  /* name value pair */
+  assert_template_format("$(format-json --cast number1)",
+                         "{\"number1\":\"123\"}");
+
+  /* macro */
+  assert_template_format("$(format-json --cast FACILITY_NUM)",
+                         "{\"FACILITY_NUM\":\"19\"}");
+
+  cfg_set_version_without_validation(configuration, VERSION_VALUE_4_0);
+  /* unless forced to be strings */
+
+  /* template */
+  assert_template_format("$(format-json --cast foo=$number1)",
+                         "{\"foo\":\"123\"}");
+
+  /* name value pair */
+  assert_template_format("$(format-json --cast number1)",
+                         "{\"number1\":\"123\"}");
+
+  /* macro */
+  assert_template_format("$(format-json --cast FACILITY_NUM)",
+                         "{\"FACILITY_NUM\":\"19\"}");
+}
+
+Test(format_json, test_no_cast_option_always_yields_types_regardless_of_versions)
+{
+  /* template */
+  assert_template_format("$(format-json --no-cast foo=$number1)",
+                         "{\"foo\":123}");
+
+  /* name value pair */
+  assert_template_format("$(format-json --no-cast number1)",
+                         "{\"number1\":123}");
+
+  /* macro */
+  assert_template_format("$(format-json --no-cast FACILITY_NUM)",
+                         "{\"FACILITY_NUM\":19}");
+
+  cfg_set_version_without_validation(configuration, VERSION_VALUE_4_0);
+  /* unless forced to be strings */
+
+  /* template */
+  assert_template_format("$(format-json --no-cast foo=$number1)",
+                         "{\"foo\":123}");
+
+  /* name value pair */
+  assert_template_format("$(format-json --no-cast number1)",
+                         "{\"number1\":123}");
+
+  /* macro */
+  assert_template_format("$(format-json --no-cast FACILITY_NUM)",
+                         "{\"FACILITY_NUM\":19}");
 }
 
 Test(format_json, test_format_json_on_error)
@@ -244,6 +381,7 @@ Test(format_json, test_format_flat_json_with_type_hints)
 Test(format_json, test_format_json_performance)
 {
   perftest_template("$(format-json APP.*)\n");
+  perftest_template("$(format-flat-json APP.*)\n");
   perftest_template("<$PRI>1 $ISODATE $LOGHOST @syslog-ng - - ${SDATA:--} $(format-json --scope all-nv-pairs "
                     "--exclude 0* --exclude 1* --exclude 2* --exclude 3* --exclude 4* --exclude 5* "
                     "--exclude 6* --exclude 7* --exclude 8* --exclude 9* "
@@ -258,4 +396,14 @@ Test(format_json, test_format_json_performance)
                     "--exclude .SDATA.* "
                     "..RSTAMP='${R_UNIXTIME}${R_TZ}' "
                     "..TAGS=${TAGS})\n");
+}
+
+Test(format_json, test_format_json_with_key_delimiter)
+{
+  assert_template_format("$(format-json --key-delimiter \"\t\" \".foo\t.b.a.r.\"=\"baz\")",
+                         "{\".foo\":{\".b.a.r.\":\"baz\"}}");
+  assert_template_format("$(format-json --key-delimiter \".\" \".foo.bar\"=\"baz\")",
+                         "{\"_foo\":{\"bar\":\"baz\"}}");
+  assert_template_format("$(format-json \".foo.bar\"=\"baz\")",
+                         "{\"_foo\":{\"bar\":\"baz\"}}");
 }

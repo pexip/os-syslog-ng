@@ -27,15 +27,15 @@
 #include "compat/openssl_support.h"
 #include "secret-storage/secret-storage.h"
 
+#include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <glib/gstdio.h>
 #include <openssl/x509_vfy.h>
 #include <openssl/x509v3.h>
 #include <openssl/err.h>
 #include <openssl/rand.h>
-#include <openssl/dh.h>
-#include <openssl/bn.h>
 #include <openssl/pkcs12.h>
 
 struct _TLSContext
@@ -44,6 +44,12 @@ struct _TLSContext
   TLSMode mode;
   gint verify_mode;
   gchar *key_file;
+  struct
+  {
+    gchar *keylog_file_path;
+    FILE *keylog_file;
+    GMutex keylog_file_lock;
+  };
   gchar *cert_file;
   gchar *dhparam_file;
   gchar *pkcs12_file;
@@ -51,6 +57,9 @@ struct _TLSContext
   gchar *crl_dir;
   gchar *ca_file;
   gchar *cipher_suite;
+  gchar *tls13_cipher_suite;
+  gchar *sigalgs;
+  gchar *client_sigalgs;
   gchar *ecdh_curve_list;
   gchar *sni;
   SSL_CTX *ssl_ctx;
@@ -253,7 +262,7 @@ tls_session_verify_callback(int ok, X509_STORE_CTX *ctx)
           ok = 1;
           break;
         default:
-          msg_notice("Error occured during certificate validation",
+          msg_notice("Error occurred during certificate validation",
                      evt_tag_int("error", X509_STORE_CTX_get_error(ctx)),
                      tls_context_format_location_tag(self->ctx));
           break;
@@ -334,6 +343,46 @@ _set_sni_in_client_mode(TLSSession *self)
   return FALSE;
 }
 
+void
+_write_line_to_keylog_file(const char *file_path, const char *line, FILE *keylog_file, GMutex *mutex)
+{
+  if(!keylog_file)
+    return;
+
+
+  g_mutex_lock(mutex);
+  gint ret_val = fprintf(keylog_file, "%s\n", line);
+  if (ret_val != strlen(line)+1)
+    msg_error("Couldn't write to TLS keylogfile", evt_tag_errno("error", ret_val));
+
+  fflush(keylog_file);
+  g_mutex_unlock(mutex);
+}
+
+static inline void
+_dump_tls_keylog(const SSL *ssl, const char *line)
+{
+  if(!ssl)
+    return;
+
+  TLSSession *self = SSL_get_app_data(ssl);
+  _write_line_to_keylog_file(self->ctx->keylog_file_path, line, self->ctx->keylog_file, &self->ctx->keylog_file_lock);
+}
+
+static gboolean
+tls_session_keylog_setup_file(TLSSession *self, const char *keylog_file_path)
+{
+  self->ctx->keylog_file = g_fopen(keylog_file_path, "a");
+  if(!self->ctx->keylog_file)
+    {
+      msg_error("Error opening keylog-file",
+                evt_tag_str(EVT_TAG_FILENAME, keylog_file_path),
+                evt_tag_error(EVT_TAG_OSERROR));
+      return FALSE;
+    }
+  return TRUE;
+}
+
 static TLSSession *
 tls_session_new(SSL *ssl, TLSContext *ctx)
 {
@@ -352,6 +401,15 @@ tls_session_new(SSL *ssl, TLSContext *ctx)
       tls_context_unref(self->ctx);
       g_free(self);
       return NULL;
+    }
+  if(ctx->keylog_file_path)
+    {
+      if(!tls_session_keylog_setup_file(self, self->ctx->keylog_file_path))
+        {
+          tls_context_unref(self->ctx);
+          g_free(self);
+          return NULL;
+        }
     }
 
   return self;
@@ -373,10 +431,10 @@ tls_context_format_tls_error_tag(TLSContext *self)
 {
   gint ssl_error = ERR_get_error();
 
-  return evt_tag_printf("tls_error", "%s:%s:%s",
-                        ERR_lib_error_string(ssl_error),
-                        ERR_func_error_string(ssl_error),
-                        ERR_reason_error_string(ssl_error));
+  char buf[256];
+  ERR_error_string_n(ssl_error, buf, sizeof(buf));
+
+  return evt_tag_str("tls_error", buf);
 }
 
 EVTTAG *
@@ -424,9 +482,6 @@ tls_context_setup_verify_mode(TLSContext *self)
 
   switch (self->verify_mode)
     {
-    case TVM_NONE:
-      verify_mode = SSL_VERIFY_NONE;
-      break;
     case TVM_OPTIONAL | TVM_UNTRUSTED:
       verify_mode = SSL_VERIFY_NONE;
       break;
@@ -497,85 +552,8 @@ _set_optional_ecdh_curve_list(SSL_CTX *ctx, const gchar *ecdh_curve_list)
 }
 
 static gboolean
-_is_dh_valid(DH *dh)
-{
-  if (!dh)
-    return FALSE;
-
-  gint check_flags;
-  if (!DH_check(dh, &check_flags))
-    return FALSE;
-
-  gboolean error_flag_is_set = check_flags &
-                               (DH_CHECK_P_NOT_PRIME
-                                | DH_UNABLE_TO_CHECK_GENERATOR
-                                | DH_CHECK_P_NOT_SAFE_PRIME
-                                | DH_NOT_SUITABLE_GENERATOR);
-
-  return !error_flag_is_set;
-}
-
-static DH *
-_load_dh_from_file(TLSContext *self, const gchar *dhparam_file)
-{
-  if (!_is_file_accessible(self, dhparam_file))
-    return NULL;
-
-  BIO *bio = BIO_new_file(dhparam_file, "r");
-  if (!bio)
-    return NULL;
-
-  DH *dh = PEM_read_bio_DHparams(bio, NULL, NULL, NULL);
-  BIO_free(bio);
-
-  if (!_is_dh_valid(dh))
-    {
-      msg_error("Error setting up TLS session context, invalid DH parameters",
-                evt_tag_str("dhparam_file", dhparam_file));
-
-      DH_free(dh);
-      return NULL;
-    }
-
-  return dh;
-}
-
-static DH *
-_load_dh_fallback(TLSContext *self)
-{
-  DH *dh = DH_new();
-
-  if (!dh)
-    return NULL;
-
-  /*
-   * "2048-bit MODP Group" from RFC3526, Section 3.
-   *
-   * The prime is: 2^2048 - 2^1984 - 1 + 2^64 * { [2^1918 pi] + 124476 }
-   *
-   * RFC3526 specifies a generator of 2.
-   */
-
-  BIGNUM *g = NULL;
-  BN_dec2bn(&g, "2");
-
-  if (!DH_set0_pqg(dh, BN_get_rfc3526_prime_2048(NULL), NULL, g))
-    {
-      BN_free(g);
-      DH_free(dh);
-      return NULL;
-    }
-
-  return dh;
-}
-
-static gboolean
 tls_context_setup_ecdh(TLSContext *self)
 {
-  /* server only */
-  if (self->mode != TM_SERVER)
-    return TRUE;
-
   if (!_set_optional_ecdh_curve_list(self->ssl_ctx, self->ecdh_curve_list))
     return FALSE;
 
@@ -587,15 +565,50 @@ tls_context_setup_ecdh(TLSContext *self)
 static gboolean
 tls_context_setup_dh(TLSContext *self)
 {
-  DH *dh = self->dhparam_file ? _load_dh_from_file(self, self->dhparam_file) : _load_dh_fallback(self);
+  if (!self->dhparam_file)
+    return openssl_ctx_setup_dh(self->ssl_ctx);
 
-  if (!dh)
+  if(!_is_file_accessible(self, self->dhparam_file))
     return FALSE;
 
-  gboolean ctx_dh_success = SSL_CTX_set_tmp_dh(self->ssl_ctx, dh);
+  if (!openssl_ctx_load_dh_from_file(self->ssl_ctx, self->dhparam_file))
+    {
+      msg_error("Error setting up TLS session context, invalid DH parameters",
+                evt_tag_str("dhparam_file", self->dhparam_file));
+      return FALSE;
+    }
 
-  DH_free(dh);
-  return ctx_dh_success;
+  return TRUE;
+}
+
+static gboolean
+tls_context_setup_cipher_suite(TLSContext *self)
+{
+  if (self->cipher_suite && !SSL_CTX_set_cipher_list(self->ssl_ctx, self->cipher_suite))
+    return FALSE;
+
+#if SYSLOG_NG_HAVE_DECL_SSL_CTX_SET_CIPHERSUITES
+  if (self->tls13_cipher_suite && !SSL_CTX_set_ciphersuites(self->ssl_ctx, self->tls13_cipher_suite))
+    return FALSE;
+#endif
+
+  return TRUE;
+}
+
+static gboolean
+tls_context_setup_sigalgs(TLSContext *self)
+{
+#if SYSLOG_NG_HAVE_DECL_SSL_CTX_SET1_SIGALGS_LIST
+  if (self->sigalgs && !SSL_CTX_set1_sigalgs_list(self->ssl_ctx, self->sigalgs))
+    return FALSE;
+#endif
+
+#if SYSLOG_NG_HAVE_DECL_SSL_CTX_SET1_CLIENT_SIGALGS_LIST
+  if (self->client_sigalgs && !SSL_CTX_set1_client_sigalgs_list(self->ssl_ctx, self->client_sigalgs))
+    return FALSE;
+#endif
+
+  return TRUE;
 }
 
 static PKCS12 *
@@ -758,11 +771,11 @@ tls_context_setup_context(TLSContext *self)
   if (!tls_context_setup_dh(self))
     goto error;
 
-  if (self->cipher_suite)
-    {
-      if (!SSL_CTX_set_cipher_list(self->ssl_ctx, self->cipher_suite))
-        goto error;
-    }
+  if (!tls_context_setup_cipher_suite(self))
+    goto error;
+
+  if (!tls_context_setup_sigalgs(self))
+    goto error;
 
   return TLS_CONTEXT_SETUP_OK;
 
@@ -841,8 +854,16 @@ _tls_context_free(TLSContext *self)
   g_free(self->crl_dir);
   g_free(self->ca_file);
   g_free(self->cipher_suite);
+  g_free(self->tls13_cipher_suite);
+  g_free(self->sigalgs);
+  g_free(self->client_sigalgs);
   g_free(self->ecdh_curve_list);
   g_free(self->sni);
+  g_free(self->keylog_file_path);
+
+  if(self->keylog_file)
+    fclose(self->keylog_file);
+
   g_free(self);
 }
 
@@ -914,11 +935,10 @@ tls_verifier_unref(TLSVerifier *self)
 gboolean
 tls_context_set_verify_mode_by_name(TLSContext *self, const gchar *mode_str)
 {
-  if (strcasecmp(mode_str, "none") == 0)
-    self->verify_mode = TVM_NONE;
-  else if (strcasecmp(mode_str, "optional-trusted") == 0 || strcasecmp(mode_str, "optional_trusted") == 0)
+  if (strcasecmp(mode_str, "optional-trusted") == 0 || strcasecmp(mode_str, "optional_trusted") == 0)
     self->verify_mode = TVM_OPTIONAL | TVM_TRUSTED;
-  else if (strcasecmp(mode_str, "optional-untrusted") == 0 || strcasecmp(mode_str, "optional_untrusted") == 0)
+  else if (strcasecmp(mode_str, "optional-untrusted") == 0 || strcasecmp(mode_str, "optional_untrusted") == 0
+           || strcasecmp(mode_str, "none") == 0)
     self->verify_mode = TVM_OPTIONAL | TVM_UNTRUSTED;
   else if (strcasecmp(mode_str, "required-trusted") == 0 || strcasecmp(mode_str, "required_trusted") == 0)
     self->verify_mode = TVM_REQUIRED | TVM_TRUSTED;
@@ -1006,6 +1026,21 @@ tls_context_set_key_file(TLSContext *self, const gchar *key_file)
   SSL_CTX_set_default_passwd_cb_userdata(self->ssl_ctx, self->key_file);
 }
 
+gboolean
+tls_context_set_keylog_file(TLSContext *self, gchar *keylog_file_path, GError **error)
+{
+#if OPENSSL_VERSION_NUMBER >= 0x10101000L
+  g_free(self->keylog_file_path);
+  msg_warning_once("WARNING: TLS keylog file has been set up, it should only be used during debugging sessions");
+  self->keylog_file_path = g_strdup(keylog_file_path);
+  SSL_CTX_set_keylog_callback(self->ssl_ctx, _dump_tls_keylog);
+  return TRUE;
+#else
+  g_set_error(error, TLSCONTEXT_ERROR, TLSCONTEXT_UNSUPPORTED, "keylog-file() requires OpenSSL >= v1.1.1");
+  return FALSE;
+#endif
+}
+
 void
 tls_context_set_cert_file(TLSContext *self, const gchar *cert_file)
 {
@@ -1046,6 +1081,48 @@ tls_context_set_cipher_suite(TLSContext *self, const gchar *cipher_suite)
 {
   g_free(self->cipher_suite);
   self->cipher_suite = g_strdup(cipher_suite);
+}
+
+gboolean
+tls_context_set_tls13_cipher_suite(TLSContext *self, const gchar *tls13_cipher_suite, GError **error)
+{
+#if SYSLOG_NG_HAVE_DECL_SSL_CTX_SET_CIPHERSUITES
+  g_free(self->tls13_cipher_suite);
+  self->tls13_cipher_suite = g_strdup(tls13_cipher_suite);
+  return TRUE;
+#else
+  g_set_error(error, TLSCONTEXT_ERROR, TLSCONTEXT_UNSUPPORTED,
+              "Setting TLS 1.3 ciphers is not supported with the OpenSSL version syslog-ng was compiled with");
+  return FALSE;
+#endif
+}
+
+gboolean
+tls_context_set_sigalgs(TLSContext *self, const gchar *sigalgs, GError **error)
+{
+#if SYSLOG_NG_HAVE_DECL_SSL_CTX_SET1_SIGALGS_LIST
+  g_free(self->sigalgs);
+  self->sigalgs = g_strdup(sigalgs);
+  return TRUE;
+#else
+  g_set_error(error, TLSCONTEXT_ERROR, TLSCONTEXT_UNSUPPORTED,
+              "Setting sigalgs is not supported with the OpenSSL version syslog-ng was compiled with");
+  return FALSE;
+#endif
+}
+
+gboolean
+tls_context_set_client_sigalgs(TLSContext *self, const gchar *sigalgs, GError **error)
+{
+#if SYSLOG_NG_HAVE_DECL_SSL_CTX_SET1_CLIENT_SIGALGS_LIST
+  g_free(self->client_sigalgs);
+  self->client_sigalgs = g_strdup(sigalgs);
+  return TRUE;
+#else
+  g_set_error(error, TLSCONTEXT_ERROR, TLSCONTEXT_UNSUPPORTED,
+              "Setting client sigalgs is not supported with the OpenSSL version syslog-ng was compiled with");
+  return FALSE;
+#endif
 }
 
 void
@@ -1184,11 +1261,17 @@ tls_verify_certificate_name(X509 *cert, const gchar *host_name)
                 }
               else if (gen_name->type == GEN_IPADD)
                 {
-                  char *dotted_ip = inet_ntoa(*(struct in_addr *) gen_name->d.iPAddress->data);
+                  gchar dotted_ip[64] = {0};
+                  int addr_family = AF_INET;
+                  if (gen_name->d.iPAddress->length == 16)
+                    addr_family = AF_INET6;
 
-                  g_strlcpy(pattern_buf, dotted_ip, sizeof(pattern_buf));
-                  found = TRUE;
-                  result = strcasecmp(host_name, pattern_buf) == 0;
+                  if (inet_ntop(addr_family, gen_name->d.iPAddress->data, dotted_ip, sizeof(dotted_ip)))
+                    {
+                      g_strlcpy(pattern_buf, dotted_ip, sizeof(pattern_buf));
+                      found = TRUE;
+                      result = strcasecmp(host_name, pattern_buf) == 0;
+                    }
                 }
             }
           sk_GENERAL_NAME_free(alt_names);
@@ -1226,4 +1309,10 @@ const gchar *
 tls_context_get_key_file(TLSContext *self)
 {
   return self->key_file;
+}
+
+GQuark
+tls_context_error_quark(void)
+{
+  return g_quark_from_static_string("tls-context-error-quark");
 }

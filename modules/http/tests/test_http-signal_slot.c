@@ -20,15 +20,16 @@
  *
  */
 
-#include "syslog-ng.h"
-#include <apphook.h>
+#include <criterion/criterion.h>
+
+
+#include "mainloop.h"
 #include "http.h"
 #include "http-worker.h"
 #include "http-signals.h"
-#include <criterion/criterion.h>
+#include "apphook.h"
 
 MainLoop *main_loop;
-MsgFormatOptions parse_options;
 MainLoopOptions main_loop_options;
 
 HTTPDestinationDriver *driver;
@@ -109,6 +110,7 @@ Test(test_http_signal_slot, basic)
   CONNECT(ssc, signal_http_header_request, _check, test_msg);
 
   cr_assert(log_pipe_init((LogPipe *)driver));
+  cr_assert(log_pipe_on_config_inited((LogPipe *)driver));
 
   _generate_message(driver, test_msg);
 
@@ -126,6 +128,7 @@ Test(test_http_signal_slot, single_with_prefix_suffix)
   CONNECT(ssc, signal_http_header_request, _check, "[almafa]");
 
   cr_assert(log_pipe_init((LogPipe *)driver));
+  cr_assert(log_pipe_on_config_inited((LogPipe *)driver));
 
   _generate_message(driver, "almafa");
 
@@ -145,6 +148,7 @@ Test(test_http_signal_slot, batch_with_prefix_suffix)
   CONNECT(ssc, signal_http_header_request, _check, "[1,2]");
 
   cr_assert(log_pipe_init((LogPipe *)driver));
+  cr_assert(log_pipe_on_config_inited((LogPipe *)driver));
 
   _generate_message(driver, "1");
   _generate_message(driver, "2");

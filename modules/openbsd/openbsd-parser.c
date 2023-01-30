@@ -36,7 +36,7 @@ static CfgLexerKeyword openbsd_keywords[] =
 
 CfgParser openbsd_parser =
 {
-#if ENABLE_DEBUG
+#if SYSLOG_NG_ENABLE_DEBUG
   .debug_flag = &openbsd_debug,
 #endif
   .name = "openbsd",
@@ -45,4 +45,4 @@ CfgParser openbsd_parser =
   .cleanup = (void (*)(gpointer)) log_pipe_unref,
 };
 
-CFG_PARSER_IMPLEMENT_LEXER_BINDING(openbsd_, LogDriver **)
+CFG_PARSER_IMPLEMENT_LEXER_BINDING(openbsd_, OPENBSD_, LogDriver **)

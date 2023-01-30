@@ -30,6 +30,7 @@
 #include "str-utils.h"
 #include "timeutils/unixtime.h"
 #include "timeutils/misc.h"
+#include "msg-format.h"
 
 #include <datetime.h>
 
@@ -148,6 +149,7 @@ static void
 py_log_message_free(PyLogMessage *self)
 {
   log_msg_unref(self->msg);
+  Py_CLEAR(self->bookmark_data);
   Py_TYPE(self)->tp_free((PyObject *) self);
 }
 
@@ -161,17 +163,19 @@ py_log_message_new(LogMessage *msg)
     return NULL;
 
   self->msg = log_msg_ref(msg);
+  self->bookmark_data = NULL;
   return (PyObject *) self;
 }
 
 static PyObject *
 py_log_message_new_empty(PyTypeObject *subtype, PyObject *args, PyObject *kwds)
 {
+  PyObject *bookmark_data = NULL;
   const gchar *message = NULL;
-  gint message_length = 0;
+  Py_ssize_t message_length = 0;
 
-  static const gchar *kwlist[] = {"message", NULL};
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "|z#", (gchar **) kwlist, &message, &message_length))
+  static const gchar *kwlist[] = {"message", "bookmark", NULL};
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "|z#O", (gchar **) kwlist, &message, &message_length, &bookmark_data))
     return NULL;
 
   PyLogMessage *self = (PyLogMessage *) subtype->tp_alloc(subtype, 0);
@@ -179,10 +183,14 @@ py_log_message_new_empty(PyTypeObject *subtype, PyObject *args, PyObject *kwds)
     return NULL;
 
   self->msg = log_msg_new_empty();
+  self->bookmark_data = NULL;
   invalidate_cached_time();
 
   if (message)
     log_msg_set_value(self->msg, LM_V_MESSAGE, message, message_length);
+
+  Py_XINCREF(bookmark_data);
+  self->bookmark_data = bookmark_data;
 
   return (PyObject *) self;
 }
@@ -196,7 +204,7 @@ static PyMappingMethods py_log_message_mapping =
 
 static gboolean
 _collect_nvpair_names_from_logmsg(NVHandle handle, const gchar *name, const gchar *value, gssize value_len,
-                                  gpointer user_data)
+                                  LogMessageValueType type, gpointer user_data)
 {
   PyObject *list = (PyObject *)user_data;
 
@@ -208,38 +216,19 @@ _collect_nvpair_names_from_logmsg(NVHandle handle, const gchar *name, const gcha
 }
 
 static gboolean
-_is_key_assigned_to_match_handle(const gchar *s)
+_is_macro_name_visible_to_user(const gchar *name, NVHandle handle)
 {
-  char *end = NULL;
-  long val = strtol(s, &end, 10);
-
-  if (*end == '\0' && (val >= 0 && val <= 255))
-    return TRUE;
-
-  return FALSE;
-}
-
-static gboolean
-_is_macro_name_visible_to_user(LogMessage *logmsg, const gchar *name)
-{
-  gssize value_len;
-
-  return (!_is_key_blacklisted(name) &&
-          (!_is_key_assigned_to_match_handle(name) ||
-           (_is_key_assigned_to_match_handle(name) &&
-            log_msg_get_value_by_name(logmsg, name, &value_len) != NULL
-            && value_len > 0)));
+  return log_msg_is_handle_macro(handle) && !_is_key_blacklisted(name);
 }
 
 static void
 _collect_macro_names(gpointer key, gpointer value, gpointer user_data)
 {
-  gpointer *args = (gpointer *)user_data;
-  LogMessage *logmsg = (LogMessage *)args[0];
-  PyObject *list = (PyObject *)args[1];
   const gchar *name = (const gchar *)key;
+  NVHandle handle = GPOINTER_TO_UINT(value);
+  PyObject *list = (PyObject *)user_data;
 
-  if (_is_macro_name_visible_to_user(logmsg, name))
+  if (_is_macro_name_visible_to_user(name, handle))
     {
       PyObject *py_name = PyBytes_FromString(name);
       PyList_Append(list, py_name);
@@ -254,8 +243,7 @@ _logmessage_get_keys_method(PyLogMessage *self)
   LogMessage *msg = self->msg;
 
   log_msg_values_foreach(msg, _collect_nvpair_names_from_logmsg, (gpointer) keys);
-  gpointer registry_foreach_args[] = { msg, keys };
-  log_msg_registry_foreach(_collect_macro_names, (gpointer) registry_foreach_args);
+  log_msg_registry_foreach(_collect_macro_names, keys);
 
   return keys;
 }
@@ -347,10 +335,10 @@ py_datetime_to_logstamp(PyObject *py_timestamp, UnixTime *logstamp)
   if (!_datetime_get_gmtoff(py_timestamp, &local_gmtoff))
     return FALSE;
   if (local_gmtoff == -1)
-    local_gmtoff = get_local_timezone_ofs(posix_timestamp);
+    local_gmtoff = get_local_timezone_ofs((time_t) posix_timestamp);
 
-  logstamp->ut_sec = (time_t) posix_timestamp;
-  logstamp->ut_usec = posix_timestamp * 10e5 - logstamp->ut_sec * 10e5;
+  logstamp->ut_sec = (gint64) posix_timestamp;
+  logstamp->ut_usec = (guint32) (posix_timestamp * 1000000 - logstamp->ut_sec * 1000000);
   logstamp->ut_gmtoff = local_gmtoff;
 
   return TRUE;
@@ -372,10 +360,27 @@ py_log_message_set_timestamp(PyLogMessage *self, PyObject *args, PyObject *kwrds
 }
 
 static PyObject *
+py_log_message_set_bookmark(PyLogMessage *self, PyObject *args, PyObject *kwrds)
+{
+  PyObject *bookmark_data;
+
+  static const gchar *kwlist[] = {"bookmark", NULL};
+  if (!PyArg_ParseTupleAndKeywords(args, kwrds, "O", (gchar **) kwlist, &bookmark_data))
+    return NULL;
+
+  Py_CLEAR(self->bookmark_data);
+
+  Py_XINCREF(bookmark_data);
+  self->bookmark_data = bookmark_data;
+
+  Py_RETURN_NONE;
+}
+
+static PyObject *
 py_log_message_parse(PyObject *_none, PyObject *args, PyObject *kwrds)
 {
   const gchar *raw_msg;
-  gint raw_msg_length;
+  Py_ssize_t raw_msg_length;
 
   PyObject *py_parse_options;
 
@@ -404,7 +409,8 @@ py_log_message_parse(PyObject *_none, PyObject *args, PyObject *kwrds)
       return NULL;
     }
 
-  py_msg->msg = log_msg_new(raw_msg, raw_msg_length, parse_options);
+  py_msg->msg = msg_format_parse(parse_options, (const guchar *) raw_msg, raw_msg_length);
+  py_msg->bookmark_data = NULL;
 
   return (PyObject *) py_msg;
 }
@@ -414,6 +420,7 @@ static PyMethodDef py_log_message_methods[] =
   { "keys", (PyCFunction)_logmessage_get_keys_method, METH_NOARGS, "Return keys." },
   { "set_pri", (PyCFunction)py_log_message_set_pri, METH_VARARGS | METH_KEYWORDS, "Set priority" },
   { "set_timestamp", (PyCFunction)py_log_message_set_timestamp, METH_VARARGS | METH_KEYWORDS, "Set timestamp" },
+  { "set_bookmark", (PyCFunction)py_log_message_set_bookmark, METH_VARARGS | METH_KEYWORDS, "Set bookmark" },
   { "parse", (PyCFunction)py_log_message_parse, METH_STATIC|METH_VARARGS|METH_KEYWORDS, "Parse and create LogMessage" },
   {NULL}
 };

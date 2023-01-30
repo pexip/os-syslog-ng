@@ -51,7 +51,7 @@ tf_format_welf_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *paren
 }
 
 static gboolean
-tf_format_welf_foreach(const gchar *name, TypeHint type, const gchar *value,
+tf_format_welf_foreach(const gchar *name, LogMessageValueType type, const gchar *value,
                        gsize value_len, gpointer user_data)
 {
   TFWelfIterState *iter_state = (TFWelfIterState *) user_data;
@@ -86,7 +86,8 @@ tf_format_welf_strcmp(gconstpointer a, gconstpointer b)
 }
 
 static void
-tf_format_welf_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *args, GString *result)
+tf_format_welf_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *args, GString *result,
+                    LogMessageValueType *type)
 {
   TFWelfState *state = (TFWelfState *) s;
   TFWelfIterState iter_state =
@@ -96,11 +97,12 @@ tf_format_welf_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvo
   };
   gint i;
 
+  *type = LM_VT_STRING;
   for (i = 0; i < args->num_messages; i++)
     {
       value_pairs_foreach_sorted(state->vp,
                                  tf_format_welf_foreach, (GCompareFunc) tf_format_welf_strcmp,
-                                 args->messages[i], 0, args->tz, args->opts, &iter_state);
+                                 args->messages[i], args->options, &iter_state);
     }
 
 }

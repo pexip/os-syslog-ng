@@ -21,16 +21,16 @@
  *
  */
 
-#include "syslog-ng.h"
+#include <criterion/criterion.h>
+
 #include "cfg-lexer.h"
 #include "cfg-args.h"
 #include "cfg-block.h"
 #include "cfg-lexer.h"
 #include "cfg.h"
 
-#include "criterion/criterion.h"
 
-YYLTYPE yyloc;
+CFG_LTYPE yyloc;
 GString *result;
 
 static void

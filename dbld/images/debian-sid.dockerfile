@@ -1,12 +1,11 @@
-# this dbld image is special as it will compile syslog-ng against native
-# debian packages instead of pulling our own from OBS.
-
 FROM debian:sid
 LABEL maintainer="Andras Mitzki <andras.mitzki@balabit.com>, Laszlo Szemere <laszlo.szemere@balabit.com>, Balazs Scheidler <balazs.scheidler@oneidentity.com>"
+ENV OS_DISTRIBUTION=debian
+ENV OS_DISTRIBUTION_CODE_NAME=sid
 
-ARG OS_PLATFORM
+ARG ARG_IMAGE_PLATFORM
 ARG COMMIT
-ENV OS_PLATFORM ${OS_PLATFORM}
+ENV IMAGE_PLATFORM ${ARG_IMAGE_PLATFORM}
 LABEL COMMIT=${COMMIT}
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -20,9 +19,6 @@ COPY . /dbld/
 RUN /dbld/builddeps install_dbld_dependencies
 RUN /dbld/builddeps install_apt_packages
 RUN /dbld/builddeps install_debian_build_deps
-RUN /dbld/builddeps install_criterion
-
-RUN /dbld/builddeps install_gosu amd64
 
 VOLUME /source
 VOLUME /build

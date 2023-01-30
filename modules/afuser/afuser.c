@@ -36,6 +36,7 @@ typedef struct _AFUserDestDriver
   LogDestDriver super;
   GString *username;
   time_t disable_until;
+  time_t time_reopen;
 } AFUserDestDriver;
 
 #ifdef SYSLOG_NG_HAVE_UTMPX_H
@@ -83,10 +84,11 @@ _utmp_entry_matches(UtmpEntry *ut, GString *username)
   if (strcmp(username->str, "*") == 0)
     return TRUE;
 
+  /* ut_user/ut_name may not be null-terminated */
 #ifdef SYSLOG_NG_HAVE_MODERN_UTMP
-  if (strncmp(username->str, ut->ut_user, sizeof(ut->ut_user)) == 0)
+  if (strncmp(username->str, ut->ut_user, G_N_ELEMENTS(ut->ut_user)) == 0)
 #else
-  if (strncmp(username->str, ut->ut_name, sizeof(ut->ut_name)) == 0)
+  if (strncmp(username->str, ut->ut_name, G_N_ELEMENTS(ut->ut_name)) == 0)
 #endif
     return TRUE;
 
@@ -94,6 +96,25 @@ _utmp_entry_matches(UtmpEntry *ut, GString *username)
 }
 
 G_LOCK_DEFINE_STATIC(utmp_lock);
+
+void
+afuser_dd_set_time_reopen(LogDriver *s, time_t time_reopen)
+{
+  AFUserDestDriver *self = (AFUserDestDriver *) s;
+
+  self->time_reopen = time_reopen;
+}
+
+static EVTTAG *
+_evt_tag_utmp_username(UtmpEntry *ut)
+{
+  /* ut_user/ut_name may not be null-terminated */
+#ifdef SYSLOG_NG_HAVE_MODERN_UTMP
+  return evt_tag_mem("user", ut->ut_user, G_N_ELEMENTS(ut->ut_user));
+#else
+  return evt_tag_mem("user", ut->ut_name, G_N_ELEMENTS(ut->ut_name));
+#endif
+}
 
 static void
 afuser_dd_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options)
@@ -121,7 +142,7 @@ afuser_dd_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options)
     {
       if (_utmp_entry_matches(ut, self->username))
         {
-          gchar line[128];
+          gchar line[5 + G_N_ELEMENTS(ut->ut_line) + 1]; /* /dev/ prefix, line device name, null terminator */
           gchar *p = line;
           int fd;
 
@@ -130,27 +151,33 @@ afuser_dd_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options)
               strcpy(line, "/dev/");
               p = line + 5;
             }
-          else
-            line[0] = 0;
-          strncpy(p, ut->ut_line, sizeof(line) - (p - line));
+
+          /* ut_line may not be null-terminated. Copy it and ensure it's null-terminated. */
+          strncpy(p, ut->ut_line, G_N_ELEMENTS(ut->ut_line));
+          p[G_N_ELEMENTS(ut->ut_line)] = 0;
+
           msg_debug("Posting message to user terminal",
-#ifdef SYSLOG_NG_HAVE_MODERN_UTMP
-                    evt_tag_str("user", ut->ut_user),
-#else
-                    evt_tag_str("user", ut->ut_name),
-#endif
+                    _evt_tag_utmp_username(ut),
                     evt_tag_str("line", line));
           fd = open(line, O_NOCTTY | O_APPEND | O_WRONLY | O_NONBLOCK);
-          if (fd != -1)
+          if (fd == -1)
             {
-              if (write(fd, buf, strlen(buf)) < 0 && errno == EAGAIN)
-                {
-                  msg_notice("Writing to the user terminal has blocked for writing, disabling for 10 minutes",
-                             evt_tag_str("user", self->username->str));
-                  self->disable_until = now + 600;
-                }
-              close(fd);
+              msg_error("Opening tty device failed, disabling usertty() for time-reopen seconds",
+                        _evt_tag_utmp_username(ut),
+                        evt_tag_str("line", line),
+                        evt_tag_int("time_reopen", self->time_reopen),
+                        evt_tag_error("errno"));
+              self->disable_until = now + self->time_reopen;
+              continue;
             }
+          if (write(fd, buf, strlen(buf)) < 0 && errno == EAGAIN)
+            {
+              msg_notice("Writing to the user terminal has blocked for writing, disabling for time-reopen seconds",
+                         evt_tag_str("user", self->username->str),
+                         evt_tag_int("time_reopen", self->time_reopen));
+              self->disable_until = now + self->time_reopen;
+            }
+          close(fd);
         }
     }
   _close_utmp();
@@ -168,14 +195,29 @@ afuser_dd_free(LogPipe *s)
   log_dest_driver_free(s);
 }
 
+static gboolean
+afuser_dd_init(LogPipe *s)
+{
+  AFUserDestDriver *self = (AFUserDestDriver *) s;
+  GlobalConfig *cfg = log_pipe_get_config(s);
+
+  if (self->time_reopen == -1)
+    self->time_reopen = cfg->time_reopen;
+
+  return log_dest_driver_init_method(s);
+}
+
 LogDriver *
 afuser_dd_new(gchar *user, GlobalConfig *cfg)
 {
   AFUserDestDriver *self = g_new0(AFUserDestDriver, 1);
 
   log_dest_driver_init_instance(&self->super, cfg);
+  self->super.super.super.init = afuser_dd_init;
   self->super.super.super.queue = afuser_dd_queue;
   self->super.super.super.free_fn = afuser_dd_free;
   self->username = g_string_new(user);
+  self->time_reopen = -1;
+
   return &self->super.super;
 }

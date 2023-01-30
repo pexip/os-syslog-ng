@@ -34,19 +34,26 @@ static CfgLexerKeyword filter_expr_keywords[] =
   { "or",                 KW_OR },
   { "and",                KW_AND },
   { "not",                KW_NOT },
-  { "lt",                 KW_LT },
-  { "le",                 KW_LE },
-  { "eq",                 KW_EQ },
-  { "ne",                 KW_NE },
-  { "ge",                 KW_GE },
-  { "gt",                 KW_GT },
+  { "lt",                 KW_STR_LT },
+  { "le",                 KW_STR_LE },
+  { "eq",                 KW_STR_EQ },
+  { "ne",                 KW_STR_NE },
+  { "ge",                 KW_STR_GE },
+  { "gt",                 KW_STR_GT },
 
-  { "<",                  KW_NUM_LT },
-  { "<=",                 KW_NUM_LE },
-  { "==",                 KW_NUM_EQ },
-  { "!=",                 KW_NUM_NE },
-  { ">=",                 KW_NUM_GE },
-  { ">",                  KW_NUM_GT },
+  /* type aware comparisons */
+  { "<",                  KW_TA_LT },
+  { "<=",                 KW_TA_LE },
+  { "==",                 KW_TA_EQ },
+  { "!=",                 KW_TA_NE },
+  { ">=",                 KW_TA_GE },
+  { ">",                  KW_TA_GT },
+
+  /* equal type and value */
+  { "===",                KW_TAV_EQ },
+  { "!==",                KW_TAV_NE },
+
+  /* filter expressions */
   { "severity",           KW_SEVERITY },
   { "level",              KW_SEVERITY },
   { "priority",           KW_SEVERITY },
@@ -56,6 +63,7 @@ static CfgLexerKeyword filter_expr_keywords[] =
   { "message",            KW_MESSAGE },
   { "match",              KW_MATCH },
   { "netmask",            KW_NETMASK },
+  { "throttle",           KW_THROTTLE },
   { "tags",               KW_TAGS },
   { "in_list",            KW_IN_LIST },
 #if SYSLOG_NG_ENABLE_IPV6
@@ -79,4 +87,4 @@ CfgParser filter_expr_parser =
   .parse = (gint (*)(CfgLexer *, gpointer *, gpointer)) filter_expr_parse,
 };
 
-CFG_PARSER_IMPLEMENT_LEXER_BINDING(filter_expr_, FilterExprNode **)
+CFG_PARSER_IMPLEMENT_LEXER_BINDING(filter_expr_, FILTER_EXPR_, FilterExprNode **)

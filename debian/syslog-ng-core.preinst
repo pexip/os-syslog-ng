@@ -3,13 +3,16 @@
 set -e
 
 if [ "$1" = "install" ]; then
-        if [ -f /etc/logrotate.d/syslog-ng.disabled ]; then
-                if [ -n "$2" ]; then
-                        mv -f /etc/logrotate.d/syslog-ng.disabled /etc/logrotate.d/syslog-ng
-                elif [ ! -f /etc/logrotate.d/syslog-ng ]; then
-                        mv -f /etc/logrotate.d/syslog-ng.disabled /etc/logrotate.d/syslog-ng
-                fi
+    if [ -f /etc/logrotate.d/syslog-ng.disabled ]; then
+        if [ -n "$2" ]; then
+            mv -f /etc/logrotate.d/syslog-ng.disabled /etc/logrotate.d/syslog-ng
+        elif [ ! -f /etc/logrotate.d/syslog-ng ]; then
+            mv -f /etc/logrotate.d/syslog-ng.disabled /etc/logrotate.d/syslog-ng
         fi
+    fi
+    if [ -L /etc/systemd/system/syslog.service -a ! -e /etc/systemd/system/syslog.service ]; then
+        rm /etc/systemd/system/syslog.service
+    fi
 fi
 
 if [ "$1" = "upgrade" ] &&

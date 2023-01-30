@@ -19,12 +19,15 @@
  * COPYING for details.
  */
 
+/* this has to come first for modules which include the Python.h header */
+#include "python-module.h"
+
+#include <criterion/criterion.h>
+#include "libtest/msg_parse_lib.h"
+
 #include "python-helpers.h"
 #include "python-logmsg.h"
-#include <criterion/criterion.h>
 #include "apphook.h"
-#include "msg-format.h"
-#include "msg_parse_lib.h"
 #include "logmsg/logmsg.h"
 
 static PyObject *_python_main;
@@ -39,7 +42,7 @@ _py_init_interpreter(void)
   Py_Initialize();
   py_init_argv();
 
-  PyEval_InitThreads();
+  py_init_threads();
   py_log_message_init();
   PyEval_SaveThread();
 }
@@ -114,8 +117,7 @@ TestSuite(python_log_message, .init = setup, .fini = teardown);
 
 Test(python_log_message, test_python_logmessage_set_value)
 {
-  const gchar *raw_msg = "test_msg";
-  LogMessage *msg = log_msg_new(raw_msg, strlen(raw_msg), &parse_options);
+  LogMessage *msg = log_msg_new_empty();
 
   PyGILState_STATE gstate;
   gstate = PyGILState_Ensure();
@@ -140,10 +142,9 @@ Test(python_log_message, test_python_logmessage_set_value)
 
 Test(python_log_message, test_python_logmessage_set_value_indirect)
 {
-  const gchar *raw_msg = "test_msg";
   const gchar *test_value = "test_value";
   const gchar *test_key = "test_key";
-  LogMessage *msg = log_msg_new(raw_msg, strlen(raw_msg), &parse_options);
+  LogMessage *msg = log_msg_new_empty();
   NVHandle test_key_handle = log_msg_get_value_handle(test_key);
   log_msg_set_value(msg, test_key_handle, test_value, -1);
 
@@ -156,7 +157,7 @@ Test(python_log_message, test_python_logmessage_set_value_indirect)
 
     gssize len = strlen(test_value);
     NVHandle indirect_key_handle = log_msg_get_value_handle("indirect");
-    log_msg_set_value_indirect(msg, indirect_key_handle, test_key_handle, 0, 0, len);
+    log_msg_set_value_indirect(msg, indirect_key_handle, test_key_handle, 0, len);
 
     const gchar *get_value_indirect = "indirect = test_msg['indirect']";
     PyRun_String(get_value_indirect, Py_file_input, _python_main_dict, _python_main_dict);
@@ -278,5 +279,39 @@ Test(python_log_message, test_py_log_message_parse)
   cr_assert_eq(py_msg->msg->pri, 34);
 
   Py_DECREF(py_msg);
+  PyGILState_Release(gstate);
+}
+
+Test(python_log_message, test_python_logmessage_keys)
+{
+  const gchar *expected_key = "test_key";
+  LogMessage *msg = log_msg_new_internal(LOG_INFO | LOG_SYSLOG, "test");
+  log_msg_set_value_by_name(msg, expected_key, "value", -1);
+
+  log_msg_get_value_handle("unused_value");
+
+  PyGILState_STATE gstate = PyGILState_Ensure();
+  PyObject *py_msg = py_log_message_new(msg);
+
+  PyObject *keys = _py_invoke_method_by_name(py_msg, "keys", NULL, "PyLogMessageTest", NULL);
+  cr_assert_not_null(keys);
+  cr_assert(PyList_Check(keys));
+
+  for (Py_ssize_t i = 0; i < PyList_Size(keys); ++i)
+    {
+      PyObject *py_key = PyList_GetItem(keys, i);
+      const gchar *key = _py_get_string_as_string(py_key);
+      cr_assert_not_null(key);
+
+      NVHandle handle = log_msg_get_value_handle(key);
+      cr_assert(g_strcmp0(key, expected_key) == 0
+                || log_msg_is_handle_macro(handle)
+                || handle == LM_V_MESSAGE
+                || handle == LM_V_PROGRAM
+                || handle == LM_V_PID, "Unexpected key found in PyLogMessage: %s", key);
+    }
+
+  Py_XDECREF(keys);
+  Py_XDECREF(py_msg);
   PyGILState_Release(gstate);
 }

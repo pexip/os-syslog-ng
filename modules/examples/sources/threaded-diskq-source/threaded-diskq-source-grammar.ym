@@ -31,18 +31,17 @@
 #include "threaded-diskq-source.h"
 #include "logthrsource/logthrsourcedrv.h"
 #include "cfg-parser.h"
-#include "threaded-diskq-source-grammar.h"
 #include "syslog-names.h"
 #include "messages.h"
 #include "plugin.h"
-#include "cfg-grammar.h"
+#include "cfg-grammar-internal.h"
 #include "template/templates.h"
 
 #include <string.h>
 
 }
 
-%name-prefix "threaded_diskq_source_"
+%define api.prefix {threaded_diskq_source_}
 
 /* this parameter is needed in order to instruct bison to use a complete
  * argument list for yylex/yyerror */
@@ -70,7 +69,7 @@ threaded_diskq_source
     {
       last_driver = *instance = threaded_diskq_sd_new(configuration);
     }
-    '(' threaded_diskq_source_options ')' { $$ = last_driver; }
+    '(' _inner_src_context_push threaded_diskq_source_options _inner_src_context_pop ')' { $$ = last_driver; }
   ;
 
 threaded_diskq_source_options

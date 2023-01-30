@@ -29,6 +29,5 @@ typedef struct _TransportMapperUnix TransportMapperUnix;
 
 TransportMapper *transport_mapper_unix_dgram_new(void);
 TransportMapper *transport_mapper_unix_stream_new(void);
-void transport_mapper_unix_set_pass_unix_credentials(TransportMapper *self, gboolean pass);
 
 #endif

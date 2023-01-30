@@ -32,13 +32,12 @@
 %code {
 
 #include "syslog-names.h"
-#include "parser/parser-expr-grammar.h"
 #include "plugin.h"
-#include "cfg-grammar.h"
+#include "cfg-grammar-internal.h"
 
 }
 
-%name-prefix "parser_expr_"
+%define api.prefix {parser_expr_}
 %lex-param {CfgLexer *lexer}
 %parse-param {CfgLexer *lexer}
 %parse-param {LogExprNode **result}
@@ -52,7 +51,7 @@
 %%
 
 start
-        : parser_expr_list                       { *result = $1; if (yychar != YYEMPTY) { cfg_lexer_unput_token(lexer, &yylval); } YYACCEPT; }
+        : parser_expr_list                       { *result = $1; if (yychar != PARSER_EXPR_EMPTY) { cfg_lexer_unput_token(lexer, &yylval); } YYACCEPT; }
 	;
 
 parser_expr_list
@@ -63,7 +62,7 @@ parser_expr_list
 
 
 parser_expr
-        : LL_IDENTIFIER
+        : LL_PLUGIN
           {
             Plugin *p;
             gint context = LL_CONTEXT_PARSER;

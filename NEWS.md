@@ -1,104 +1,114 @@
-3.28.1
+3.38.1
 ======
 
 ## Highlights
 
- * `http`: add support for proxy option
+### Sneak peek into syslog-ng v4.0
 
-   Example:
-   ```
-   log {
-      source { system(); };
-      destination { http( url("SYSLOG_SERVER_IP:PORT") proxy("PROXY_IP:PORT") method("POST") ); };
-   };
-   ```
-   ([#3253](https://github.com/syslog-ng/syslog-ng/pull/3253))
+syslog-ng v4.0 is right around the corner.
+
+This release (v3.38.1) contains all major changes, however, they are
+currently all hidden behind a feature flag.
+To enable and try those features, you need to specify `@version: 4.0` at the
+top of the configuration file.
+
+You can find out more about the 4.0 changes and features
+[here](https://github.com/syslog-ng/syslog-ng/blob/master/NEWS-4.0.md).
+
+Read our practical introduction to typing at
+[syslog-ng-future.blog](https://syslog-ng-future.blog/syslog-ng-4-progress-3-38-1-release/).
 
 ## Features
 
- * `map`: template function
+  * `grouping-by()`: added `inject-mode(aggregate-only)`
 
-   This template function applies a function to all elements of a list. For example: `$(map $(+ 1 $_) 0,1,2)` => 1,2,3.
-   ([#3301](https://github.com/syslog-ng/syslog-ng/pull/3301))
- * `use-syslogng-pid()`: new option to all sources
+    This inject mode will drop individual messages that make up the correlation
+    context (`key()` groups) and would only yield the aggregate messages
+    (e.g. the results of the correlation).
+    ([#3998](https://github.com/syslog-ng/syslog-ng/pull/3998))
+  * `add-contextual-data()`: add support for type propagation, e.g. set the
+    type of name-value pairs as they are created/updated to the value returned
+    by the template expression that we use to set the value.
 
-   If set to `yes`, `syslog-ng` overwrites the message's `${PID}` macro to its own PID.
-   ([#3323](https://github.com/syslog-ng/syslog-ng/pull/3323))
+    The 3rd column in the CSV file (e.g. the template expression) now supports
+    specifying a type-hint, in the format of "type-hint(template-expr)".
+
+    Example line in the CSV database:
+
+    selector-value,name-value-pair-to-be-created,list(foo,bar,baz)
+    ([#4051](https://github.com/syslog-ng/syslog-ng/pull/4051))
+  * `$(format-json)`: add --key-delimiter option to reconstruct JSON objects
+    using an alternative structure separator, that was created using the
+    key-delimiter() option of json-parser().
+    ([#4093](https://github.com/syslog-ng/syslog-ng/pull/4093))
+  * `json-parser()`: add key-delimiter() option to extract JSON structure
+    members into name-value pairs, so that the names are flattened using the
+    character specified, instead of dot.
+
+    Example:
+      Input: {"foo":{"key":"value"}}
+
+      Using json-parser() without key-delimiter() this is extracted to:
+
+          foo.key="value"
+
+      Using json-parser(key-delimiter("~")) this is extracted to:
+
+          foo~key="value"
+
+    This feature is useful in case the JSON keys contain dots themselves, in
+    those cases the syslog-ng representation is ambigious.
+    ([#4093](https://github.com/syslog-ng/syslog-ng/pull/4093))
 
 ## Bugfixes
 
- * `affile`: eliminate infinite loop in case of a spurious file path
+  * Fixed buffer handling of syslog and timestamp parsers
 
-   If the template evaluation of a log message will result to a spurious
-   path in the file destination, syslog-ng refuses to create that file.
-   However the problematic log message was left in the msg queue, so
-   syslog-ng was trying to create that file again in time-reopen periods.
-   From now on syslog-ng will handle "permanent" file errors, and drop
-   the relevant msg.
-   ([#3230](https://github.com/syslog-ng/syslog-ng/pull/3230))
- * Fix minor memory leaks in error scenarios
-   ([#3265](https://github.com/syslog-ng/syslog-ng/pull/3265))
- * `crypto`: fix hang on boot due to lack of entropy
-   ([#3271](https://github.com/syslog-ng/syslog-ng/pull/3271))
- * Fix IPv4 UDP destinations on FreeBSD
+    Multiple buffer out-of-bounds issues have been fixed, which could cause
+    hangs, high CPU usage, or other undefined behavior.
+    ([#4110](https://github.com/syslog-ng/syslog-ng/pull/4110))
+  * Fixed building with LibreSSL
+    ([#4081](https://github.com/syslog-ng/syslog-ng/pull/4081))
+  * `network()`: Fixed a bug, where syslog-ng halted the input instead of skipping a character
+    in case of a character conversion error.
+    ([#4084](https://github.com/syslog-ng/syslog-ng/pull/4084))
+  * `redis()`: Fixed bug where using redis driver without the `batch-lines` option caused program crash.
+    ([#4114](https://github.com/syslog-ng/syslog-ng/pull/4114))
+  * `pdbtool`: fix a SIGABRT on FreeBSD that was triggered right before pdbtool
+    exits. Apart from being an ugly crash that produces a core file,
+    functionally the tool behaved correctly and this case does not affect
+    syslog-ng itself.
+    ([#4037](https://github.com/syslog-ng/syslog-ng/pull/4037))
+  * `regexp-parser()`: due to a change introduced in 3.37, named capture groups
+    are stored indirectly in the LogMessage to avoid copying of the value.  In
+    this case the name-value pair created with the regexp is only stored as a
+    reference (name + length of the original value), which improves performance
+    and makes such name-value pairs use less memory.  One omission in the
+    original change in 3.37 is that syslog-ng does not allow builtin values to
+    be stored indirectly (e.g.  $MESSAGE and a few of others) and this case
+    causes an assertion to fail and syslog-ng to crash with a SIGABRT. This
+    abort is now fixed. Here's a sample config that reproduces the issue:
 
-   UDP-based destinations crashed when receiving the first message on FreeBSD due
-   to a bug in destination IP extraction logic.
-   ([#3278](https://github.com/syslog-ng/syslog-ng/pull/3278))
- * `network sources`: fix TLS connection closure
-
-   RFC 5425 specifies that once the transport receiver gets `close_notify` from the
-   transport sender, it MUST reply with a `close_notify`.
-
-   The `close_notify` alert is now sent back correctly in case of TLS network sources.
-   ([#2811](https://github.com/syslog-ng/syslog-ng/pull/2811))
- * `disk-buffer`: fixes possible crash, or fetching wrong value for logmsg nvpair
-   ([#3281](https://github.com/syslog-ng/syslog-ng/pull/3281))
- * `packaging/debian`: fix mod-rdkafka Debian packaging
-   ([#3282](https://github.com/syslog-ng/syslog-ng/pull/3282))
- * `kafka destination`: destination halts if consumer is down, and kafka's queue is filled
-   ([#3305](https://github.com/syslog-ng/syslog-ng/pull/3305))
- * `file-source`: Throw error, when `follow-freq()` is set with a negative float number.
-   ([#3306](https://github.com/syslog-ng/syslog-ng/pull/3306))
- * `stats-freq`: with high stats-freq syslog-ng emits stats immediately causing high memory and CPU usage
-   ([#3320](https://github.com/syslog-ng/syslog-ng/pull/3320))
- * `secure-logging`: bug fixes ([#3284](https://github.com/syslog-ng/syslog-ng/pull/3284))
-    - template arguments are now consistently checked
-    - fixed errors when mac file not provided
-    - fixed abort when derived key not provided
-    - fixed crash with slogkey missing parameters
-    - fixed secure-logging on 32-bit architectures
-    - fixed CMake build
+        regexp-parser(patterns('(?<MESSAGE>.*)'));
+    ([#4043](https://github.com/syslog-ng/syslog-ng/pull/4043))
+  * set-tag: fix cloning issue when string literal were used (see #4062)
+    ([#4065](https://github.com/syslog-ng/syslog-ng/pull/4065))
+  * `add-contextual-data()`: fix high memory usage when using large CSV files
+    ([#4067](https://github.com/syslog-ng/syslog-ng/pull/4067))
 
 ## Other changes
 
- * `dbld`: Fedora 32 support ([#3315](https://github.com/syslog-ng/syslog-ng/pull/3315))
- * `dbld`: Removed Ubuntu Eoan ([#3313](https://github.com/syslog-ng/syslog-ng/pull/3313))
- * `secure-logging`: improvements ([#3284](https://github.com/syslog-ng/syslog-ng/pull/3284))
-    - removed 1500 message length limitation
-    - `slogimport` has been renamed to `slogencrypt`
-    - `$(slog)` will not start anymore when key is not found
-    - internal messaging (warning, debug) improvements
-    - improved memory handling and error information display
-    - CMake build improvements
-    - switched to GLib command line argument parsing
-    - the output of `slogkey -s` is now parsable
-    - manpage improvements
+  * The `json-c` library is no longer bundled in the syslog-ng source tarball
 
-## Notes to developers
+    Since all known OS package managers provide json-c packages nowadays, the json-c
+    submodule has been removed from the source tarball.
 
- * `dbld`: devshell is now upgraded to Ubuntu Focal
-   ([#3277](https://github.com/syslog-ng/syslog-ng/pull/3277))
- * `dbld/devshell`: Multiple changes:
-    * Added snmptrapd package.
-    * Added support for both `python2` and `python3`.
-   ([#3222](https://github.com/syslog-ng/syslog-ng/pull/3222))
- * `threaded-source`: fully support default-priority() and default-facility()
-   ([#3304](https://github.com/syslog-ng/syslog-ng/pull/3304))
- * `CMake`: fix libcap detection
-   ([#3294](https://github.com/syslog-ng/syslog-ng/pull/3294))
- * Fix atomic_gssize_set() warning with new glib versions
-   ([#3286](https://github.com/syslog-ng/syslog-ng/pull/3286))
+    The `--with-jsonc=internal` option of the `configure` script has been removed
+    accordingly, system libraries will be used instead. For special cases, the JSON
+    support can be disabled by specifying `--with-jsonc=no`.
+    ([#4078](https://github.com/syslog-ng/syslog-ng/pull/4078))
+  * platforms: Dropped support for ubuntu-impish as it became EOL
+    ([#4088](https://github.com/syslog-ng/syslog-ng/pull/4088))
 
 ## Credits
 
@@ -111,6 +121,7 @@ of syslog-ng, contribute.
 
 We would like to thank the following people for their contribution:
 
-Airbus Commercial Aircraft, Andras Mitzki, Antal Nemes, Attila Szakacs,
-Balazs Scheidler, Gabor Nagy, Laszlo Budai, Laszlo Szemere, László Várady,
-Péter Kókai, Vatsal Sisodiya, Vivin Peris.
+Alvin Šipraga, Andras Mitzki, Attila Szakacs, Balazs Scheidler,
+Bálint Horváth, Daniel Klauer, Fabrice Fontaine, Gabor Nagy,
+HenryTheSir, László Várady, Parrag Szilárd, Peter Kokai, Shikhar Vashistha,
+Szilárd Parrag, Vivin Peris

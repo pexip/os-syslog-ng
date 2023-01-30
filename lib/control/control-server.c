@@ -22,217 +22,128 @@
  */
 
 #include "control-server.h"
-#include "control-commands.h"
+#include "control-connection.h"
+#include "control-command-thread.h"
 #include "messages.h"
-#include "str-utils.h"
-#include "secret-storage/secret-storage.h"
 
-#include <string.h>
-#include <errno.h>
+
+void
+_cancel_worker(gpointer data, gpointer user_data)
+{
+  ControlCommandThread *thread = (ControlCommandThread *) data;
+
+  msg_warning("Requesting the cancellation of control command thread",
+              evt_tag_str("control_command", control_command_thread_get_command(thread)));
+  control_command_thread_cancel(thread);
+
+  /* NOTE: threads would call control_server_worker_finished() when done (at
+   * least if the main loop is still executing once to process our
+   * thread_finished event).
+   *
+   * If finished() is called, our ref stored on the worker_threads list is
+   * dropped at that point.
+   *
+   * If finished() is not called (e.g.  the workers are stuck and have not
+   * exited until our mainloop exit strategy is executed), their reference
+   * remains lingering on the worker_threads list.
+   *
+   * We try to take care of such lingering refs in control_server_stop(),
+   * which is executed already after iv_main() returns.
+   */
+}
+
+void
+control_server_cancel_workers(ControlServer *self)
+{
+  if (self->worker_threads)
+    {
+      msg_debug("Cancelling control server worker threads");
+      g_list_foreach(self->worker_threads, _cancel_worker, NULL);
+      msg_debug("Control server worker threads have been cancelled");
+    }
+}
+
+void
+control_server_worker_started(ControlServer *self, ControlCommandThread *worker)
+{
+  control_command_thread_ref(worker);
+  self->worker_threads = g_list_append(self->worker_threads, worker);
+}
+
+void
+control_server_worker_finished(ControlServer *self, ControlCommandThread *worker)
+{
+  self->worker_threads = g_list_remove(self->worker_threads, worker);
+  control_command_thread_unref(worker);
+}
 
 void
 control_server_connection_closed(ControlServer *self, ControlConnection *cc)
 {
   control_connection_stop_watches(cc);
-  control_connection_free(cc);
+  control_connection_unref(cc);
+}
+
+gboolean
+control_server_start_method(ControlServer *self)
+{
+  /* NOTE: this is a placeholder and is empty for now.  Derived
+   * ControlServer implementations must call this at startup */
+  return TRUE;
 }
 
 void
-control_server_init_instance(ControlServer *self, const gchar *path)
+_unref_worker(gpointer data)
 {
-  self->control_socket_name = g_strdup(path);
+  ControlCommandThread *thread = (ControlCommandThread *) data;
+
+  msg_warning("Control command thread has not exited by the time we need to exit, forcing",
+              evt_tag_str("control_command", control_command_thread_get_command(thread)));
+  control_command_thread_unref(thread);
+}
+
+/* NOTE: this is called once the mainloop has exited, thus we would not get
+ * our worker_thread_finished() callbacks anymore.  If our worker_threads is
+ * not empty at this point, then they have not yet responded to our cancel
+ * signal earlier and they won't as no further main loop iterations will be
+ * performed.
+ *
+ * At this point we can unref the elements of the worker list, the thread
+ * itself will keep a reference until it is done executing, but we won't get
+ * notifications anymore.  If the thread is still running at the point
+ * _exit() is called, we would leak some ControlCommandThread instances.
+ */
+void
+control_server_stop_method(ControlServer *self)
+{
+  if (self->worker_threads)
+    {
+      g_list_free_full(self->worker_threads, _unref_worker);
+      self->worker_threads = NULL;
+    }
+}
+
+void
+control_server_free_method(ControlServer *self)
+{
+}
+
+void
+control_server_init_instance(ControlServer *self)
+{
+  self->worker_threads = NULL;
+  self->start = control_server_start_method;
+  self->stop = control_server_stop_method;
+  self->free_fn = control_server_free_method;
 }
 
 void
 control_server_free(ControlServer *self)
 {
+  g_assert(self->worker_threads == NULL);
   if (self->free_fn)
     {
       self->free_fn(self);
     }
-  g_free(self->control_socket_name);
   g_free(self);
-}
-
-void
-control_connection_free(ControlConnection *self)
-{
-  if (self->free_fn)
-    {
-      self->free_fn(self);
-    }
-  g_string_free(self->output_buffer, TRUE);
-  g_string_free(self->input_buffer, TRUE);
-  g_free(self);
-}
-
-void
-control_connection_send_reply(ControlConnection *self, GString *reply)
-{
-  g_string_assign(self->output_buffer, reply->str);
-  g_string_free(reply, TRUE);
-
-  self->pos = 0;
-  self->waiting_for_output = FALSE;
-
-  g_assert(self->output_buffer->len > 0);
-
-  if (self->output_buffer->str[self->output_buffer->len - 1] != '\n')
-    {
-      g_string_append_c(self->output_buffer, '\n');
-    }
-  g_string_append(self->output_buffer, ".\n");
-
-  control_connection_update_watches(self);
-}
-
-static void
-control_connection_io_output(gpointer s)
-{
-  ControlConnection *self = (ControlConnection *) s;
-  gint rc;
-
-  rc = self->write(self, self->output_buffer->str + self->pos, self->output_buffer->len - self->pos);
-  if (rc < 0)
-    {
-      if (errno != EAGAIN)
-        {
-          msg_error("Error writing control channel",
-                    evt_tag_error("error"));
-          control_server_connection_closed(self->server, self);
-          return;
-        }
-    }
-  else
-    {
-      self->pos += rc;
-    }
-  control_connection_update_watches(self);
-}
-
-void
-control_connection_wait_for_output(ControlConnection *self)
-{
-  if (self->output_buffer->len == 0)
-    self->waiting_for_output = TRUE;
-  control_connection_update_watches(self);
-}
-
-static void
-control_connection_io_input(void *s)
-{
-  ControlConnection *self = (ControlConnection *) s;
-  GString *command = NULL;
-  gchar *nl;
-  gint rc;
-  gint orig_len;
-  GList *iter;
-
-  if (self->input_buffer->len > MAX_CONTROL_LINE_LENGTH)
-    {
-      /* too much data in input, drop the connection */
-      msg_error("Too much data in the control socket input buffer");
-      control_server_connection_closed(self->server, self);
-      return;
-    }
-
-  orig_len = self->input_buffer->len;
-
-  /* NOTE: plus one for the terminating NUL */
-  g_string_set_size(self->input_buffer, self->input_buffer->len + 128 + 1);
-  rc = self->read(self, self->input_buffer->str + orig_len, 128);
-  if (rc < 0)
-    {
-      if (errno != EAGAIN)
-        {
-          msg_error("Error reading command on control channel, closing control channel",
-                    evt_tag_error("error"));
-          goto destroy_connection;
-        }
-      /* EAGAIN, should try again when data comes */
-      control_connection_update_watches(self);
-      return;
-    }
-  else if (rc == 0)
-    {
-      msg_debug("EOF on control channel, closing connection");
-      goto destroy_connection;
-    }
-  else
-    {
-      self->input_buffer->len = orig_len + rc;
-      self->input_buffer->str[self->input_buffer->len] = 0;
-    }
-
-  /* here we have finished reading the input, check if there's a newline somewhere */
-  nl = strchr(self->input_buffer->str, '\n');
-  if (nl)
-    {
-      command = g_string_sized_new(128);
-      /* command doesn't contain NL */
-      g_string_assign_len(command, self->input_buffer->str, nl - self->input_buffer->str);
-      secret_storage_wipe(self->input_buffer->str, nl - self->input_buffer->str);
-      /* strip NL */
-      /*g_string_erase(self->input_buffer, 0, command->len + 1);*/
-      g_string_truncate(self->input_buffer, 0);
-    }
-  else
-    {
-      /* no EOL in the input buffer, wait for more data */
-      control_connection_update_watches(self);
-      return;
-    }
-
-  iter = g_list_find_custom(get_control_command_list(), command->str,
-                            (GCompareFunc)control_command_start_with_command);
-  if (iter == NULL)
-    {
-      msg_error("Unknown command read on control channel, closing control channel",
-                evt_tag_str("command", command->str));
-      g_string_free(command, TRUE);
-      goto destroy_connection;
-    }
-  ControlCommand *cmd_desc = (ControlCommand *) iter->data;
-
-  cmd_desc->func(self, command, cmd_desc->user_data);
-  control_connection_wait_for_output(self);
-
-  secret_storage_wipe(command->str, command->len);
-  g_string_free(command, TRUE);
-  return;
-destroy_connection:
-  control_server_connection_closed(self->server, self);
-}
-
-void
-control_connection_init_instance(ControlConnection *self, ControlServer *server)
-{
-  self->server = server;
-  self->output_buffer = g_string_sized_new(256);
-  self->input_buffer = g_string_sized_new(128);
-  self->handle_input = control_connection_io_input;
-  self->handle_output = control_connection_io_output;
-  return;
-}
-
-
-void
-control_connection_start_watches(ControlConnection *self)
-{
-  if (self->events.start_watches)
-    self->events.start_watches(self);
-}
-
-void
-control_connection_update_watches(ControlConnection *self)
-{
-  if (self->events.update_watches)
-    self->events.update_watches(self);
-}
-
-void
-control_connection_stop_watches(ControlConnection *self)
-{
-  if (self->events.stop_watches)
-    self->events.stop_watches(self);
 }

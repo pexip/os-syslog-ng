@@ -22,7 +22,14 @@
  */
 
 #include "syslog-parser.h"
-#include "syslog-format.h"
+
+void
+syslog_parser_set_drop_invalid(LogParser *s, gboolean drop_invalid)
+{
+  SyslogParser *self = (SyslogParser *) s;
+
+  self->drop_invalid = drop_invalid;
+}
 
 static gboolean
 syslog_parser_process(LogParser *s, LogMessage **pmsg, const LogPathOptions *path_options, const gchar *input,
@@ -33,11 +40,19 @@ syslog_parser_process(LogParser *s, LogMessage **pmsg, const LogPathOptions *pat
 
   msg = log_msg_make_writable(pmsg, path_options);
   msg_trace("syslog-parser message processing started",
-            evt_tag_str ("input", input),
-            evt_tag_printf("msg", "%p", *pmsg));
+            evt_tag_str("input", input),
+            evt_tag_msg_reference(*pmsg));
 
-  syslog_format_handler(&self->parse_options, (guchar *) input, input_len, msg);
-  return TRUE;
+  if (self->drop_invalid)
+    {
+      gsize problem_position = 0;
+      return msg_format_try_parse_into(&self->parse_options, msg, (guchar *) input, input_len, &problem_position);
+    }
+  else
+    {
+      msg_format_parse_into(&self->parse_options, msg, (guchar *) input, input_len);
+      return TRUE;
+    }
 }
 
 static gboolean

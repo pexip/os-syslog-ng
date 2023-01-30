@@ -31,13 +31,15 @@
 static void
 add_long_to_dict(PyObject *dict, const gchar *name, long num)
 {
-  gchar buf[256];
 
   PyObject *pyobject_to_add = PyLong_FromLong(num);
   if (!pyobject_to_add)
     {
+      gchar buf[256];
+      _py_format_exception_text(buf, sizeof(buf));
+
       msg_error("Error while constructing python object",
-                evt_tag_str("exception", _py_format_exception_text(buf, sizeof(buf))));
+                evt_tag_str("exception", buf));
       _py_finish_exception_handling();
       return;
     }
@@ -49,13 +51,14 @@ add_long_to_dict(PyObject *dict, const gchar *name, long num)
 static void
 add_string_to_dict(PyObject *dict, const gchar *name, const char *value, gsize value_len)
 {
-  gchar buf[256];
-
   PyObject *pyobject_to_add = PyBytes_FromStringAndSize(value, value_len);
   if (!pyobject_to_add)
     {
+      gchar buf[256];
+      _py_format_exception_text(buf, sizeof(buf));
+
       msg_error("Error while constructing python object",
-                evt_tag_str("exception", _py_format_exception_text(buf, sizeof(buf))));
+                evt_tag_str("exception", buf));
       _py_finish_exception_handling();
       return;
     }
@@ -66,7 +69,7 @@ add_string_to_dict(PyObject *dict, const gchar *name, const char *value, gsize v
 
 static gboolean
 python_worker_vp_add_one(const gchar *name,
-                         TypeHint type, const gchar *value, gsize value_len,
+                         LogMessageValueType type, const gchar *value, gsize value_len,
                          gpointer user_data)
 {
   const LogTemplateOptions *template_options = (const LogTemplateOptions *)((gpointer *)user_data)[0];
@@ -76,8 +79,8 @@ python_worker_vp_add_one(const gchar *name,
 
   switch (type)
     {
-    case TYPE_HINT_INT32:
-    case TYPE_HINT_INT64:
+    case LM_VT_INT32:
+    case LM_VT_INT64:
     {
       gint64 i;
 
@@ -97,7 +100,7 @@ python_worker_vp_add_one(const gchar *name,
         }
       break;
     }
-    case TYPE_HINT_STRING:
+    case LM_VT_STRING:
       add_string_to_dict(dict, name, value, value_len);
       break;
     default:
@@ -112,7 +115,7 @@ python_worker_vp_add_one(const gchar *name,
 /** Main code **/
 
 gboolean
-py_value_pairs_apply(ValuePairs *vp, const LogTemplateOptions *template_options, guint32 seq_num, LogMessage *msg,
+py_value_pairs_apply(ValuePairs *vp, LogTemplateEvalOptions *options, LogMessage *msg,
                      PyObject **dict)
 {
   gpointer args[2];
@@ -120,12 +123,11 @@ py_value_pairs_apply(ValuePairs *vp, const LogTemplateOptions *template_options,
 
   *dict = PyDict_New();
 
-  args[0] = (gpointer) template_options;
+  args[0] = (gpointer) options->opts;
   args[1] = *dict;
 
   vp_ok = value_pairs_foreach(vp, python_worker_vp_add_one,
-                              msg, seq_num, LTZ_LOCAL, template_options,
-                              args);
+                              msg, options, args);
   if (!vp_ok)
     {
       Py_DECREF(*dict);

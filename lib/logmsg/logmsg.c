@@ -170,6 +170,33 @@ TLS_BLOCK_END;
  * LogMessage
  **********************************************************************/
 
+gboolean
+log_msg_is_handle_macro(NVHandle handle)
+{
+  guint16 flags;
+
+  flags = nv_registry_get_handle_flags(logmsg_registry, handle);
+  return !!(flags & LM_VF_MACRO);
+}
+
+gboolean
+log_msg_is_handle_sdata(NVHandle handle)
+{
+  guint16 flags;
+
+  flags = nv_registry_get_handle_flags(logmsg_registry, handle);
+  return !!(flags & LM_VF_SDATA);
+}
+
+gboolean
+log_msg_is_handle_match(NVHandle handle)
+{
+  guint16 flags;
+
+  flags = nv_registry_get_handle_flags(logmsg_registry, handle);
+  return !!(flags & LM_VF_MATCH);
+}
+
 static inline gboolean
 log_msg_chk_flag(const LogMessage *self, gint32 flag)
 {
@@ -203,6 +230,63 @@ const gchar *builtin_value_names[] =
   NULL,
 };
 
+const gchar *
+log_msg_value_type_to_str(LogMessageValueType self)
+{
+  g_assert(self <= LM_VT_NONE);
+
+  static const gchar *as_str[] =
+  {
+    [LM_VT_STRING] = "string",
+    [LM_VT_JSON] = "json",
+    [LM_VT_BOOLEAN] = "boolean",
+    [LM_VT_INT32] = "int32",
+    [LM_VT_INT64] = "int64",
+    [LM_VT_DOUBLE] = "double",
+    [LM_VT_DATETIME] = "datetime",
+    [LM_VT_LIST] = "list",
+    [LM_VT_NULL] = "null",
+    [LM_VT_NONE] = "none",
+  };
+
+  return as_str[self];
+}
+
+gboolean
+log_msg_value_type_from_str(const gchar *in_str, LogMessageValueType *out_type)
+{
+  if (strcmp(in_str, "string") == 0)
+    *out_type = LM_VT_STRING;
+  else if (strcmp(in_str, "json") == 0 || strcmp(in_str, "literal") == 0)
+    *out_type = LM_VT_JSON;
+  else if (strcmp(in_str, "boolean") == 0)
+    *out_type = LM_VT_BOOLEAN;
+  else if (strcmp(in_str, "int32") == 0 || strcmp(in_str, "int") == 0)
+    *out_type = LM_VT_INT32;
+  else if (strcmp(in_str, "int64") == 0)
+    *out_type = LM_VT_INT64;
+  else if (strcmp(in_str, "double") == 0 || strcmp(in_str, "float") == 0)
+    *out_type = LM_VT_DOUBLE;
+  else if (strcmp(in_str, "datetime") == 0)
+    *out_type = LM_VT_DATETIME;
+  else if (strcmp(in_str, "list") == 0)
+    *out_type = LM_VT_LIST;
+  else if (strcmp(in_str, "null") == 0)
+    *out_type = LM_VT_NULL;
+  else if (strcmp(in_str, "none") == 0)
+    *out_type = LM_VT_NONE;
+  else
+    return FALSE;
+
+  return TRUE;
+};
+
+static void
+__free_macro_value(void *val)
+{
+  g_string_free((GString *) val, TRUE);
+}
+
 static NVHandle match_handles[256];
 NVRegistry *logmsg_registry;
 const char logmsg_sd_prefix[] = ".SDATA.";
@@ -213,18 +297,12 @@ static StatsCounterItem *count_msg_clones;
 static StatsCounterItem *count_payload_reallocs;
 static StatsCounterItem *count_sdata_updates;
 static StatsCounterItem *count_allocated_bytes;
-static GStaticPrivate priv_macro_value = G_STATIC_PRIVATE_INIT;
+static GPrivate priv_macro_value = G_PRIVATE_INIT(__free_macro_value);
 
 void
 log_msg_write_protect(LogMessage *self)
 {
-  self->protect_cnt++;
-}
-
-void
-log_msg_write_unprotect(LogMessage *self)
-{
-  self->protect_cnt--;
+  self->protected = TRUE;
 }
 
 LogMessage *
@@ -335,11 +413,25 @@ log_msg_update_sdata_slow(LogMessage *self, NVHandle handle, const gchar *name, 
 static inline void
 log_msg_update_sdata(LogMessage *self, NVHandle handle, const gchar *name, gssize name_len)
 {
-  guint8 flags;
-
-  flags = nv_registry_get_handle_flags(logmsg_registry, handle);
-  if (G_UNLIKELY(flags & LM_VF_SDATA))
+  if (log_msg_is_handle_sdata(handle))
     log_msg_update_sdata_slow(self, handle, name, name_len);
+}
+
+static inline void
+log_msg_update_num_matches(LogMessage *self, NVHandle handle)
+{
+  if (log_msg_is_handle_match(handle))
+    {
+      gint index_ = log_msg_get_match_index(handle);
+
+      /* the whole between num_matches and the new index is emptied out to
+       * avoid leaking of stale values */
+
+      for (gint i = self->num_matches; i < index_; i++)
+        log_msg_unset_match(self, i);
+      if (index_ >= self->num_matches)
+        self->num_matches = index_ + 1;
+    }
 }
 
 NVHandle
@@ -379,59 +471,25 @@ log_msg_is_value_name_valid(const gchar *value)
     return TRUE;
 }
 
-
-static void
-__free_macro_value(void *val)
-{
-  g_string_free((GString *) val, TRUE);
-}
-
 const gchar *
-log_msg_get_macro_value(const LogMessage *self, gint id, gssize *value_len)
+log_msg_get_macro_value(const LogMessage *self, gint id, gssize *value_len, LogMessageValueType *type)
 {
   GString *value;
 
-  value = g_static_private_get(&priv_macro_value);
+  value = g_private_get(&priv_macro_value);
   if (!value)
     {
       value = g_string_sized_new(256);
-      g_static_private_set(&priv_macro_value, value, __free_macro_value);
+      g_private_replace(&priv_macro_value, value);
     }
   g_string_truncate(value, 0);
 
-  log_macro_expand_simple(value, id, self);
+  log_macro_expand_simple(id, self, value, type);
   if (value_len)
     *value_len = value->len;
   return value->str;
 }
 
-gboolean
-log_msg_is_handle_macro(NVHandle handle)
-{
-  guint16 flags;
-
-  flags = nv_registry_get_handle_flags(logmsg_registry, handle);
-  return !!(flags & LM_VF_MACRO);
-}
-
-gboolean
-log_msg_is_handle_sdata(NVHandle handle)
-{
-  guint16 flags;
-
-  flags = nv_registry_get_handle_flags(logmsg_registry, handle);
-  return !!(flags & LM_VF_SDATA);
-}
-
-gboolean
-log_msg_is_handle_match(NVHandle handle)
-{
-  g_assert(match_handles[0] && match_handles[255] && match_handles[0] < match_handles[255]);
-
-  /* NOTE: match_handles are allocated sequentially in log_msg_registry_init(),
-   * so this simple & fast check is enough */
-  return (match_handles[0] <= handle && handle <= match_handles[255]);
-}
 
 static void
 log_msg_init_queue_node(LogMessage *msg, LogMessageQueueNode *node, const LogPathOptions *path_options)
@@ -447,7 +505,7 @@ log_msg_init_queue_node(LogMessage *msg, LogMessageQueueNode *node, const LogPat
  * Allocates a new LogMessageQueueNode instance to be enqueued in a
  * LogQueue.
  *
- * NOTE: Assumed to be runnning in the source thread, and that the same
+ * NOTE: Assumed to be running in the source thread, and that the same
  * LogMessage instance is only put into queue from the same thread (e.g.
  * the related fields are _NOT_ locked).
  */
@@ -517,7 +575,24 @@ _value_invalidates_legacy_header(NVHandle handle)
 }
 
 void
-log_msg_set_value(LogMessage *self, NVHandle handle, const gchar *value, gssize value_len)
+log_msg_rename_value(LogMessage *self, NVHandle from, NVHandle to)
+{
+  if (from == to)
+    return;
+
+  gssize value_len = 0;
+  const gchar *value = log_msg_get_value_if_set(self, from, &value_len);
+  if (!value)
+    return;
+
+  log_msg_set_value(self, to, value, value_len);
+  log_msg_unset_value(self, from);
+}
+
+void
+log_msg_set_value_with_type(LogMessage *self, NVHandle handle,
+                            const gchar *value, gssize value_len,
+                            LogMessageValueType type)
 {
   const gchar *name;
   gssize name_len;
@@ -531,16 +606,17 @@ log_msg_set_value(LogMessage *self, NVHandle handle, const gchar *value, gssize 
   name_len = 0;
   name = log_msg_get_value_name(handle, &name_len);
 
+  if (value_len < 0)
+    value_len = strlen(value);
+
   if (_log_name_value_updates(self))
     {
       msg_trace("Setting value",
                 evt_tag_str("name", name),
-                evt_tag_printf("value", "%.*s", (gint) value_len, value),
-                evt_tag_printf("msg", "%p", self));
+                evt_tag_mem("value", value, value_len),
+                evt_tag_str("type", log_msg_value_type_to_str(type)),
+                evt_tag_msg_reference(self));
     }
-
-  if (value_len < 0)
-    value_len = strlen(value);
 
   if (!log_msg_chk_flag(self, LF_STATE_OWN_PAYLOAD))
     {
@@ -553,7 +629,7 @@ log_msg_set_value(LogMessage *self, NVHandle handle, const gchar *value, gssize 
   /* we need a loop here as a single realloc may not be enough. Might help
    * if we pass how much bytes we need though. */
 
-  while (!nv_table_add_value(self->payload, handle, name, name_len, value, value_len, &new_entry))
+  while (!nv_table_add_value(self->payload, handle, name, name_len, value, value_len, type, &new_entry))
     {
       /* error allocating string in payload, reallocate */
       guint32 old_size = self->payload->size;
@@ -574,14 +650,29 @@ log_msg_set_value(LogMessage *self, NVHandle handle, const gchar *value, gssize 
 
   if (new_entry)
     log_msg_update_sdata(self, handle, name, name_len);
+  log_msg_update_num_matches(self, handle);
 
   if (_value_invalidates_legacy_header(handle))
     log_msg_unset_value(self, LM_V_LEGACY_MSGHDR);
 }
 
 void
+log_msg_set_value(LogMessage *self, NVHandle handle, const gchar *value, gssize value_len)
+{
+  log_msg_set_value_with_type(self, handle, value, value_len, LM_VT_STRING);
+}
+
+void
 log_msg_unset_value(LogMessage *self, NVHandle handle)
 {
+  g_assert(!log_msg_is_write_protected(self));
+
+  if (!log_msg_chk_flag(self, LF_STATE_OWN_PAYLOAD))
+    {
+      self->payload = nv_table_clone(self->payload, 0);
+      log_msg_set_flag(self, LF_STATE_OWN_PAYLOAD);
+    }
+
   while (!nv_table_unset_value(self->payload, handle))
     {
       /* error allocating string in payload, reallocate */
@@ -612,8 +703,9 @@ log_msg_unset_value_by_name(LogMessage *self, const gchar *name)
 }
 
 void
-log_msg_set_value_indirect(LogMessage *self, NVHandle handle, NVHandle ref_handle, guint8 type, guint16 ofs,
-                           guint16 len)
+log_msg_set_value_indirect_with_type(LogMessage *self, NVHandle handle,
+                                     NVHandle ref_handle, guint16 ofs, guint16 len,
+                                     LogMessageValueType type)
 {
   const gchar *name;
   gssize name_len;
@@ -632,11 +724,12 @@ log_msg_set_value_indirect(LogMessage *self, NVHandle handle, NVHandle ref_handl
   if (_log_name_value_updates(self))
     {
       msg_trace("Setting indirect value",
-                evt_tag_printf("msg", "%p", self),
                 evt_tag_str("name", name),
+                evt_tag_str("type", log_msg_value_type_to_str(type)),
                 evt_tag_int("ref_handle", ref_handle),
                 evt_tag_int("ofs", ofs),
-                evt_tag_int("len", len));
+                evt_tag_int("len", len),
+                evt_tag_msg_reference(self));
     }
 
   if (!log_msg_chk_flag(self, LF_STATE_OWN_PAYLOAD))
@@ -650,10 +743,9 @@ log_msg_set_value_indirect(LogMessage *self, NVHandle handle, NVHandle ref_handl
     .handle = ref_handle,
     .ofs = ofs,
     .len = len,
-    .type = type
   };
 
-  while (!nv_table_add_value_indirect(self->payload, handle, name, name_len, &referenced_slice, &new_entry))
+  while (!nv_table_add_value_indirect(self->payload, handle, name, name_len, &referenced_slice, type, &new_entry))
     {
       /* error allocating string in payload, reallocate */
       if (!nv_table_realloc(self->payload, &self->payload))
@@ -669,6 +761,14 @@ log_msg_set_value_indirect(LogMessage *self, NVHandle handle, NVHandle ref_handl
 
   if (new_entry)
     log_msg_update_sdata(self, handle, name, name_len);
+  log_msg_update_num_matches(self, handle);
+}
+
+void
+log_msg_set_value_indirect(LogMessage *self, NVHandle handle, NVHandle ref_handle,
+                           guint16 ofs, guint16 len)
+{
+  log_msg_set_value_indirect_with_type(self, handle, ref_handle, ofs, len, LM_VT_STRING);
 }
 
 gboolean
@@ -677,34 +777,107 @@ log_msg_values_foreach(const LogMessage *self, NVTableForeachFunc func, gpointer
   return nv_table_foreach(self->payload, logmsg_registry, func, user_data);
 }
 
-void
-log_msg_set_match(LogMessage *self, gint index_, const gchar *value, gssize value_len)
+NVHandle
+log_msg_get_match_handle(gint index_)
 {
-  g_assert(index_ < 256);
+  if (index_ >= 0 && index_ < LOGMSG_MAX_MATCHES)
+    return match_handles[index_];
 
-  if (index_ >= self->num_matches)
-    self->num_matches = index_ + 1;
-  log_msg_set_value(self, match_handles[index_], value, value_len);
+  return LM_V_NONE;
+}
+
+gint
+log_msg_get_match_index(NVHandle handle)
+{
+  gint index_ = handle - match_handles[0];
+
+  g_assert(index_ >= 0 && index_ < LOGMSG_MAX_MATCHES);
+  return index_;
 }
 
 void
-log_msg_set_match_indirect(LogMessage *self, gint index_, NVHandle ref_handle, guint8 type, guint16 ofs, guint16 len)
+log_msg_set_match_with_type(LogMessage *self, gint index_,
+                            const gchar *value, gssize value_len,
+                            LogMessageValueType type)
 {
-  g_assert(index_ < 256);
+  if (index_ >= 0 && index_ < LOGMSG_MAX_MATCHES)
+    log_msg_set_value_with_type(self, match_handles[index_], value, value_len, type);
+}
 
-  log_msg_set_value_indirect(self, match_handles[index_], ref_handle, type, ofs, len);
+void
+log_msg_set_match(LogMessage *self, gint index_, const gchar *value, gssize value_len)
+{
+  log_msg_set_match_with_type(self, index_, value, value_len, LM_VT_STRING);
+}
+
+
+void
+log_msg_set_match_indirect_with_type(LogMessage *self, gint index_,
+                                     NVHandle ref_handle, guint16 ofs, guint16 len,
+                                     LogMessageValueType type)
+{
+  if (index_ >= 0 && index_ < LOGMSG_MAX_MATCHES)
+    log_msg_set_value_indirect_with_type(self, match_handles[index_], ref_handle, ofs, len, type);
+}
+
+void
+log_msg_set_match_indirect(LogMessage *self, gint index_, NVHandle ref_handle, guint16 ofs, guint16 len)
+{
+  log_msg_set_match_indirect_with_type(self, index_, ref_handle, ofs, len, LM_VT_STRING);
+}
+
+const gchar *
+log_msg_get_match_if_set_with_type(const LogMessage *self, gint index_, gssize *value_len,
+                                   LogMessageValueType *type)
+{
+  if (index_ >= 0 && index_ < LOGMSG_MAX_MATCHES)
+    return nv_table_get_value(self->payload, match_handles[index_], value_len, type);
+  return NULL;
+}
+
+const gchar *
+log_msg_get_match_with_type(const LogMessage *self, gint index_, gssize *value_len,
+                            LogMessageValueType *type)
+{
+  const gchar *result = log_msg_get_match_if_set_with_type(self, index_, value_len, type);
+
+  if (result)
+    return result;
+
+  if (value_len)
+    *value_len = 0;
+  if (type)
+    *type = LM_VT_NULL;
+  return "";
+}
+
+const gchar *
+log_msg_get_match(const LogMessage *self, gint index_, gssize *value_len)
+{
+  return log_msg_get_match_with_type(self, index_, value_len, NULL);
+}
+
+void
+log_msg_unset_match(LogMessage *self, gint index_)
+{
+  if (index_ >= 0 && index_ < LOGMSG_MAX_MATCHES)
+    log_msg_unset_value(self, match_handles[index_]);
+}
+
+void
+log_msg_truncate_matches(LogMessage *self, gint n)
+{
+  if (n < 0)
+    n = 0;
+  for (gint i = n; i < self->num_matches; i++)
+    log_msg_unset_match(self, i);
+  self->num_matches = n;
 }
 
 void
 log_msg_clear_matches(LogMessage *self)
 {
-  gint i;
-
-  for (i = 0; i < self->num_matches; i++)
-    {
-      log_msg_set_value(self, match_handles[i], "", 0);
-    }
-  self->num_matches = 0;
+  log_msg_truncate_matches(self, 0);
 }
 
 #if GLIB_SIZEOF_LONG != GLIB_SIZEOF_VOID_P
@@ -786,6 +959,11 @@ log_msg_set_tag_by_id_onoff(LogMessage *self, LogTagId id, gboolean on)
   gboolean inline_tags;
 
   g_assert(!log_msg_is_write_protected(self));
+
+  msg_trace("Setting tag",
+            evt_tag_str("name", log_tags_get_by_id(id)),
+            evt_tag_int("value", on),
+            evt_tag_printf("msg", "%p", self));
   if (!log_msg_chk_flag(self, LF_STATE_OWN_TAGS) && self->num_tags)
     {
       self->tags = g_memdup(self->tags, sizeof(self->tags[0]) * self->num_tags);
@@ -1086,11 +1264,27 @@ log_msg_append_tags_callback(const LogMessage *self, LogTagId tag_id, const gcha
 }
 
 void
-log_msg_print_tags(const LogMessage *self, GString *result)
+log_msg_format_tags(const LogMessage *self, GString *result)
 {
   gpointer args[] = { result, GUINT_TO_POINTER(result->len) };
 
   log_msg_tags_foreach(self, log_msg_append_tags_callback, args);
+}
+
+void
+log_msg_format_matches(const LogMessage *self, GString *result)
+{
+  gsize original_length = result->len;
+
+  for (gint i = 1; i < self->num_matches; i++)
+    {
+      if (result->len > original_length)
+        g_string_append_c(result, ',');
+
+      gssize len;
+      const gchar *m = log_msg_get_match(self, i, &len);
+      str_repr_encode_append(result, m, len, ",");
+    }
 }
 
 void
@@ -1174,9 +1368,12 @@ log_msg_clear(LogMessage *self)
         memset(self->tags, 0, self->num_tags * sizeof(self->tags[0]));
     }
   else
-    self->tags = NULL;
+    {
+      self->tags = NULL;
+      self->num_tags = 0;
+    }
 
-  self->num_matches = 0;
+  log_msg_clear_matches(self);
   if (!log_msg_chk_flag(self, LF_STATE_OWN_SDATA))
     {
       self->sdata = NULL;
@@ -1191,7 +1388,8 @@ log_msg_clear(LogMessage *self)
     g_sockaddr_unref(self->daddr);
   self->daddr = NULL;
 
-  self->flags |= LF_STATE_OWN_MASK;
+  /* clear "local", "utf8", "internal", "mark" and similar flags, we start afresh */
+  self->flags = LF_STATE_OWN_MASK;
 }
 
 static inline LogMessage *
@@ -1226,12 +1424,14 @@ log_msg_alloc(gsize payload_size)
 }
 
 static gboolean
-_merge_value(NVHandle handle, const gchar *name, const gchar *value, gssize value_len, gpointer user_data)
+_merge_value(NVHandle handle,
+             const gchar *name, const gchar *value, gssize value_len,
+             LogMessageValueType type, gpointer user_data)
 {
   LogMessage *msg = (LogMessage *) user_data;
 
   if (!nv_table_is_value_set(msg->payload, handle))
-    log_msg_set_value(msg, handle, value, value_len);
+    log_msg_set_value_with_type(msg, handle, value, value_len, type);
   return FALSE;
 }
 
@@ -1277,7 +1477,7 @@ log_msg_clone_cow(LogMessage *msg, const LogPathOptions *path_options)
 
   msg_trace("Message was cloned",
             evt_tag_printf("original_msg", "%p", msg),
-            evt_tag_printf("new_msg", "%p", self));
+            evt_tag_msg_reference(self));
 
   /* every field _must_ be initialized explicitly if its direct
    * copying would cause problems (like copying a pointer by value) */
@@ -1287,7 +1487,7 @@ log_msg_clone_cow(LogMessage *msg, const LogPathOptions *path_options)
   self->ack_and_ref_and_abort_and_suspended = LOGMSG_REFCACHE_REF_TO_VALUE(1) + LOGMSG_REFCACHE_ACK_TO_VALUE(
                                                 0) + LOGMSG_REFCACHE_ABORT_TO_VALUE(0);
   self->cur_node = 0;
-  self->protect_cnt = 0;
+  self->protected = FALSE;
 
   log_msg_add_ack(self, path_options);
   if (!path_options->ack_needed)
@@ -1306,45 +1506,19 @@ log_msg_clone_cow(LogMessage *msg, const LogPathOptions *path_options)
   return self;
 }
 
-static gsize
-_determine_payload_size(gint length, MsgFormatOptions *parse_options)
-{
-  gsize payload_size;
-
-  if ((parse_options->flags & LP_STORE_RAW_MESSAGE))
-    payload_size = length * 4;
-  else
-    payload_size = length * 2;
-
-  return MAX(payload_size, 256);
-}
-
-/**
- * log_msg_new:
- * @msg: message to parse
- * @length: length of @msg
- * @flags: parse flags (LP_*)
- *
- * This function allocates, parses and returns a new LogMessage instance.
- **/
 LogMessage *
-log_msg_new(const gchar *msg, gint length,
-            MsgFormatOptions *parse_options)
+log_msg_sized_new(gsize payload_size)
 {
-  LogMessage *self = log_msg_alloc(_determine_payload_size(length, parse_options));
+  LogMessage *self = log_msg_alloc(payload_size);
 
   log_msg_init(self);
-  msg_format_parse(parse_options, (guchar *) msg, length, self);
   return self;
 }
 
 LogMessage *
 log_msg_new_empty(void)
 {
-  LogMessage *self = log_msg_alloc(256);
-
-  log_msg_init(self);
-  return self;
+  return log_msg_sized_new(256);
 }
 
 /* This function creates a new log message that should be considered local */
@@ -1834,12 +2008,13 @@ log_msg_registry_init(void)
     }
 
   /* register $0 - $255 in order */
-  for (i = 0; i < 256; i++)
+  for (i = 0; i < LOGMSG_MAX_MATCHES; i++)
     {
       gchar buf[8];
 
       g_snprintf(buf, sizeof(buf), "%d", i);
       match_handles[i] = nv_registry_alloc_handle(logmsg_registry, buf);
+      nv_registry_set_handle_flags(logmsg_registry, match_handles[i], (i << 8) + LM_VF_MATCH);
     }
 }
 
@@ -1883,7 +2058,7 @@ log_msg_global_init(void)
   /* NOTE: we always initialize counters as they are on stats-level(0),
    * however we need to defer that as the stats subsystem may not be
    * operational yet */
-  register_application_hook(AH_RUNNING, (ApplicationHookFunc) log_msg_register_stats, NULL);
+  register_application_hook(AH_RUNNING, (ApplicationHookFunc) log_msg_register_stats, NULL, AHM_RUN_ONCE);
 }
 
 

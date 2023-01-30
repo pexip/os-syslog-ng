@@ -1,12 +1,16 @@
 EXTRA_DIST += \
 	dbld/functions.sh \
 	dbld/tarball \
+	dbld/tarball-changes.ignore \
 	dbld/pkg-tarball \
 	dbld/package \
 	dbld/rpm \
 	dbld/deb \
 	dbld/generate-rpm-specfile \
 	dbld/generate-debian-directory \
+	dbld/prepare-image-build \
+	dbld/prepare-release \
+	dbld/builddeps \
 	dbld/shell \
 	dbld/rules \
 	dbld/bootstrap	\
@@ -23,13 +27,19 @@ EXTRA_DIST += \
 	dbld/images/centos.prepare.sh \
 	dbld/images/fedora.prepare.sh \
 	dbld/images/devshell.dockerfile \
-	dbld/images/centos-6.dockerfile \
 	dbld/images/centos-7.dockerfile \
-	dbld/images/fedora-32.dockerfile \
+	dbld/images/fedora-35.dockerfile \
 	dbld/images/debian-stretch.dockerfile \
 	dbld/images/debian-buster.dockerfile \
+	dbld/images/debian-bullseye.dockerfile \
+	dbld/images/debian-sid.dockerfile \
+	dbld/images/debian-testing.dockerfile \
 	dbld/images/ubuntu-xenial.dockerfile \
 	dbld/images/ubuntu-bionic.dockerfile \
 	dbld/images/ubuntu-focal.dockerfile \
+	dbld/images/ubuntu-jammy.dockerfile \
+	dbld/images/kira.dockerfile \
+	dbld/images/tarball.dockerfile \
+	dbld/images/hooks/build \
 	dbld/images/README.md \
 	dbld/README.md

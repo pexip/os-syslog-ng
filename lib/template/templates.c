@@ -30,59 +30,132 @@
 #include "cfg.h"
 
 gboolean
+log_template_is_literal_string(const LogTemplate *self)
+{
+  return self->literal;
+}
+
+const gchar *
+log_template_get_literal_value(const LogTemplate *self, gssize *value_len)
+{
+  g_assert(self->literal);
+
+  if (!self->compiled_template)
+    return "";
+
+  LogTemplateElem *e = (LogTemplateElem *) self->compiled_template->data;
+
+  if (value_len)
+    *value_len = e->text_len;
+
+  return e->text;
+}
+
+gboolean
 log_template_is_trivial(LogTemplate *self)
 {
   return self->trivial;
 }
 
-const gchar *
-log_template_get_trivial_value(LogTemplate *self, LogMessage *msg, gssize *value_len)
+NVHandle
+log_template_get_trivial_value_handle(LogTemplate *self)
 {
   g_assert(self->trivial);
+
+  if (self->literal)
+    return LM_V_NONE;
 
   LogTemplateElem *e = (LogTemplateElem *) self->compiled_template->data;
 
   switch (e->type)
     {
     case LTE_MACRO:
-      if (e->text_len > 0)
-        {
-          if (value_len)
-            *value_len = e->text_len;
-          return e->text;
-        }
-      else if (e->macro == M_MESSAGE)
-        return log_msg_get_value(msg, LM_V_MESSAGE, value_len);
+      if (e->macro == M_MESSAGE)
+        return LM_V_MESSAGE;
       else if (e->macro == M_HOST)
-        return log_msg_get_value(msg, LM_V_HOST, value_len);
-      g_assert_not_reached();
+        return LM_V_HOST;
+      else
+        g_assert_not_reached();
+      break;
     case LTE_VALUE:
-      return log_msg_get_value(msg, e->value_handle, value_len);
+      return e->value_handle;
     default:
       g_assert_not_reached();
     }
 }
 
+const gchar *
+log_template_get_trivial_value_and_type(LogTemplate *self, LogMessage *msg, gssize *value_len,
+                                        LogMessageValueType *type)
+{
+  LogMessageValueType t = LM_VT_STRING;
+  const gchar *result = "";
+  gssize result_len = 0;
+
+  g_assert(self->trivial);
+
+  if (self->literal)
+    {
+      result = log_template_get_literal_value(self, &result_len);
+    }
+  else
+    {
+      NVHandle handle = log_template_get_trivial_value_handle(self);
+      g_assert(handle != LM_V_NONE);
+
+      result = log_msg_get_value_with_type(msg, handle, &result_len, &t);
+    }
+
+  if (type)
+    {
+      *type = self->type_hint == LM_VT_NONE ? t : self->type_hint;
+    }
+  if (value_len)
+    *value_len = result_len;
+  return result;
+}
+
+const gchar *
+log_template_get_trivial_value(LogTemplate *self, LogMessage *msg, gssize *value_len)
+{
+  return log_template_get_trivial_value_and_type(self, msg, value_len, NULL);
+}
+
 static gboolean
-_calculate_triviality(LogTemplate *self)
+_calculate_if_literal(LogTemplate *self)
+{
+  if (!self->compiled_template)
+    return TRUE;
+
+  if (self->escape || self->compiled_template->next)
+    return FALSE;
+
+  return log_template_elem_is_literal_string((LogTemplateElem *) self->compiled_template->data);
+}
+
+static gboolean
+_calculate_if_trivial(LogTemplate *self)
 {
   /* if we need to escape, that's not trivial */
   if (self->escape)
     return FALSE;
 
-  /* no compiled template */
+  /* empty templates are trivial */
   if (self->compiled_template == NULL)
-    return FALSE;
+    return TRUE;
 
   /* more than one element */
   if (self->compiled_template->next != NULL)
     return FALSE;
 
-  LogTemplateElem *e = (LogTemplateElem *) self->compiled_template->data;
+  const LogTemplateElem *e = (LogTemplateElem *) self->compiled_template->data;
 
   /* reference to non-last element of the context, that's not trivial */
   if (e->msg_ref > 0)
     return FALSE;
+
+  if (log_template_elem_is_literal_string(e))
+    return TRUE;
 
   switch (e->type)
     {
@@ -90,10 +163,6 @@ _calculate_triviality(LogTemplate *self)
       /* functions are never trivial */
       return FALSE;
     case LTE_MACRO:
-      /* Macros are trivial if they only contain a text but not a real
-       * macro.  Empty strings are represented this way.  */
-      if (e->macro == M_NONE)
-        return TRUE;
       if (e->text_len > 0)
         return FALSE;
 
@@ -136,7 +205,66 @@ log_template_compile(LogTemplate *self, const gchar *template, GError **error)
   result = log_template_compiler_compile(&compiler, &self->compiled_template, error);
   log_template_compiler_clear(&compiler);
 
-  self->trivial = _calculate_triviality(self);
+  self->literal = _calculate_if_literal(self);
+  self->trivial = _calculate_if_trivial(self);
+  return result;
+}
+
+static void
+_split_type_and_template(gchar *spec, gchar **value, gchar **type)
+{
+  char *sp, *ep;
+
+  *type = NULL;
+  sp = spec;
+
+  while (g_ascii_isalnum(*sp) || (*sp) == '_')
+    sp++;
+
+  while (*sp == ' ' || *sp == '\t')
+    sp++;
+
+  if (*sp != '(' ||
+      !((g_ascii_toupper(spec[0]) >= 'A' &&
+         g_ascii_toupper(spec[0]) <= 'Z') ||
+        spec[0] == '_'))
+    {
+      *value = spec;
+      return;
+    }
+
+  ep = strrchr(sp, ')');
+  if (ep == NULL || ep[1] != '\0')
+    {
+      *value = spec;
+      return;
+    }
+
+  *value = sp + 1;
+  *type = spec;
+  sp[0] = '\0';
+  ep[0] = '\0';
+}
+
+gboolean
+log_template_compile_with_type_hint(LogTemplate *self, const gchar *template_and_typehint, GError **error)
+{
+  gchar *buf = g_strdup(template_and_typehint);
+  gchar *template_string = NULL;
+  gchar *typehint_string = NULL;
+  gboolean result = FALSE;
+
+  g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
+
+  _split_type_and_template(buf, &template_string, &typehint_string);
+  if (!log_template_compile(self, template_string, error))
+    goto exit;
+  if (!log_template_set_type_hint(self, typehint_string, error))
+    goto exit;
+
+  result = TRUE;
+exit:
+  g_free(buf);
   return result;
 }
 
@@ -148,6 +276,12 @@ log_template_compile_literal_string(LogTemplate *self, const gchar *literal)
   self->template = g_strdup(literal);
   self->compiled_template = g_list_append(self->compiled_template,
                                           log_template_elem_new_macro(literal, M_NONE, NULL, 0));
+
+  /* double check that the representation here is actually considered trivial. It should be. */
+  g_assert(_calculate_if_trivial(self));
+
+  self->literal = TRUE;
+  self->trivial = TRUE;
 }
 
 void
@@ -160,127 +294,26 @@ gboolean
 log_template_set_type_hint(LogTemplate *self, const gchar *type_hint, GError **error)
 {
   g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
+  gboolean result;
 
-  return type_hint_parse(type_hint, &self->type_hint, error);
-}
-
-void
-log_template_append_format_with_context(LogTemplate *self, LogMessage **messages, gint num_messages,
-                                        const LogTemplateOptions *opts, gint tz, gint32 seq_num, const gchar *context_id, GString *result)
-{
-  GList *p;
-  LogTemplateElem *e;
-
-  if (!opts)
-    opts = &self->cfg->template_options;
-
-  for (p = self->compiled_template; p; p = g_list_next(p))
+  if (!type_hint)
     {
-      gint msg_ndx;
-
-      e = (LogTemplateElem *) p->data;
-      if (e->text)
-        {
-          g_string_append_len(result, e->text, e->text_len);
-        }
-
-      /* NOTE: msg_ref is 1 larger than the index specified by the user in
-       * order to make it distinguishable from the zero value.  Therefore
-       * the '>' instead of '>='
-       *
-       * msg_ref == 0 means that the user didn't specify msg_ref
-       * msg_ref >= 1 means that the user supplied the given msg_ref, 1 is equal to @0 */
-      if (e->msg_ref > num_messages)
-        continue;
-      msg_ndx = num_messages - e->msg_ref;
-
-      /* value and macro can't understand a context, assume that no msg_ref means @0 */
-      if (e->msg_ref == 0)
-        msg_ndx--;
-
-      switch (e->type)
-        {
-        case LTE_VALUE:
-        {
-          const gchar *value = NULL;
-          gssize value_len = -1;
-
-          value = log_msg_get_value(messages[msg_ndx], e->value_handle, &value_len);
-          if (value && value[0])
-            result_append(result, value, value_len, self->escape);
-          else if (e->default_value)
-            result_append(result, e->default_value, -1, self->escape);
-          break;
-        }
-        case LTE_MACRO:
-        {
-          gint len = result->len;
-
-          if (e->macro)
-            {
-              log_macro_expand(result, e->macro, self->escape, opts ? opts : &self->cfg->template_options, tz, seq_num, context_id,
-                               messages[msg_ndx]);
-              if (len == result->len && e->default_value)
-                g_string_append(result, e->default_value);
-            }
-          break;
-        }
-        case LTE_FUNC:
-        {
-          if (1)
-            {
-              LogTemplateInvokeArgs args =
-              {
-                e->msg_ref ? &messages[msg_ndx] : messages,
-                e->msg_ref ? 1 : num_messages,
-                opts,
-                tz,
-                seq_num,
-                context_id
-              };
-
-
-              /* if a function call is called with an msg_ref, we only
-               * pass that given logmsg to argument resolution, otherwise
-               * we pass the whole set so the arguments can individually
-               * specify which message they want to resolve from
-               */
-              if (e->func.ops->eval)
-                e->func.ops->eval(e->func.ops, e->func.state, &args);
-              e->func.ops->call(e->func.ops, e->func.state, &args, result);
-            }
-          break;
-        }
-        default:
-          g_assert_not_reached();
-          break;
-        }
+      self->explicit_type_hint = LM_VT_NONE;
+      result = TRUE;
     }
-}
+  else if (!type_hint_parse(type_hint, &self->explicit_type_hint, error))
+    {
+      self->explicit_type_hint = LM_VT_NONE;
+      result = FALSE;
+    }
+  else
+    {
+      result = TRUE;
+    }
 
-void
-log_template_format_with_context(LogTemplate *self, LogMessage **messages, gint num_messages,
-                                 const LogTemplateOptions *opts, gint tz, gint32 seq_num, const gchar *context_id, GString *result)
-{
-  g_string_truncate(result, 0);
-  log_template_append_format_with_context(self, messages, num_messages, opts, tz, seq_num, context_id, result);
+  self->type_hint = self->explicit_type_hint;
+  return result;
 }
-
-void
-log_template_append_format(LogTemplate *self, LogMessage *lm, const LogTemplateOptions *opts, gint tz, gint32 seq_num,
-                           const gchar *context_id, GString *result)
-{
-  log_template_append_format_with_context(self, &lm, 1, opts, tz, seq_num, context_id, result);
-}
-
-void
-log_template_format(LogTemplate *self, LogMessage *lm, const LogTemplateOptions *opts, gint tz, gint32 seq_num,
-                    const gchar *context_id, GString *result)
-{
-  g_string_truncate(result, 0);
-  log_template_append_format(self, lm, opts, tz, seq_num, context_id, result);
-}
-
 
 /* NOTE: we should completely get rid off the name property of templates,
  * we basically use it at two locations:
@@ -321,6 +354,11 @@ log_template_new(GlobalConfig *cfg, const gchar *name)
   log_template_set_name(self, name);
   g_atomic_counter_set(&self->ref_cnt, 1);
   self->cfg = cfg;
+  if (cfg_is_config_version_older(cfg, VERSION_VALUE_4_0))
+    self->type_hint = LM_VT_STRING;
+  else
+    self->type_hint = LM_VT_NONE;
+  self->explicit_type_hint = LM_VT_NONE;
   return self;
 }
 
@@ -372,6 +410,24 @@ log_template_options_init(LogTemplateOptions *options, GlobalConfig *cfg)
     options->on_error = cfg->template_options.on_error;
   options->use_fqdn = cfg->host_resolve_options.use_fqdn;
   options->initialized = TRUE;
+}
+
+void
+log_template_options_clone(LogTemplateOptions *source, LogTemplateOptions *dest)
+{
+  dest->ts_format = source->ts_format;
+  for (gint i = 0; i < LTZ_MAX; i++)
+    {
+      if (source->time_zone[i])
+        dest->time_zone[i] = g_strdup(source->time_zone[i]);
+    }
+  dest->frac_digits = source->frac_digits;
+  dest->on_error = source->on_error;
+  dest->use_fqdn = source->use_fqdn;
+
+  /* NOTE: this still needs to be initialized by the owner as clone results
+   * in an uninitialized state.  */
+  dest->initialized = FALSE;
 }
 
 void
@@ -454,4 +510,17 @@ void
 log_template_options_set_on_error(LogTemplateOptions *options, gint on_error)
 {
   options->on_error = on_error;
+}
+
+EVTTAG *
+evt_tag_template(const gchar *name, LogTemplate *template, LogMessage *msg, LogTemplateEvalOptions *options)
+{
+  /* trying to avoid scratch-buffers here, this is only meant to be used in trace messages */
+  GString *buf = g_string_sized_new(256);
+
+  log_template_format(template, msg, options, buf);
+
+  EVTTAG *result = evt_tag_str(name, buf->str);
+  g_string_free(buf, TRUE);
+  return result;
 }

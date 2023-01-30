@@ -23,6 +23,7 @@
  */
 
 #include <criterion/criterion.h>
+
 #include "stats/stats-cluster.h"
 #include "stats/stats-cluster-single.h"
 #include "apphook.h"
@@ -45,6 +46,25 @@ Test(stats_cluster, test_stats_cluster_single)
   sc = stats_cluster_new(&sc_key);
   cr_assert_str_eq(sc->query_key, "global.logmsg_allocated_bytes", "Unexpected query key");
   cr_assert_eq(sc->counter_group.capacity, 1, "Invalid group capacity");
+  stats_cluster_free(sc);
+}
+
+Test(stats_cluster, test_stats_cluster_single_with_name_with_heap_allocated_string)
+{
+  const gchar *string_literal_name = "test_name";
+  StatsCluster *sc;
+  StatsClusterKey sc_key;
+
+  GString *heap_allocated_name = g_string_new(string_literal_name);
+  stats_cluster_single_key_set_with_name(&sc_key, SCS_GLOBAL, "id", "instance", heap_allocated_name->str);
+
+  sc = stats_cluster_new(&sc_key);
+
+  g_string_truncate(heap_allocated_name, 0);
+  g_string_free(heap_allocated_name, TRUE);
+  cr_assert_str_eq(sc->counter_group.counter_names[0], string_literal_name,
+                   "Unexpected counter name: %s", sc->counter_group.counter_names[0]);
+
   stats_cluster_free(sc);
 }
 

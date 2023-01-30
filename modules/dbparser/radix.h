@@ -48,6 +48,7 @@ enum
   RPT_HOSTNAME,
   RPT_LLADDR,
   RPT_NLSTRING,
+  RPT_OPTIONALSET,
 };
 
 typedef struct _RParserMatch
@@ -75,7 +76,8 @@ typedef struct _RParserNode
 
   gchar first;
   gchar last;
-  guint8 type;
+  guint8 parser_type;
+  LogMessageValueType value_type;
   NVHandle handle;
 
   gboolean (*parse)(gchar *str, gint *len, const gchar *param, gpointer state, RParserMatch *match);
@@ -92,6 +94,7 @@ struct _RNode
   gint keylen;
   RParserNode *parser;
   gpointer value;
+  gchar *pdb_location;
   guint num_children;
   RNode **children;
 
@@ -141,6 +144,10 @@ r_parser_type_name(guint8 type)
       return "HOSTNAME";
     case RPT_LLADDR:
       return "LLADDR";
+    case RPT_PCRE:
+      return "PCRE";
+    case RPT_NLSTRING:
+      return "NLSTRING";
     default:
       return "UNKNOWN";
     }
@@ -148,7 +155,7 @@ r_parser_type_name(guint8 type)
 
 RNode *r_new_node(const gchar *key, gpointer value);
 void r_free_node(RNode *node, void (*free_fn)(gpointer data));
-void r_insert_node(RNode *root, gchar *key, gpointer value, RNodeGetValueFunc value_func);
+void r_insert_node(RNode *root, gchar *key, gpointer value, RNodeGetValueFunc value_func, const gchar *location);
 RNode *r_find_node(RNode *root, gchar *key, gint keylen, GArray *matches);
 RNode *r_find_node_dbg(RNode *root, gchar *key, gint keylen, GArray *matches, GArray *dbg_list);
 gchar **r_find_all_applicable_nodes(RNode *root, gchar *key, gint keylen, RNodeGetValueFunc value_func);

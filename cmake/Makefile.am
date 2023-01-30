@@ -7,7 +7,6 @@ EXTRA_DIST +=	\
 	cmake/Modules/CheckSockaddrStorage.cmake	\
 	cmake/Modules/CheckStructMember.cmake	\
 	cmake/Modules/ExternalIVYKIS.cmake	\
-	cmake/Modules/ExternalJSONC.cmake	\
 	cmake/Modules/Findcriterion.cmake	\
 	cmake/Modules/FindCurl.cmake	\
 	cmake/Modules/FindESMTP.cmake	\
@@ -20,17 +19,17 @@ EXTRA_DIST +=	\
 	cmake/Modules/FindIVYKIS.cmake	\
 	cmake/Modules/FindJSONC.cmake	\
 	cmake/Modules/FindLIBCAP.cmake	\
-	cmake/Modules/FindLibDBI.cmake	\
-	cmake/Modules/FindLibMaxMindDB.cmake	\
-	cmake/Modules/FindLibNet.cmake	\
-	cmake/Modules/FindNetSnmp.cmake	\
+	cmake/Modules/FindLIBDBI.cmake	\
+	cmake/Modules/FindLIBMAXMINDDB.cmake	\
+	cmake/Modules/FindLIBNET.cmake	\
+	cmake/Modules/FindNETSNMP.cmake	\
 	cmake/Modules/FindPackageMessage.cmake	\
 	cmake/Modules/FindRabbitMQ.cmake	\
 	cmake/Modules/Findrdkafka.cmake	\
 	cmake/Modules/FindResolv.cmake	\
 	cmake/Modules/FindRiemannClient.cmake	\
 	cmake/Modules/Findsystemd.cmake	\
-	cmake/Modules/FindWrap.cmake	\
+	cmake/Modules/FindWRAP.cmake	\
 	cmake/Modules/GenerateYFromYm.cmake	\
 	cmake/Modules/LibFindMacros.cmake	\
 	cmake/module_switch.cmake		\

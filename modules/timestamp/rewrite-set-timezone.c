@@ -55,7 +55,7 @@ _process(LogRewrite *s, LogMessage **pmsg, const LogPathOptions *path_options)
   GString *result = scratch_buffers_alloc();
   LogMessage *msg = *pmsg;
 
-  log_template_format(self->zone_template, *pmsg, NULL, LTZ_LOCAL, 0, NULL, result);
+  log_template_format(self->zone_template, *pmsg, &DEFAULT_TEMPLATE_EVAL_OPTIONS, result);
 
   UnixTime stamp = msg->timestamps[self->stamp];
   glong orig_gmtoff = stamp.ut_gmtoff;
@@ -84,8 +84,7 @@ _clone(LogPipe *s)
 
   rewrite_set_time_zone_set_zone_template_ref(cloned, log_template_ref(self->zone_template));
   rewrite_set_time_zone_set_time_stamp(cloned, self->stamp);
-  if (self->super.condition)
-    cloned->condition = filter_expr_ref(self->super.condition);
+  cloned->condition = filter_expr_clone(self->super.condition);
 
   return &cloned->super;
 }

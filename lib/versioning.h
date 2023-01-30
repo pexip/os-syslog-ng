@@ -123,6 +123,18 @@
 #define VERSION_3_26 "syslog-ng 3.26"
 #define VERSION_3_27 "syslog-ng 3.27"
 #define VERSION_3_28 "syslog-ng 3.28"
+#define VERSION_3_29 "syslog-ng 3.29"
+#define VERSION_3_30 "syslog-ng 3.30"
+#define VERSION_3_31 "syslog-ng 3.31"
+#define VERSION_3_32 "syslog-ng 3.32"
+#define VERSION_3_33 "syslog-ng 3.33"
+#define VERSION_3_34 "syslog-ng 3.34"
+#define VERSION_3_35 "syslog-ng 3.35"
+#define VERSION_3_36 "syslog-ng 3.36"
+#define VERSION_3_37 "syslog-ng 3.37"
+#define VERSION_3_38 "syslog-ng 3.38"
+
+#define VERSION_4_0 "syslog-ng 4.0"
 
 /* VERSION_VALUE_* references versions as integers to be compared against stuff like cfg->user_version */
 /* VERSION_STR_* references versions as strings to be shown to the user */
@@ -156,20 +168,38 @@
 #define VERSION_VALUE_3_26 0x031a
 #define VERSION_VALUE_3_27 0x031b
 #define VERSION_VALUE_3_28 0x031c
+#define VERSION_VALUE_3_29 0x031d
+#define VERSION_VALUE_3_30 0x031e
+#define VERSION_VALUE_3_31 0x031f
+#define VERSION_VALUE_3_32 0x0320
+#define VERSION_VALUE_3_33 0x0321
+#define VERSION_VALUE_3_34 0x0322
+#define VERSION_VALUE_3_35 0x0323
+#define VERSION_VALUE_3_36 0x0324
+#define VERSION_VALUE_3_37 0x0325
+#define VERSION_VALUE_3_38 0x0326
+
+/* these are defined to allow 4.0 related changes to be introduced while we
+ * are still producing 3.x releases. */
+#define VERSION_VALUE_4_0     0x0400
 
 /* config version code, in the same format as GlobalConfig->version */
-#define VERSION_VALUE_CURRENT   VERSION_VALUE_3_28
-#define VERSION_STR_CURRENT     "3.28"
-#define VERSION_PRODUCT_CURRENT VERSION_3_28
+#define VERSION_VALUE_CURRENT   VERSION_VALUE_3_38
+#define VERSION_STR_CURRENT     "3.38"
+#define VERSION_PRODUCT_CURRENT VERSION_3_38
 
 /* this value points to the last syslog-ng version where we changed the
  * meaning of any setting in the configuration file.  Basically, it is the
  * highest value passed to any cfg_is_config_version_older() call.
  */
-#define VERSION_VALUE_LAST_SEMANTIC_CHANGE  VERSION_VALUE_3_22
-#define VERSION_STR_LAST_SEMANTIC_CHANGE    "3.22"
+#define VERSION_VALUE_LAST_SEMANTIC_CHANGE  VERSION_VALUE_3_35
+#define VERSION_STR_LAST_SEMANTIC_CHANGE    "3.35"
 
 #define version_convert_from_user(v)  (v)
+
+/* version based feature flips */
+#define VERSION_VALUE_NEXT_MAJOR         VERSION_VALUE_4_0
+#define FEATURE_TYPING_MIN_VERSION       VERSION_VALUE_4_0
 
 #include "pe-versioning.h"
 #endif

@@ -21,15 +21,13 @@
  *
  */
 
-#include "syslog-ng.h"
+#include <criterion/criterion.h>
+#include "libtest/msg_parse_lib.h"
 
-#include "msg_parse_lib.h"
 #include "apphook.h"
 #include "plugin.h"
 #include "plugin-types.h"
 #include "scratch-buffers.h"
-
-#include <criterion/criterion.h>
 
 MsgFormatOptions parse_options;
 
@@ -38,7 +36,7 @@ kmsg_parse_message(const gchar *raw_message_str)
 {
   LogMessage *message;
 
-  message = log_msg_new(raw_message_str, strlen(raw_message_str), &parse_options);
+  message = msg_format_parse(&parse_options, (const guchar *) raw_message_str, strlen(raw_message_str));
   return message;
 }
 

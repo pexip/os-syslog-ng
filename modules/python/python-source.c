@@ -29,6 +29,8 @@
 #include "str-utils.h"
 #include "string-list.h"
 #include "python-persist.h"
+#include "python-ack-tracker.h"
+#include "python-bookmark.h"
 
 #include <structmember.h>
 
@@ -54,6 +56,7 @@ struct _PythonSourceDriver
     PyObject *suspend_method;
     PyObject *wakeup_method;
     PyObject *generate_persist_name;
+    PyAckTrackerFactory *ack_tracker_factory;
   } py;
 };
 
@@ -165,6 +168,13 @@ _py_invoke_wakeup(PythonSourceDriver *self)
   _ps_py_invoke_void_function(self, self->py.wakeup_method, NULL);
 }
 
+static void
+_py_invoke_finalize(PythonSourceDriver *self)
+{
+  if (self->py.instance)
+    _ps_py_invoke_void_method_by_name(self, "finalize");
+}
+
 static gboolean
 _py_is_log_source(PyObject *obj)
 {
@@ -185,6 +195,7 @@ _py_free_bindings(PythonSourceDriver *self)
   Py_CLEAR(self->py.suspend_method);
   Py_CLEAR(self->py.wakeup_method);
   Py_CLEAR(self->py.generate_persist_name);
+  Py_CLEAR(self->py.ack_tracker_factory);
 }
 
 static gboolean
@@ -195,11 +206,12 @@ _py_resolve_class(PythonSourceDriver *self)
   if (!self->py.class)
     {
       gchar buf[256];
+      _py_format_exception_text(buf, sizeof(buf));
 
       msg_error("Error looking Python driver class",
                 evt_tag_str("driver", self->super.super.super.id),
                 evt_tag_str("class", self->class),
-                evt_tag_str("exception", _py_format_exception_text(buf, sizeof(buf))));
+                evt_tag_str("exception", buf));
       _py_finish_exception_handling();
       return FALSE;
     }
@@ -215,11 +227,12 @@ _py_init_instance(PythonSourceDriver *self)
   if (!self->py.instance)
     {
       gchar buf[256];
+      _py_format_exception_text(buf, sizeof(buf));
 
       msg_error("Error instantiating Python driver class",
                 evt_tag_str("driver", self->super.super.super.id),
                 evt_tag_str("class", self->class),
-                evt_tag_str("exception", _py_format_exception_text(buf, sizeof(buf))));
+                evt_tag_str("exception", buf));
       _py_finish_exception_handling();
       return FALSE;
     }
@@ -358,16 +371,41 @@ _py_parse_options_new(PythonSourceDriver *self, MsgFormatOptions *parse_options)
   if (!py_parse_options)
     {
       gchar buf[256];
+      _py_format_exception_text(buf, sizeof(buf));
 
       msg_error("Error creating capsule for message parse options",
                 evt_tag_str("driver", self->super.super.super.id),
                 evt_tag_str("class", self->class),
-                evt_tag_str("exception", _py_format_exception_text(buf, sizeof(buf))));
+                evt_tag_str("exception", buf));
       _py_finish_exception_handling();
       return NULL;
     }
 
   return py_parse_options;
+}
+
+static gboolean
+_py_init_ack_tracker_factory(PythonSourceDriver *self)
+{
+  PyObject *py_ack_tracker_factory = _py_get_attr_or_null(self->py.instance, "ack_tracker");
+
+  if (!py_ack_tracker_factory)
+    return TRUE;
+
+  if (!py_is_ack_tracker_factory(py_ack_tracker_factory))
+    {
+      msg_error("Python source attribute ack_tracker needs to be an AckTracker subtype",
+                evt_tag_str("driver", self->super.super.super.id),
+                evt_tag_str("class", self->class));
+      return FALSE;
+    }
+
+  self->py.ack_tracker_factory = (PyAckTrackerFactory *) py_ack_tracker_factory;
+
+  AckTrackerFactory *ack_tracker_factory = self->py.ack_tracker_factory->ack_tracker_factory;
+  self->super.worker_options.ack_tracker_factory = ack_tracker_factory_ref(ack_tracker_factory);
+
+  return TRUE;
 }
 
 static gboolean
@@ -382,11 +420,12 @@ _py_set_parse_options(PythonSourceDriver *self)
   if (PyObject_SetAttrString(self->py.instance, "parse_options", py_parse_options) == -1)
     {
       gchar buf[256];
+      _py_format_exception_text(buf, sizeof(buf));
 
       msg_error("Error setting attribute message parse options",
                 evt_tag_str("driver", self->super.super.super.id),
                 evt_tag_str("class", self->class),
-                evt_tag_str("exception", _py_format_exception_text(buf, sizeof(buf))));
+                evt_tag_str("exception", buf));
       _py_finish_exception_handling();
 
       Py_DECREF(py_parse_options);
@@ -447,6 +486,9 @@ _py_sd_init(PythonSourceDriver *self)
   if (!_py_init_object(self))
     goto error;
 
+  if (!_py_init_ack_tracker_factory(self))
+    goto error;
+
   if (!_py_set_parse_options(self))
     goto error;
 
@@ -456,6 +498,32 @@ _py_sd_init(PythonSourceDriver *self)
 error:
   PyGILState_Release(gstate);
   return FALSE;
+}
+
+static inline AckTracker *
+_py_sd_get_ack_tracker(PythonSourceDriver *self)
+{
+  return ((LogSource *) self->super.worker)->ack_tracker;
+}
+
+static gboolean
+_py_sd_fill_bookmark(PythonSourceDriver *self, PyLogMessage *pymsg)
+{
+  if (!self->py.ack_tracker_factory)
+    {
+      PyErr_Format(PyExc_RuntimeError,
+                   "Bookmarks can not be used without creating an AckTracker instance (self.ack_tracker)");
+      return FALSE;
+    }
+
+  AckTracker *ack_tracker = _py_sd_get_ack_tracker(self);
+  Bookmark *bookmark = ack_tracker_request_bookmark(ack_tracker);
+
+  PyBookmark *py_bookmark = py_bookmark_new(pymsg->bookmark_data, self->py.ack_tracker_factory->ack_callback);
+  py_bookmark_fill(bookmark, py_bookmark);
+  Py_XDECREF(py_bookmark);
+
+  return TRUE;
 }
 
 static PyObject *
@@ -495,6 +563,12 @@ py_log_source_post(PyObject *s, PyObject *args, PyObject *kwrds)
       msg_error("Incorrectly suspended source, dropping message",
                 evt_tag_str("driver", sd->super.super.super.id));
       Py_RETURN_NONE;
+    }
+
+  if (pymsg->bookmark_data && pymsg->bookmark_data != Py_None)
+    {
+      if (!_py_sd_fill_bookmark(sd, pymsg))
+        return NULL;
     }
 
   /* keep a reference until the PyLogMessage instance is freed */
@@ -564,13 +638,10 @@ python_sd_init(LogPipe *s)
   if (!retval)
     return FALSE;
 
-  log_threaded_source_driver_set_worker_request_exit_func(&self->super, python_sd_request_exit);
-  log_threaded_source_driver_set_worker_run_func(&self->super, python_sd_run);
-
   if (self->py.suspend_method && self->py.wakeup_method)
     {
       self->post_message = _post_message_non_blocking;
-      log_threaded_source_set_wakeup_func(&self->super, python_sd_wakeup);
+      self->super.wakeup = python_sd_wakeup;
     }
 
   return TRUE;
@@ -580,6 +651,9 @@ static gboolean
 python_sd_deinit(LogPipe *s)
 {
   PythonSourceDriver *self = (PythonSourceDriver *) s;
+
+  AckTracker *ack_tracker = _py_sd_get_ack_tracker(self);
+  ack_tracker_deinit(ack_tracker);
 
   PyGILState_STATE gstate = PyGILState_Ensure();
   _py_invoke_deinit(self);
@@ -594,6 +668,7 @@ python_sd_free(LogPipe *s)
   PythonSourceDriver *self = (PythonSourceDriver *) s;
 
   PyGILState_STATE gstate = PyGILState_Ensure();
+  _py_invoke_finalize(self);
   _py_free_bindings(self);
   PyGILState_Release(gstate);
 
@@ -618,6 +693,9 @@ python_sd_new(GlobalConfig *cfg)
   self->super.format_stats_instance = python_sd_format_stats_instance;
   self->super.worker_options.super.stats_level = STATS_LEVEL0;
   self->super.worker_options.super.stats_source = stats_register_type("python");
+
+  self->super.request_exit = python_sd_request_exit;
+  self->super.run = python_sd_run;
 
   self->options = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
   self->post_message = _post_message_blocking;

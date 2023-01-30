@@ -39,15 +39,13 @@ m4/ax*.m4
 .deps
 /lib/cfg-grammar.h
 /test-driver
-dbld/build/
-dbld/release/
-dbld/install/
 dbld/rules.conf
 dbld/extra-files/
 debian/build-tree/
 debian/*.log
 debian/autoreconf.*
 build/
+tests/light/reports
 tags
 TAGS
 GPATH
