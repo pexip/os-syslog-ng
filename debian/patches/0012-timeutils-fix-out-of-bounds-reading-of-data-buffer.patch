@@ -1,0 +1,33 @@
+From: László Várady <laszlo.varady@protonmail.com>
+Date: Sat, 20 Aug 2022 14:30:51 +0200
+Subject: timeutils: fix out-of-bounds reading of data buffer
+
+Signed-off-by: László Várady <laszlo.varady@protonmail.com>
+Origin: https://github.com/syslog-ng/syslog-ng/commit/56f881c5eaa3d8c02c96607c4b9e4eaf959a044d
+Bug-Debian: https://security-tracker.debian.org/tracker/CVE-2022-38725
+---
+ lib/timeutils/scan-timestamp.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/lib/timeutils/scan-timestamp.c b/lib/timeutils/scan-timestamp.c
+index 4e618e4..0f7f52e 100644
+--- a/lib/timeutils/scan-timestamp.c
++++ b/lib/timeutils/scan-timestamp.c
+@@ -427,7 +427,7 @@ __parse_bsd_timestamp(const guchar **data, gint *length, WallClockTime *wct)
+       if (!scan_pix_timestamp((const gchar **) &src, &left, wct))
+         return FALSE;
+ 
+-      if (*src == ':')
++      if (left && *src == ':')
+         {
+           src++;
+           left--;
+@@ -478,7 +478,7 @@ scan_rfc3164_timestamp(const guchar **data, gint *length, WallClockTime *wct)
+    * looking at you, skip that as well, so we can reliably detect IPv6
+    * addresses as hostnames, which would be using ":" as well. */
+ 
+-  if (*src == ':')
++  if (left && *src == ':')
+     {
+       ++src;
+       --left;

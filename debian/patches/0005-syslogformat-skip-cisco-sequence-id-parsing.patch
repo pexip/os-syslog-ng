@@ -1,0 +1,31 @@
+From: Kokan <kokaipeter@gmail.com>
+Date: Fri, 24 Jul 2020 11:20:44 +0200
+Subject: syslogformat: skip cisco sequence id parsing
+
+If the parsing of cisco sequence id is failing, re-submit the string part it
+tried and skip setting sequence id.
+
+Signed-off-by: Kokan <kokaipeter@gmail.com>
+Origin: https://github.com/syslog-ng/syslog-ng/commit/849305fc35f4097201183b25200f2af3ad56d404
+---
+ modules/syslogformat/syslog-format.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/modules/syslogformat/syslog-format.c b/modules/syslogformat/syslog-format.c
+index da70d63..dd1ce83 100644
+--- a/modules/syslogformat/syslog-format.c
++++ b/modules/syslogformat/syslog-format.c
+@@ -199,9 +199,11 @@ log_msg_parse_cisco_sequence_id(LogMessage *self, const guchar **data, gint *len
+     {
+       if (!isdigit(*src))
+         return;
+-      _process_any_char(&src, &left);
++      if (!_process_any_char(&src, &left))
++        return;
+     }
+-  _process_any_char(&src, &left);
++  if (!_process_any_char(&src, &left))
++    return;
+ 
+   /* if the next char is not space, then we may try to read a date */
+ 

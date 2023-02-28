@@ -1,3 +1,12 @@
+syslog-ng (3.28.1-2+deb11u1) bullseye-security; urgency=high
+
+  * CVE-2022-38725: Integer overflow and buffer out-of-bounds issues in the
+    RFC3164 parser, which could allows remote attackers to cause a Denial of
+    Service via crafted syslog input.
+  * Fix crash (segflaut) with small invalid formatted logs.
+
+ -- Guilhem Moulin <guilhem@debian.org>  Wed, 01 Mar 2023 00:51:40 +0100
+
 syslog-ng (3.28.1-2) unstable; urgency=medium
 
   * [def6b75] Remove overlay configuration from gbp.conf.
