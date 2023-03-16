@@ -1,0 +1,25 @@
+From: László Várady <laszlo.varady@protonmail.com>
+Date: Sat, 20 Aug 2022 12:42:38 +0200
+Subject: timeutils: fix iterating out of the range of timestamp buffer
+
+Signed-off-by: László Várady <laszlo.varady@protonmail.com>
+Signed-off-by: Balazs Scheidler <bazsi77@gmail.com>
+Origin: https://github.com/syslog-ng/syslog-ng/commit/73b5c300b8fde5e7a4824baa83a04931279abb37
+Bug-Debian: https://security-tracker.debian.org/tracker/CVE-2022-38725
+---
+ lib/timeutils/scan-timestamp.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lib/timeutils/scan-timestamp.c b/lib/timeutils/scan-timestamp.c
+index 2f6a6b7..cb6802d 100644
+--- a/lib/timeutils/scan-timestamp.c
++++ b/lib/timeutils/scan-timestamp.c
+@@ -328,7 +328,7 @@ __parse_usec(const guchar **data, gint *length)
+           src++;
+           (*length)--;
+         }
+-      while (isdigit(*src))
++      while (*length > 0 && isdigit(*src))
+         {
+           src++;
+           (*length)--;

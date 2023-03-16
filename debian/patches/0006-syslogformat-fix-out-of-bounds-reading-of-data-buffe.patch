@@ -1,0 +1,53 @@
+From: László Várady <laszlo.varady@protonmail.com>
+Date: Sat, 20 Aug 2022 12:26:05 +0200
+Subject: syslogformat: fix out-of-bounds reading of data buffer
+
+Signed-off-by: László Várady <laszlo.varady@protonmail.com>
+Origin: https://github.com/syslog-ng/syslog-ng/commit/b5a060f2ebb8d794f508436a12e4d4163f94b1b8
+Bug-Debian: https://security-tracker.debian.org/tracker/CVE-2022-38725
+---
+ modules/syslogformat/syslog-format.c | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/modules/syslogformat/syslog-format.c b/modules/syslogformat/syslog-format.c
+index dd1ce83..fc3a89e 100644
+--- a/modules/syslogformat/syslog-format.c
++++ b/modules/syslogformat/syslog-format.c
+@@ -223,6 +223,9 @@ log_msg_parse_cisco_timestamp_attributes(LogMessage *self, const guchar **data,
+   const guchar *src = *data;
+   gint left = *length;
+ 
++  if (!left)
++    return;
++
+   /* Cisco timestamp extensions, the first '*' indicates that the clock is
+    * unsynced, '.' if it is known to be synced */
+   if (G_UNLIKELY(src[0] == '*'))
+@@ -553,7 +556,7 @@ log_msg_parse_sd(LogMessage *self, const guchar **data, gint *length, const MsgF
+       open_sd++;
+       do
+         {
+-          if (!isascii(*src) || *src == '=' || *src == ' ' || *src == ']' || *src == '"')
++          if (!left || !isascii(*src) || *src == '=' || *src == ' ' || *src == ']' || *src == '"')
+             goto error;
+           /* read sd_id */
+           pos = 0;
+@@ -587,7 +590,8 @@ log_msg_parse_sd(LogMessage *self, const guchar **data, gint *length, const MsgF
+           strcpy(sd_value_name, logmsg_sd_prefix);
+           /* this strcat is safe, as sd_id_name is at most 32 chars */
+           strncpy(sd_value_name + logmsg_sd_prefix_len, sd_id_name, sizeof(sd_value_name) - logmsg_sd_prefix_len);
+-          if (*src == ']')
++
++          if (left && *src == ']')
+             {
+               log_msg_set_value_by_name(self, sd_value_name, "", 0);
+             }
+@@ -604,7 +608,7 @@ log_msg_parse_sd(LogMessage *self, const guchar **data, gint *length, const MsgF
+               else
+                 goto error;
+ 
+-              if (!isascii(*src) || *src == '=' || *src == ' ' || *src == ']' || *src == '"')
++              if (!left || !isascii(*src) || *src == '=' || *src == ' ' || *src == ']' || *src == '"')
+                 goto error;
+ 
+               /* read sd-param */

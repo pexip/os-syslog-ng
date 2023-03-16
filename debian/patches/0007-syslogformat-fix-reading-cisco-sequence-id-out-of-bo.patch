@@ -1,0 +1,24 @@
+From: László Várady <laszlo.varady@protonmail.com>
+Date: Sun, 21 Aug 2022 18:44:28 +0200
+Subject: syslogformat: fix reading cisco sequence id out of bounds
+
+Signed-off-by: László Várady <laszlo.varady@protonmail.com>
+Origin: https://github.com/syslog-ng/syslog-ng/commit/4b8dc56ca8eaeac4c8751a305eb7eeefab8dc89d
+Bug-Debian: https://security-tracker.debian.org/tracker/CVE-2022-38725
+---
+ modules/syslogformat/syslog-format.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/modules/syslogformat/syslog-format.c b/modules/syslogformat/syslog-format.c
+index fc3a89e..76bf62e 100644
+--- a/modules/syslogformat/syslog-format.c
++++ b/modules/syslogformat/syslog-format.c
+@@ -207,7 +207,7 @@ log_msg_parse_cisco_sequence_id(LogMessage *self, const guchar **data, gint *len
+ 
+   /* if the next char is not space, then we may try to read a date */
+ 
+-  if (*src != ' ')
++  if (!left || *src != ' ')
+     return;
+ 
+   log_msg_set_value(self, handles.cisco_seqid, (gchar *) *data, *length - left - 1);

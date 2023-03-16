@@ -1,0 +1,35 @@
+From: Kokan <kokaipeter@gmail.com>
+Date: Fri, 24 Jul 2020 11:03:19 +0200
+Subject: syslogformat: sd_step skip if no char left
+
+Fixes #3328 and hopefully a few similuar not discovered crashes like that.
+
+Signed-off-by: Kokan <kokaipeter@gmail.com>
+Bug: https://github.com/syslog-ng/syslog-ng/issues/3328
+Origin: https://github.com/syslog-ng/syslog-ng/commit/0ce839090986670290461c52d3a70046659e86
+---
+ modules/syslogformat/syslog-format.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/modules/syslogformat/syslog-format.c b/modules/syslogformat/syslog-format.c
+index ec4b570..d81c74e 100644
+--- a/modules/syslogformat/syslog-format.c
++++ b/modules/syslogformat/syslog-format.c
+@@ -47,11 +47,16 @@ static struct
+   NVHandle raw_message;
+ } handles;
+ 
+-static inline void
++static inline gboolean
+ sd_step(const guchar **data, gint *left)
+ {
++  if (*left < 1)
++    return FALSE;
++
+   (*data)++;
+   (*left)--;
++
++  return TRUE;
+ }
+ 
+ 
