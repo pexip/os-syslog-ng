@@ -1,3 +1,9 @@
+syslog-ng (3.28.1-2+deb11u1pexip1) pexip; urgency=medium
+
+  * New upstream release
+
+ -- Huw Jones <huw@pexip.com>  Thu, 16 Mar 2023 17:45:45 +0000
+
 syslog-ng (3.28.1-2+deb11u1) bullseye-security; urgency=high
 
   * CVE-2022-38725: Integer overflow and buffer out-of-bounds issues in the
