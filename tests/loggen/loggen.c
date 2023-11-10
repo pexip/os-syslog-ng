@@ -57,6 +57,12 @@ static PluginOption global_plugin_option =
   .target = NULL,
   .port = NULL,
   .rate = 1000,
+  .reconnect = 0,
+  .proxied = FALSE,
+  .proxy_src_ip = NULL,
+  .proxy_dst_ip = NULL,
+  .proxy_src_port = NULL,
+  .proxy_dst_port = NULL,
 };
 
 static char *sdata_value = NULL;
@@ -71,7 +77,7 @@ static gint64 raw_message_length = 0;
 static gint64 *thread_stat_count = NULL;
 static gint64 *thread_stat_count_last = NULL;
 
-static GMutex *message_counter_lock = NULL;
+static GMutex message_counter_lock;
 
 static GOptionEntry loggen_options[] =
 {
@@ -80,6 +86,11 @@ static GOptionEntry loggen_options[] =
   { "interval", 'I', 0, G_OPTION_ARG_INT, &global_plugin_option.interval, "Number of seconds to run the test for", "<sec>" },
   { "permanent", 'T', 0, G_OPTION_ARG_NONE, &global_plugin_option.permanent, "Send logs without time limit", NULL},
   { "syslog-proto", 'P', 0, G_OPTION_ARG_NONE, &syslog_proto, "Use the new syslog-protocol message format (see also framing)", NULL },
+  { "proxied", 'H', 0, G_OPTION_ARG_NONE, &global_plugin_option.proxied, "Generate PROXY protocol v1 header", NULL },
+  { "proxy-src-ip", 0, 0, G_OPTION_ARG_STRING, &global_plugin_option.proxy_src_ip, "Source IP for the PROXY protocol v1 header", "<ip address>" },
+  { "proxy-dst-ip", 0, 0, G_OPTION_ARG_STRING, &global_plugin_option.proxy_dst_ip, "Destination IP for the PROXY protocol v1 header", "<ip address>" },
+  { "proxy-src-port", 0, 0, G_OPTION_ARG_STRING, &global_plugin_option.proxy_src_port, "Source port for the PROXY protocol v1 header", "<port>" },
+  { "proxy-dst-port", 0, 0, G_OPTION_ARG_STRING, &global_plugin_option.proxy_dst_port, "Destination port for the PROXY protocol v1 header", "<port>" },
   { "sdata", 'p', 0, G_OPTION_ARG_STRING, &sdata_value, "Send the given sdata (e.g. \"[test name=\\\"value\\\"]\") in case of syslog-proto", NULL },
   { "no-framing", 'F', G_OPTION_ARG_NONE, G_OPTION_ARG_NONE, &noframing, "Don't use syslog-protocol style framing, even if syslog-proto is set", NULL },
   { "active-connections", 0, 0, G_OPTION_ARG_INT, &global_plugin_option.active_connections, "Number of active connections to the server (default = 1)", "<number>" },
@@ -89,32 +100,43 @@ static GOptionEntry loggen_options[] =
   { "number", 'n', 0, G_OPTION_ARG_INT, &global_plugin_option.number_of_messages, "Number of messages to generate", "<number>" },
   { "quiet", 'Q', 0, G_OPTION_ARG_NONE, &quiet, "Don't print the msg/sec data", NULL },
   { "debug", 0, 0, G_OPTION_ARG_NONE, &debug, "Enable loggen debug messages", NULL },
+  { "reconnect", 0, 0, G_OPTION_ARG_NONE, &global_plugin_option.reconnect, "Attempt to reconnect when destination connections are lost", NULL},
   { NULL }
 };
 
 /* This is the callback function called by plugins when
  * they need a new log line */
 int
-generate_message(char *buffer, int buffer_size, int thread_id, unsigned long seq)
+generate_message(char *buffer, int buffer_size, ThreadData *thread_context, unsigned long seq)
 {
   int str_len;
 
+  if (global_plugin_option.proxied && !thread_context->proxy_header_sent)
+    {
+      str_len = generate_proxy_header(buffer, buffer_size, thread_context->index, global_plugin_option.proxy_src_ip,
+                                      global_plugin_option.proxy_dst_ip, global_plugin_option.proxy_src_port,
+                                      global_plugin_option.proxy_dst_port);
+      thread_context->proxy_header_sent = TRUE;
+      DEBUG("Generated PROXY protocol v1 header; len=%d\n", str_len);
+      return str_len;
+    }
+
   if (read_from_file)
-    str_len = read_next_message_from_file(buffer, buffer_size, syslog_proto, thread_id);
+    str_len = read_next_message_from_file(buffer, buffer_size, syslog_proto, thread_context->index);
   else
-    str_len = generate_log_line(buffer, buffer_size, syslog_proto, thread_id, seq);
+    str_len = generate_log_line(buffer, buffer_size, syslog_proto, thread_context->index, seq);
 
   if (str_len < 0)
     return -1;
 
-  g_mutex_lock(message_counter_lock);
+  g_mutex_lock(&message_counter_lock);
   sent_messages_num++;
   raw_message_length += str_len;
 
   if (thread_stat_count && csv)
-    thread_stat_count[thread_id]+=1;
+    thread_stat_count[thread_context->index]+=1;
 
-  g_mutex_unlock(message_counter_lock);
+  g_mutex_unlock(&message_counter_lock);
 
   return str_len;
 }
@@ -136,6 +158,49 @@ gboolean is_plugin_already_loaded(GPtrArray *plugin_array, const gchar *name)
   return FALSE;
 }
 
+/* receives a filename and returns a PluginInfo or NULL */
+static PluginInfo *
+load_plugin_info_with_fname(const gchar *plugin_path, const gchar *fname)
+{
+  if (strlen(fname) <= strlen(LOGGEN_PLUGIN_LIB_PREFIX) || !g_str_has_suffix(fname, G_MODULE_SUFFIX)
+      || !g_str_has_prefix(fname, LOGGEN_PLUGIN_LIB_PREFIX))
+    return NULL;
+
+  gchar *full_lib_path = g_build_filename(plugin_path, fname, NULL);
+  GModule *module = g_module_open(full_lib_path, G_MODULE_BIND_LAZY);
+  g_free(full_lib_path);
+
+  if (!module)
+    {
+      ERROR("error opening plugin module %s (%s)\n", fname, g_module_error());
+      return NULL;
+    }
+
+
+  /* libloggen_name_of_the_plugin.{so,dll,dylib} */
+  const gchar *fname_start = fname + strlen(LOGGEN_PLUGIN_LIB_PREFIX);
+  const gchar *fname_end = strrchr(fname_start, '_');
+  if (!fname_end)
+    {
+      ERROR("error opening plugin module %s, module filename does not fit the pattern\n", fname);
+      return NULL;
+    }
+  const gint fname_len = fname_end - fname_start;
+
+  gchar plugin_name[LOGGEN_PLUGIN_NAME_MAXSIZE + 1];
+  g_snprintf(plugin_name, LOGGEN_PLUGIN_NAME_MAXSIZE, "%.*s_%s", fname_len, fname_start, LOGGEN_PLUGIN_INFO);
+
+  /* get plugin info from lib file */
+  PluginInfo *plugin;
+  if (!g_module_symbol(module, plugin_name, (gpointer *) &plugin))
+    {
+      DEBUG("%s isn't a plugin for loggen. skip it. (%s)\n", fname, g_module_error());
+      g_module_close(module);
+      return NULL;
+    }
+  return plugin;
+}
+
 /* return value means the number of successfully loaded plugins */
 static int
 enumerate_plugins(const gchar *plugin_path, GPtrArray *plugin_array, GOptionContext *ctx)
@@ -155,30 +220,11 @@ enumerate_plugins(const gchar *plugin_path, GPtrArray *plugin_array, GOptionCont
   /* add common options to help context: */
   g_option_context_add_main_entries(ctx, loggen_options, 0);
 
-  GModule *module = NULL;
   while ((fname = g_dir_read_name(dir)))
     {
-      if (!g_str_has_suffix(fname, G_MODULE_SUFFIX))
+      PluginInfo *plugin = load_plugin_info_with_fname(plugin_path, fname);
+      if(!plugin)
         continue;
-
-      gchar *full_lib_path = g_build_filename(plugin_path, fname, NULL);
-      module = g_module_open(full_lib_path, G_MODULE_BIND_LAZY);
-      g_free(full_lib_path);
-
-      if (!module)
-        {
-          ERROR("error opening plugin module %s (%s)\n", fname, g_module_error());
-          continue;
-        }
-
-      /* get plugin info from lib file */
-      PluginInfo *plugin;
-      if (!g_module_symbol(module, LOGGEN_PLUGIN_INFO, (gpointer *) &plugin))
-        {
-          DEBUG("%s isn't a plugin for loggen. skip it. (%s)\n", fname, g_module_error());
-          g_module_close(module);
-          continue;
-        }
 
       if (is_plugin_already_loaded(plugin_array, plugin->name))
         {
@@ -209,7 +255,7 @@ enumerate_plugins(const gchar *plugin_path, GPtrArray *plugin_array, GOptionCont
       ERROR("hint: you can use the %s environmental variable to specify plugin path\n", "SYSLOGNG_PREFIX");
     }
 
-  DEBUG("%d plugin successfuly loaded\n", plugin_array->len);
+  DEBUG("%d plugin successfully loaded\n", plugin_array->len);
   return plugin_array->len;
 }
 
@@ -347,9 +393,9 @@ print_statistic(struct timeval *start_time)
       guint64 diff_usec = time_val_diff_in_usec(&now, &last_ts_format);
       if (diff_usec > 0)
         {
-          g_mutex_lock(message_counter_lock);
+          g_mutex_lock(&message_counter_lock);
           count = sent_messages_num;
-          g_mutex_unlock(message_counter_lock);
+          g_mutex_unlock(&message_counter_lock);
 
           if (count > last_count && last_count > 0)
             {
@@ -369,11 +415,11 @@ print_statistic(struct timeval *start_time)
 
       for (int j=0; j < global_plugin_option.active_connections; j++)
         {
-          g_mutex_lock(message_counter_lock);
+          g_mutex_lock(&message_counter_lock);
           double msg_count_diff = ((double) (thread_stat_count[j]-thread_stat_count_last[j]) * USEC_PER_SEC) / diff_usec;
           thread_stat_count_last[j] = thread_stat_count[j];
           count = thread_stat_count[j];
-          g_mutex_unlock(message_counter_lock);
+          g_mutex_unlock(&message_counter_lock);
 
           fprintf(stderr, "%d;%lu.%06lu;%.2lf;%"G_GINT64_FORMAT"\n",
                   j,
@@ -466,7 +512,6 @@ setup_rate_change_signals(void)
 int
 main(int argc, char *argv[])
 {
-  g_thread_init(NULL);
 
   GPtrArray *plugin_array = g_ptr_array_new();
   GOptionContext *ctx = g_option_context_new(" target port");
@@ -529,7 +574,7 @@ main(int argc, char *argv[])
       return 1;
     }
 
-  message_counter_lock = g_mutex_new();
+  g_mutex_init(&message_counter_lock);
 
   init_logline_generator(plugin_array);
   init_csv_statistics();
@@ -542,8 +587,7 @@ main(int argc, char *argv[])
 
   close_file_reader(global_plugin_option.active_connections);
 
-  if (message_counter_lock)
-    g_mutex_free(message_counter_lock);
+  g_mutex_clear(&message_counter_lock);
   g_free((gpointer)global_plugin_option.target);
   g_free((gpointer)global_plugin_option.port);
   g_option_context_free(ctx);

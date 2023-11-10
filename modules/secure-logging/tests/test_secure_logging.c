@@ -21,21 +21,24 @@
  *
  */
 
-#include <errno.h>
-#include <string.h>
-#include <unistd.h>
 #include <criterion/criterion.h>
+#include "libtest/cr_template.h"
+#include "libtest/msg_parse_lib.h"
+#include "libtest/stopwatch.h"
+
+// Secure logging functions
+#include "slog.h"
+
 
 #include "apphook.h"
 #include "cfg.h"
 #include "logmatcher.h"
-#include "libtest/cr_template.h"
-#include "libtest/msg_parse_lib.h"
-#include "libtest/stopwatch.h"
 #include "timeutils/misc.h"
 
-// Secure logging functions
-#include "slog.h"
+#include <errno.h>
+#include <string.h>
+#include <unistd.h>
+
 
 #define MAX_TEST_MESSAGES 1000
 #define MIN_TEST_MESSAGES 10
@@ -90,7 +93,7 @@ LogMessage *create_random_sample_message(void)
       g_string_append_c(msg_str, randomNumber(65, 90));
     }
 
-  msg = log_msg_new(msg_str->str, msg_str->len, &test_parse_options);
+  msg = msg_format_parse(&test_parse_options, (const guchar *) msg_str->str, msg_str->len);
   log_msg_set_saddr_ref(msg, g_sockaddr_inet_new("10.11.12.13", 1010));
   log_msg_set_match(msg, 0, "whole-match", -1);
   log_msg_set_match(msg, 1, "first-match", -1);
@@ -120,9 +123,7 @@ LogTemplate *createTemplate(TestData *testData)
   // Initialize the template
   g_string_printf(slog_templ_str, "$(slog -k %s -m %s $RAWMSG)", testData->keyFile->str, testData->macFile->str);
 
-  const gboolean escaping = FALSE;
-
-  LogTemplate *slog_templ = compile_template(slog_templ_str->str, escaping);
+  LogTemplate *slog_templ = compile_template(slog_templ_str->str);
 
   cr_assert(slog_templ != NULL, "Template '%s' does not compile correctly", slog_templ_str->str);
 
@@ -150,15 +151,13 @@ GString *applyTemplate(LogTemplate *templ, LogMessage *msg)
 {
   GString *output = g_string_new(prefix);
 
+  LogTemplateEvalOptions options = {NULL, LTZ_LOCAL, 999, context_id, LM_VT_STRING};
   // Execute secure logging template
   log_template_append_format_with_context(
     templ,       // Secure logging template
     &msg,        // Message(s) to pass to the template
     1,           // Number of message to pass to the template
-    NULL,        // Template options (no options in this case)
-    LTZ_LOCAL,   // Timezone
-    999,         // Sequence number for recursive template invocations
-    context_id,  // Context identifiertc.logtc.log
+    &options,
     output);     // Output string after applying the template
 
   return output;
@@ -198,12 +197,13 @@ GString **verifyMaliciousMessages(guchar *hostkey, gchar *macFileName, GString *
   cr_assert(ret == 1, "Unable to read aggregated MAC from file %s", macFileName);
   int problemsFound = 0;
   unsigned char cmac_tag[CMAC_LENGTH];
+  gsize cmac_tag_capacity = G_N_ELEMENTS(cmac_tag);
   initVerify(totalNumberOfMessages, hostkey, &next, &start, templateOutput, &tab);
 
   for (int i = 0; i<totalNumberOfMessages; i++)
     {
       ret = iterateBuffer(1, &templateOutput[i], &next, hostkey, keyZero, 0, &outputBuffer[i], &numberOfLogEntries, cmac_tag,
-                          tab);
+                          cmac_tag_capacity, tab);
       if (ret == 0)
         {
           brokenEntries[problemsFound] = i;
@@ -238,11 +238,12 @@ void verifyMessages(guchar *hostkey, gchar *macFileName, GString **templateOutpu
   cr_assert(ret == 1, "Unable to read aggregated MAC from file %s", macFileName);
 
   unsigned char cmac_tag[CMAC_LENGTH];
+  gsize cmac_tag_capacity = G_N_ELEMENTS(cmac_tag);
   ret = initVerify(totalNumberOfMessages, hostkey, &next, &start, templateOutput, &tab);
   cr_assert(ret == 1, "initVerify failed");
 
   ret = iterateBuffer(totalNumberOfMessages, templateOutput, &next, hostkey, keyZero, 0, outputBuffer,
-                      &numberOfLogEntries, cmac_tag, tab);
+                      &numberOfLogEntries, cmac_tag, cmac_tag_capacity, tab);
   cr_assert(ret == 1, "iterateBuffer failed");
 
   ret = finalizeVerify(start, totalNumberOfMessages, (guchar *)mac, cmac_tag, tab);
@@ -252,7 +253,7 @@ void verifyMessages(guchar *hostkey, gchar *macFileName, GString **templateOutpu
   for (int i=0; i<totalNumberOfMessages; i++)
     {
       char *plaintextMessage = (outputBuffer[i]->str) + CTR_LEN_SIMPLE + COLON + BLANK;
-      LogMessage *result = log_msg_new(plaintextMessage, strlen(plaintextMessage), &test_parse_options);
+      LogMessage *result = msg_format_parse(&test_parse_options, (const guchar *) plaintextMessage, strlen(plaintextMessage));
       log_msg_set_saddr(result, original[i]->saddr);
       assert_log_messages_equal(original[i], result);
       g_string_free(outputBuffer[i], TRUE);
@@ -573,7 +574,7 @@ void test_slog_corrupted_key(void)
       output[i] = applyTemplate(slog_templ, logs[i]);
 
       // Create new message from the text content of the original message
-      LogMessage *myOut = log_msg_new(output[i]->str, output[i]->len, &test_parse_options);
+      LogMessage *myOut = msg_format_parse(&test_parse_options, (const guchar *) output[i]->str, output[i]->len);
 
       // Initialize the new message with value from the original
       log_msg_set_saddr(myOut, logs[i]->saddr);
@@ -686,7 +687,7 @@ void test_slog_performance(void)
   start_stopwatch();
   for (i = 0; i < PERFORMANCE_COUNTER; i++)
     {
-      log_template_format(slog_templ, msg, NULL, LTZ_LOCAL, 0, NULL, res);
+      log_template_format(slog_templ, msg, &DEFAULT_TEMPLATE_EVAL_OPTIONS, res);
     }
   stop_stopwatch_and_display_result(PERFORMANCE_COUNTER, "%-90.*s", (int)strlen(slog_templ->template) - 1,
                                     slog_templ->template);

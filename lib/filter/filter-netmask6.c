@@ -96,7 +96,7 @@ _in6_addr_compare(const struct in6_addr *address1, const struct in6_addr *addres
 }
 
 static gboolean
-_eval(FilterExprNode *s, LogMessage **msgs, gint num_msg)
+_eval(FilterExprNode *s, LogMessage **msgs, gint num_msg, LogTemplateEvalOptions *options)
 {
   FilterNetmask6 *self = (FilterNetmask6 *) s;
   LogMessage *msg = msgs[num_msg - 1];
@@ -132,7 +132,7 @@ _eval(FilterExprNode *s, LogMessage **msgs, gint num_msg)
             evt_tag_inaddr6("msg_address", address),
             evt_tag_inaddr6("address", &self->address),
             evt_tag_int("prefix", self->prefix),
-            evt_tag_printf("msg", "%p", msg));
+            evt_tag_msg_reference(msg));
   return result ^ s->comp;
 }
 

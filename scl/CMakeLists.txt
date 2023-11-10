@@ -1,27 +1,33 @@
 set(SCL_DIRS
     apache
+    cee
     cim
     checkpoint
     cisco
     collectd
     default-network-drivers
+    discord
     elasticsearch
     ewmm
+    fortigate
     graphite
     graylog2
     hdfs
     iptables
     junos
     kafka
+    kubernetes
     linux-audit
     loadbalancer
     loggly
     logmatic
+    mariadb
     mbox
     netskope
     nodejs
     osquery
     pacct
+    paloalto
     rewrite
     slack
     snmptrap

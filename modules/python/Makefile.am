@@ -63,7 +63,11 @@ modules_python_libmod_python_la_SOURCES		= \
 	modules/python/python-fetcher.h	  \
 	modules/python/python-fetcher.c   \
 	modules/python/python-http-header.h   \
-	modules/python/python-http-header.c
+	modules/python/python-http-header.c \
+	modules/python/python-bookmark.h \
+	modules/python/python-bookmark.c \
+	modules/python/python-ack-tracker.h \
+	modules/python/python-ack-tracker.c
 
 
 modules_python_libmod_python_la_LDFLAGS		 = \
@@ -75,7 +79,6 @@ modules_python_libmod_python_la_DEPENDENCIES=	\
 
 modules/python mod-python: modules/python/libmod-python.la
 
-include modules/python/tests/Makefile.am
 else
 modules/python mod-python:
 endif
@@ -96,3 +99,5 @@ EXTRA_DIST					+= \
 	modules/python/CMakeLists.txt
 
 .PHONY: modules/python mod-python
+
+include modules/python/tests/Makefile.am

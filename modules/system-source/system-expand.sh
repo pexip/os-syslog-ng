@@ -26,10 +26,15 @@ set -e
 cfg="$(mktemp)"
 out="$(mktemp)"
 
+get_version() {
+	syslog-ng -V | grep "Config version:" | cut -d ':' -f 2 | sed -e 's/^[ \t]*//'
+}
+
 create_config () {
         local cfg="$1"
+        local version=$(get_version)
         cat >"${cfg}" <<EOF
-@version: 3.28
+@version: current 
 @include "scl.conf"
 source s_system {
 # ----- Cut here -----

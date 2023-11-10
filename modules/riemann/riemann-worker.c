@@ -25,6 +25,8 @@
 #include "riemann.h"
 #include "riemann-worker.h"
 #include "scratch-buffers.h"
+#include "generic-number.h"
+#include "parse-number.h"
 
 #include <riemann/simple.h>
 #include <stdlib.h>
@@ -98,8 +100,10 @@ riemann_dd_field_string_maybe_add(riemann_event_t *event, LogMessage *msg,
   if (!template)
     return;
 
-  log_template_format(template, msg, template_options, LTZ_SEND,
-                      seq_num, NULL, target);
+  LogTemplateEvalOptions options = {template_options, LTZ_SEND,
+                                    seq_num, NULL, LM_VT_STRING
+                                   };
+  log_template_format(template, msg, &options, target);
 
   if (target->len != 0)
     riemann_event_set(event, ftype, target->str, RIEMANN_EVENT_FIELD_NONE);
@@ -115,13 +119,17 @@ riemann_dd_field_integer_maybe_add(riemann_event_t *event, LogMessage *msg,
   if (!template)
     return;
 
-  log_template_format(template, msg, template_options, LTZ_SEND,
-                      seq_num, NULL, target);
+  LogTemplateEvalOptions options = {template_options, LTZ_SEND,
+                                    seq_num, NULL, LM_VT_STRING
+                                   };
+  log_template_format(template, msg, &options, target);
 
   if (target->len != 0)
     {
-      gint64 as_int = g_ascii_strtoll(target->str, NULL, 10);
-      riemann_event_set(event, ftype, as_int, RIEMANN_EVENT_FIELD_NONE);
+      GenericNumber gn;
+
+      if (parse_generic_number(target->str, &gn))
+        riemann_event_set(event, ftype, gn_as_int64(&gn), RIEMANN_EVENT_FIELD_NONE);
     }
 }
 
@@ -149,7 +157,7 @@ riemann_dd_field_add_msg_tag(const LogMessage *msg,
 /* TODO escape '\0' when passing down the value */
 static gboolean
 riemann_dd_field_add_attribute_vp(const gchar *name,
-                                  TypeHint type, const gchar *value,
+                                  LogMessageValueType type, const gchar *value,
                                   gsize value_len,
                                   gpointer user_data)
 {
@@ -166,17 +174,20 @@ static gboolean
 riemann_add_metric_to_event(RiemannDestWorker *self, riemann_event_t *event, LogMessage *msg, GString *str)
 {
   RiemannDestDriver *owner = (RiemannDestDriver *) self->super.owner;
+  LogMessageValueType type;
 
-  log_template_format(owner->fields.metric, msg, &owner->template_options,
-                      LTZ_SEND, self->super.seq_num, NULL, str);
+  LogTemplateEvalOptions options = {&owner->template_options,
+                                    LTZ_SEND, self->super.seq_num, NULL, LM_VT_STRING
+                                   };
+  log_template_format_value_and_type(owner->fields.metric, msg, &options, str, &type);
 
   if (str->len == 0)
     return TRUE;
 
-  switch (owner->fields.metric->type_hint)
+  switch (type)
     {
-    case TYPE_HINT_INT32:
-    case TYPE_HINT_INT64:
+    case LM_VT_INT32:
+    case LM_VT_INT64:
     {
       gint64 i;
 
@@ -188,8 +199,8 @@ riemann_add_metric_to_event(RiemannDestWorker *self, riemann_event_t *event, Log
                                       str->str, "int");
       break;
     }
-    case TYPE_HINT_DOUBLE:
-    case TYPE_HINT_STRING:
+    case LM_VT_DOUBLE:
+    case LM_VT_STRING:
     {
       gdouble d;
 
@@ -215,9 +226,10 @@ riemann_add_ttl_to_event(RiemannDestWorker *self, riemann_event_t *event, LogMes
   RiemannDestDriver *owner = (RiemannDestDriver *) self->super.owner;
   gdouble d;
 
-  log_template_format(owner->fields.ttl, msg, &owner->template_options,
-                      LTZ_SEND, self->super.seq_num, NULL,
-                      str);
+  LogTemplateEvalOptions options = {&owner->template_options,
+                                    LTZ_SEND, self->super.seq_num, NULL, LM_VT_STRING
+                                   };
+  log_template_format(owner->fields.ttl, msg, &options, str);
 
   if (str->len == 0)
     return TRUE;
@@ -291,10 +303,12 @@ riemann_worker_insert_one(RiemannDestWorker *self, LogMessage *msg)
                              (gpointer)event);
 
       if (owner->fields.attributes)
-        value_pairs_foreach(owner->fields.attributes,
-                            riemann_dd_field_add_attribute_vp,
-                            msg, self->super.seq_num, LTZ_SEND,
-                            &owner->template_options, event);
+        {
+          LogTemplateEvalOptions options = {&owner->template_options, LTZ_SEND, self->super.seq_num, NULL, LM_VT_STRING};
+          value_pairs_foreach(owner->fields.attributes,
+                              riemann_dd_field_add_attribute_vp,
+                              msg, &options, event);
+        }
       msg_trace("riemann: adding message to Riemann event",
                 evt_tag_str("server", owner->server),
                 evt_tag_int("port", owner->port),

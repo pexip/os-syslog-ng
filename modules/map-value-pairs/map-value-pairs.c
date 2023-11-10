@@ -25,12 +25,12 @@
 
 static gboolean
 _map_name_values(const gchar *name,
-                 TypeHint type, const gchar *value, gsize value_len,
+                 LogMessageValueType type, const gchar *value, gsize value_len,
                  gpointer user_data)
 {
   LogMessage *msg = (LogMessage *) user_data;
 
-  log_msg_set_value_by_name(msg, name, value, value_len);
+  log_msg_set_value_by_name_with_type(msg, name, value, value_len, type);
   return FALSE;
 }
 
@@ -42,13 +42,12 @@ _process(LogParser *s, LogMessage **pmsg, const LogPathOptions *path_options,
   GlobalConfig *cfg = log_pipe_get_config(&s->super);
   LogMessage *msg = log_msg_make_writable(pmsg, path_options);
   msg_trace("value-pairs message processing started",
-            evt_tag_str ("input", input),
-            evt_tag_printf("msg", "%p", *pmsg));
+            evt_tag_str("input", input),
+            evt_tag_msg_reference(*pmsg));
 
+  LogTemplateEvalOptions options = {&cfg->template_options, LTZ_LOCAL, 0, NULL, LM_VT_STRING};
   value_pairs_foreach(self->value_pairs, _map_name_values,
-                      msg,
-                      0, LTZ_LOCAL, &cfg->template_options,
-                      msg);
+                      msg, &options, msg);
 
   return TRUE;
 }

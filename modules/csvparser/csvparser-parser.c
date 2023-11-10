@@ -31,16 +31,17 @@ int csvparser_parse(CfgLexer *lexer, LogParser **instance, gpointer arg);
 
 static CfgLexerKeyword csvparser_keywords[] =
 {
-  { "csv_parser",  KW_CSV_PARSER },
-  { "dialect",     KW_DIALECT },
-  { "prefix",      KW_PREFIX },
-  { "columns",     KW_COLUMNS },
-  { "delimiters",  KW_DELIMITERS },
-  { "quotes",      KW_QUOTES },
-  { "quote_pairs", KW_QUOTE_PAIRS },
-  { "chars",       KW_CHARS},
-  { "strings",     KW_STRINGS},
-  { "null",        KW_NULL },
+  { "csv_parser",   KW_CSV_PARSER },
+  { "dialect",      KW_DIALECT },
+  { "prefix",       KW_PREFIX },
+  { "columns",      KW_COLUMNS },
+  { "delimiters",   KW_DELIMITERS },
+  { "quotes",       KW_QUOTES },
+  { "quote_pairs",  KW_QUOTE_PAIRS },
+  { "chars",        KW_CHARS },
+  { "strings",      KW_STRINGS },
+  { "drop_invalid", KW_DROP_INVALID },
+  { "null",         KW_NULL },
   { NULL }
 };
 
@@ -55,4 +56,4 @@ CfgParser csvparser_parser =
   .cleanup = (void (*)(gpointer)) log_pipe_unref,
 };
 
-CFG_PARSER_IMPLEMENT_LEXER_BINDING(csvparser_, LogParser **)
+CFG_PARSER_IMPLEMENT_LEXER_BINDING(csvparser_, CSVPARSER_, LogParser **)

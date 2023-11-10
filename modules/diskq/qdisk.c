@@ -29,6 +29,7 @@
 #include "stats/stats-registry.h"
 #include "reloc.h"
 #include "compat/lfs.h"
+#include "scratch-buffers.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -46,6 +47,8 @@
 #define MAX_RECORD_LENGTH 100 * 1024 * 1024
 
 #define PATH_QDISK              PATH_LOCALSTATEDIR
+
+#define QDISK_HDR_VERSION_CURRENT 2
 
 typedef union _QDiskFileHeader
 {
@@ -65,6 +68,8 @@ typedef union _QDiskFileHeader
     QDiskQueuePosition qoverflow_pos;
     gint64 backlog_head;
     gint64 backlog_len;
+
+    guint8 use_v1_wrap_condition;
   };
   gchar _pad2[QDISK_RESERVED_SPACE];
 } QDiskFileHeader;
@@ -78,6 +83,21 @@ struct _QDisk
   QDiskFileHeader *hdr;
   DiskQueueOptions *options;
 };
+
+#define QDISK_ERROR qdisk_error_quark()
+#define QDISK_ERROR_SERIALIZE 0
+#define QDISK_ERROR_DESERIALIZE 1
+
+GQuark
+qdisk_error_quark(void)
+{
+  static GQuark q = 0;
+
+  if (q == 0)
+    q = g_quark_from_static_string("qdisk-error");
+
+  return q;
+}
 
 static gboolean
 pwrite_strict(gint fd, const void *buf, size_t count, off_t offset)
@@ -99,20 +119,31 @@ pwrite_strict(gint fd, const void *buf, size_t count, off_t offset)
 }
 
 
-static gboolean
-_is_position_eof(QDisk *self, gint64 position)
+static inline gboolean
+_has_position_reached_max_size(QDisk *self, gint64 position)
 {
-  return position >= self->file_size;
+  return position >= self->options->disk_buf_size;
 }
 
-static guint64
-_correct_position_if_eof(QDisk *self, gint64 *position)
+static inline guint64
+_correct_position_if_max_size_is_reached(QDisk *self, gint64 position)
 {
-  if (_is_position_eof(self, *position))
+  if (G_UNLIKELY(self->hdr->use_v1_wrap_condition))
     {
-      *position = QDISK_RESERVED_SPACE;
+      gboolean position_is_eof = position >= self->file_size;
+      if (position_is_eof)
+        {
+          position = QDISK_RESERVED_SPACE;
+          self->hdr->use_v1_wrap_condition = FALSE;
+        }
+      return position;
     }
-  return *position;
+
+  if (_has_position_reached_max_size(self, position))
+    {
+      position = QDISK_RESERVED_SPACE;
+    }
+  return position;
 }
 
 static gchar *
@@ -152,14 +183,7 @@ qdisk_started(QDisk *self)
 }
 
 static inline gboolean
-_is_qdisk_overwritten(QDisk *self)
-{
-  return self->hdr->write_head > self->options->disk_buf_size;
-}
-
-
-static inline gboolean
-_is_backlog_head_prevent_write_head(QDisk *self)
+_does_backlog_head_precede_write_head(QDisk *self)
 {
   return self->hdr->backlog_head <= self->hdr->write_head;
 }
@@ -179,7 +203,15 @@ _is_able_to_reset_write_head_to_beginning_of_qdisk(QDisk *self)
 static inline gboolean
 _is_free_space_between_write_head_and_backlog_head(QDisk *self, gint msg_len)
 {
+  /* this forces 1 byte of empty space between backlog and write */
   return self->hdr->write_head + msg_len < self->hdr->backlog_head;
+}
+
+static inline gboolean
+_is_free_space_at_the_beginning_of_qdisk(QDisk *self, gint msg_len)
+{
+  /* this forces 1 byte of empty space between backlog and the beginning */
+  return QDISK_RESERVED_SPACE + msg_len < self->hdr->backlog_head;
 }
 
 gboolean
@@ -191,48 +223,76 @@ qdisk_is_file_empty(QDisk *self)
 gboolean
 qdisk_is_space_avail(QDisk *self, gint at_least)
 {
-  /* sizeof(guint32): record_length is a 4 bytes long value which is stored before each serialized LogMessage */
-  gint64 msg_len = at_least + sizeof(guint32);
-  return (
-           (_is_backlog_head_prevent_write_head(self)) &&
-           (_is_write_head_less_than_max_size(self) || _is_able_to_reset_write_head_to_beginning_of_qdisk(self))
-         ) || (_is_free_space_between_write_head_and_backlog_head(self, msg_len));
-
-}
-
-static gboolean
-_truncate_file(QDisk *self, off_t new_size)
-{
-  gboolean success = TRUE;
-
-  if (ftruncate(self->fd, new_size) < 0)
+  if (_does_backlog_head_precede_write_head(self))
     {
-      success = FALSE;
-      off_t file_size = -1;
+      /* no exact size-check is needed in this case, because writing after
+       * disk_buf_size is allowed when the last message does not fit in
+       */
+      if (_is_write_head_less_than_max_size(self))
+        return TRUE;
 
-      struct stat st;
-      if (fstat(self->fd, &st) < 0)
-        {
-          msg_error("truncate file: cannot stat",
-                    evt_tag_error("error"));
-        }
-      else
-        {
-          file_size = st.st_size;
-        }
-
-      msg_error("Error truncating disk-queue file",
-                evt_tag_error("error"),
-                evt_tag_str("filename", self->filename),
-                evt_tag_long("expected-size", new_size),
-                evt_tag_long("file_size", file_size),
-                evt_tag_int("fd", self->fd));
+      /* exact size-check is needed as we have unread/unacked data after the write head
+       * that is being reset
+       */
+      return _is_able_to_reset_write_head_to_beginning_of_qdisk(self)
+             && _is_free_space_at_the_beginning_of_qdisk(self, at_least);
     }
 
-  return success;
+  return _is_free_space_between_write_head_and_backlog_head(self, at_least);
 }
 
-static gint64
+static inline gboolean
+_ftruncate_would_reduce_file(QDisk *self, gint64 expected_size)
+{
+  gint64 expected_size_change = expected_size - self->file_size;
+  return expected_size_change < 0;
+}
+
+static inline gboolean
+_possible_size_reduction_reaches_truncate_threshold(QDisk *self, gint64 expected_size)
+{
+  gint64 possible_size_reduction = self->file_size - expected_size;
+  gint64 truncate_threshold = (gint64)(qdisk_get_maximum_size(self) * self->options->truncate_size_ratio);
+  return possible_size_reduction >= truncate_threshold;
+}
+
+static void
+_maybe_truncate_file(QDisk *self, gint64 expected_size)
+{
+  if (_ftruncate_would_reduce_file(self, expected_size) &&
+      !_possible_size_reduction_reaches_truncate_threshold(self, expected_size) &&
+      G_LIKELY(!self->hdr->use_v1_wrap_condition))
+    {
+      return;
+    }
+
+  msg_debug("Truncating queue file", evt_tag_str("filename", self->filename), evt_tag_long("new size", expected_size));
+
+  if (ftruncate(self->fd, (off_t) expected_size) == 0)
+    {
+      self->file_size = expected_size;
+      return;
+    }
+
+  struct stat st;
+  if (fstat(self->fd, &st) < 0)
+    {
+      msg_error("truncate file: cannot stat", evt_tag_error("error"));
+    }
+  else
+    {
+      self->file_size = (gint64) st.st_size;
+    }
+
+  msg_error("Error truncating disk-queue file",
+            evt_tag_error("error"),
+            evt_tag_str("filename", self->filename),
+            evt_tag_long("expected-size", expected_size),
+            evt_tag_long("file-size", self->file_size),
+            evt_tag_int("fd", self->fd));
+}
+
+static inline gint64
 qdisk_get_lowest_used_queue_offset(QDisk *self)
 {
   gint64 lowest_offset = G_MAXINT64;
@@ -250,22 +310,19 @@ qdisk_get_lowest_used_queue_offset(QDisk *self)
 }
 
 static void
-qdisk_try_to_truncate_file_to_minimal(QDisk *self, gint64 *new_file_end_offset)
+_truncate_file_to_minimal(QDisk *self)
 {
-  gint64 file_end_offset = 0;
   if (qdisk_is_file_empty(self))
     {
-      _truncate_file(self, QDISK_RESERVED_SPACE);
-      file_end_offset = QDISK_RESERVED_SPACE;
+      _maybe_truncate_file(self, QDISK_RESERVED_SPACE);
+      return;
     }
-  else
-    {
-      file_end_offset = qdisk_get_lowest_used_queue_offset(self);
-      if(file_end_offset > QDISK_RESERVED_SPACE)
-        _truncate_file(self, file_end_offset);
-    }
-  if (new_file_end_offset)
-    *new_file_end_offset = file_end_offset;
+
+  gint64 file_end_offset = qdisk_get_lowest_used_queue_offset(self);
+  if (file_end_offset <= QDISK_RESERVED_SPACE)
+    return;
+
+  _maybe_truncate_file(self, file_end_offset);
 }
 
 
@@ -284,37 +341,49 @@ qdisk_get_empty_space(QDisk *self)
   return bpos - wpos;
 }
 
+static inline gboolean
+_could_not_wrap_write_head_last_push_but_now_can(QDisk *self)
+{
+  return _has_position_reached_max_size(self, self->hdr->write_head)
+         && _is_able_to_reset_write_head_to_beginning_of_qdisk(self);
+}
+
+gint64
+qdisk_get_next_tail_position(QDisk *self)
+{
+  if (_could_not_wrap_write_head_last_push_but_now_can(self))
+    return QDISK_RESERVED_SPACE;
+
+  return self->hdr->write_head;
+}
+
 gboolean
 qdisk_push_tail(QDisk *self, GString *record)
 {
+  if (!qdisk_started(self))
+    return FALSE;
 
-  /* write follows read (e.g. we are appending to the file) OR
-   * there's enough space between write and read.
-   *
-   * If write follows read we need to check two things:
-   *   - either we are below the maximum limit (GINT64_FROM_BE(self->hdr->write_head) < self->options->disk_buf_size)
-   *   - or we can wrap around (GINT64_FROM_BE(self->hdr->read_head) != QDISK_RESERVED_SPACE)
-   * If neither of the above is true, the buffer is full.
-   */
+  if (_could_not_wrap_write_head_last_push_but_now_can(self))
+    {
+      /*
+       * We can safely move the write_head to the beginning, but still
+       * not sure, if this message will have space. We move the write_head
+       * then check the available space compared to the new position.
+       */
+      self->hdr->write_head = QDISK_RESERVED_SPACE;
+    }
+
   if (!qdisk_is_space_avail(self, record->len))
     return FALSE;
 
-  guint32 record_length = GUINT32_TO_BE(record->len);
-  if (record_length == 0)
-    {
-      msg_error("Error writing empty message into the disk-queue file");
-      return FALSE;
-    }
-
-  if (!pwrite_strict(self->fd, (gchar *) &record_length, sizeof(record_length), self->hdr->write_head) ||
-      !pwrite_strict(self->fd, record->str, record->len, self->hdr->write_head + sizeof(record_length)))
+  if (!pwrite_strict(self->fd, record->str, record->len, self->hdr->write_head))
     {
       msg_error("Error writing disk-queue file",
                 evt_tag_error("error"));
       return FALSE;
     }
 
-  self->hdr->write_head = self->hdr->write_head + record->len + sizeof(record_length);
+  self->hdr->write_head = self->hdr->write_head + record->len;
 
 
   /* NOTE: we only wrap around if the read head is before the write,
@@ -344,25 +413,39 @@ qdisk_push_tail(QDisk *self, GString *record)
     {
       if (self->file_size > self->hdr->write_head)
         {
-          msg_debug("Unused area ahead of write_head, truncate queue file",
-                    evt_tag_long("new size",  self->hdr->write_head));
-          _truncate_file(self, self->hdr->write_head);
+          _maybe_truncate_file(self, self->hdr->write_head);
         }
-      self->file_size = self->hdr->write_head;
+      else
+        {
+          self->file_size = self->hdr->write_head;
+        }
 
-      if (_is_qdisk_overwritten(self) && self->hdr->backlog_head  != QDISK_RESERVED_SPACE)
+      if (_has_position_reached_max_size(self, self->hdr->write_head)
+          && _is_able_to_reset_write_head_to_beginning_of_qdisk(self))
         {
           /* we were appending to the file, we are over the limit, and space
            * is available before the read head. truncate and wrap.
            *
-           * Otherwise we let the write_head over size limits for a bit and
-           * for the next message, the condition at the beginning of this
-           * function will cause the push to fail */
+           * Otherwise try to wrap again in the beginning of the next push.
+           *
+           * This way we guarantee, that only a part of 1 message is written after
+           * disk_buf_size.
+           */
           self->hdr->write_head = QDISK_RESERVED_SPACE;
         }
     }
   self->hdr->length++;
   return TRUE;
+}
+
+static inline gssize
+_read_record_length_from_disk(QDisk *self, gint64 position, guint32 *record_length)
+{
+  gssize bytes_read = pread(self->fd, (gchar *)record_length, sizeof(guint32), position);
+
+  *record_length = GUINT32_FROM_BE(*record_length);
+
+  return bytes_read;
 }
 
 static inline gboolean
@@ -371,114 +454,304 @@ _is_record_length_reached_hard_limit(guint32 record_length)
   return record_length > MAX_RECORD_LENGTH;
 }
 
+static inline gssize
+_is_record_length_valid(QDisk *self, gssize bytes_read, guint32 record_length, gint64 position)
+{
+  if (bytes_read != sizeof(record_length))
+    {
+      msg_error("Error reading disk-queue file, cannot read record-length",
+                evt_tag_str("error", bytes_read < 0 ? g_strerror(errno) : "short read"),
+                evt_tag_str("filename", self->filename),
+                evt_tag_long("offset", position));
+      return FALSE;
+    }
+
+  if (_is_record_length_reached_hard_limit(record_length))
+    {
+      msg_warning("Disk-queue file contains possibly invalid record-length",
+                  evt_tag_int("rec_length", record_length),
+                  evt_tag_str("filename", self->filename),
+                  evt_tag_long("offset", position));
+      return FALSE;
+    }
+
+  if (record_length == 0)
+    {
+      msg_error("Disk-queue file contains empty record",
+                evt_tag_int("rec_length", record_length),
+                evt_tag_str("filename", self->filename),
+                evt_tag_long("offset", position));
+      return FALSE;
+    }
+
+  return TRUE;
+}
+
+static inline gboolean
+_try_reading_record_length(QDisk *self, gint64 position, guint32 *record_length)
+{
+  guint32 read_record_length;
+  gssize bytes_read = _read_record_length_from_disk(self, position, &read_record_length);
+
+  if (!_is_record_length_valid(self, bytes_read, read_record_length, position))
+    return FALSE;
+
+  *record_length = read_record_length;
+  return TRUE;
+}
+
+static inline gboolean
+_read_record_from_disk(QDisk *self, GString *record, guint32 record_length)
+{
+  g_string_set_size(record, record_length);
+
+  gssize bytes_read = pread(self->fd, record->str, record_length, self->hdr->read_head + sizeof(record_length));
+  if (bytes_read != record_length)
+    {
+      msg_error("Error reading disk-queue file",
+                evt_tag_str("filename", self->filename),
+                evt_tag_str("error", bytes_read < 0 ? g_strerror(errno) : "short read"),
+                evt_tag_int("expected read length", record_length),
+                evt_tag_int("actually read", bytes_read));
+      return FALSE;
+    }
+
+  return TRUE;
+}
+
+static inline void
+_maybe_apply_non_reliable_corrections(QDisk *self)
+{
+  if (self->options->reliable)
+    return;
+
+  qdisk_empty_backlog(self);
+  if (!self->options->read_only)
+    qdisk_reset_file_if_empty(self);
+}
+
+
+static inline void
+_update_position_after_read(QDisk *self, guint32 record_length, gint64 *position)
+{
+  gint64 new_position = *position + record_length + sizeof(record_length);
+
+  if (new_position > self->hdr->write_head)
+    new_position = _correct_position_if_max_size_is_reached(self, new_position);
+
+  *position = new_position;
+}
+
+gint64
+qdisk_get_next_head_position(QDisk *self)
+{
+  gint64 next_read_head_position = self->hdr->read_head;
+  if (next_read_head_position > self->hdr->write_head)
+    next_read_head_position = _correct_position_if_max_size_is_reached(self, next_read_head_position);
+
+  return next_read_head_position;
+}
+
 gboolean
 qdisk_pop_head(QDisk *self, GString *record)
 {
-  if (self->hdr->read_head != self->hdr->write_head)
-    {
-      guint32 record_length;
-      gssize res;
-      res = pread(self->fd, (gchar *) &record_length, sizeof(record_length), self->hdr->read_head);
+  if (self->hdr->read_head == self->hdr->write_head)
+    return FALSE;
 
-      if (res == 0)
-        {
-          /* hmm, we are either at EOF or at hdr->qout_ofs, we need to wrap */
-          self->hdr->read_head = QDISK_RESERVED_SPACE;
-          res = pread(self->fd, (gchar *) &record_length, sizeof(record_length), self->hdr->read_head);
-        }
-      if (res != sizeof(record_length))
-        {
-          msg_error("Error reading disk-queue file, cannot read record-length",
-                    evt_tag_str("error", res < 0 ? g_strerror(errno) : "short read"),
-                    evt_tag_str("filename", self->filename),
-                    evt_tag_long("offset", self->hdr->read_head));
-          return FALSE;
-        }
+  if (self->hdr->read_head > self->hdr->write_head)
+    self->hdr->read_head = _correct_position_if_max_size_is_reached(self, self->hdr->read_head);
 
-      record_length = GUINT32_FROM_BE(record_length);
-      if (_is_record_length_reached_hard_limit(record_length))
-        {
-          msg_warning("Disk-queue file contains possibly invalid record-length",
-                      evt_tag_int("rec_length", record_length),
-                      evt_tag_str("filename", self->filename),
-                      evt_tag_long("offset", self->hdr->read_head));
-          return FALSE;
-        }
-      else if (record_length == 0)
-        {
-          msg_error("Disk-queue file contains empty record",
-                    evt_tag_int("rec_length", record_length),
-                    evt_tag_str("filename", self->filename),
-                    evt_tag_long("offset", self->hdr->read_head));
-          return FALSE;
-        }
+  guint32 record_length;
+  if (!_try_reading_record_length(self, self->hdr->read_head, &record_length))
+    return FALSE;
 
-      g_string_set_size(record, record_length);
-      res = pread(self->fd, record->str, record_length, self->hdr->read_head + sizeof(record_length));
-      if (res != record_length)
-        {
-          msg_error("Error reading disk-queue file",
-                    evt_tag_str("filename", self->filename),
-                    evt_tag_str("error", res < 0 ? g_strerror(errno) : "short read"),
-                    evt_tag_int("expected read length", record_length),
-                    evt_tag_int("actually read", res));
-          return FALSE;
-        }
+  if (!_read_record_from_disk(self, record, record_length))
+    return FALSE;
 
-      self->hdr->read_head = self->hdr->read_head + record->len + sizeof(record_length);
+  _update_position_after_read(self, record_length, &self->hdr->read_head);
+  self->hdr->length--;
+  self->hdr->backlog_len++;
 
-      if (self->hdr->read_head > self->hdr->write_head)
-        {
-          self->hdr->read_head = _correct_position_if_eof(self, &self->hdr->read_head);
-        }
-
-      self->hdr->length--;
-      if (!self->options->reliable)
-        {
-          self->hdr->backlog_head = self->hdr->read_head;
-
-          g_assert(self->hdr->backlog_len == 0);
-          if (!self->options->read_only && qdisk_is_file_empty(self))
-            {
-              msg_debug("Queue file became empty, truncating file",
-                        evt_tag_str("filename", self->filename));
-              self->hdr->read_head = QDISK_RESERVED_SPACE;
-              self->hdr->write_head = QDISK_RESERVED_SPACE;
-              self->hdr->backlog_head = self->hdr->read_head;
-              self->hdr->length = 0;
-              _truncate_file(self, self->hdr->write_head);
-            }
-        }
-      return TRUE;
-
-    }
-  return FALSE;
+  _maybe_apply_non_reliable_corrections(self);
+  return TRUE;
 }
 
 static gboolean
-_load_queue(QDisk *self, GQueue *q, gint64 q_ofs, gint32 q_len, gint32 q_count)
+_skip_record(QDisk *self, gint64 position, gint64 *new_position)
 {
-  GString *serialized;
-  SerializeArchive *sa;
-  gint i;
+  if (position == self->hdr->write_head)
+    return FALSE;
 
-  if (q_ofs)
+  if (position > self->hdr->write_head)
+    position = _correct_position_if_max_size_is_reached(self, position);
+
+  *new_position = position;
+
+  guint32 record_length;
+  if (!_try_reading_record_length(self, *new_position, &record_length))
+    return FALSE;
+
+  _update_position_after_read(self, record_length, new_position);
+  return TRUE;
+}
+
+gboolean
+qdisk_remove_head(QDisk *self)
+{
+  gboolean success = _skip_record(self, self->hdr->read_head, &self->hdr->read_head);
+
+  if (success)
     {
-      gssize read_len;
+      self->hdr->length--;
+      self->hdr->backlog_len++;
+      _maybe_apply_non_reliable_corrections(self);
+    }
 
-      serialized = g_string_sized_new(q_len);
-      g_string_set_size(serialized, q_len);
-      read_len = pread(self->fd, serialized->str, q_len, q_ofs);
-      if (read_len < 0 || read_len != q_len)
+  return success;
+}
+
+gboolean
+qdisk_ack_backlog(QDisk *self)
+{
+  if (self->hdr->backlog_len == 0)
+    return FALSE;
+
+  if (!_skip_record(self, self->hdr->backlog_head, &self->hdr->backlog_head))
+    {
+      msg_error("Error acking in disk-queue file", evt_tag_str("filename", qdisk_get_filename(self)));
+      return FALSE;
+    }
+
+  self->hdr->backlog_len--;
+  return TRUE;
+}
+
+
+gboolean
+qdisk_rewind_backlog(QDisk *self, guint rewind_count)
+{
+  if (rewind_count > self->hdr->backlog_len)
+    return FALSE;
+
+  gint64 number_of_messages_stay_in_backlog = self->hdr->backlog_len - rewind_count;
+
+  gint64 new_read_head = self->hdr->backlog_head;
+  for (gint64 i = 0; i < number_of_messages_stay_in_backlog; i++)
+    {
+      if (!_skip_record(self, new_read_head, &new_read_head))
         {
-          msg_error("Error reading in-memory buffer from disk-queue file",
-                    evt_tag_str("filename", self->filename),
-                    read_len < 0 ? evt_tag_error("error") : evt_tag_str("error", "short read"));
-          g_string_free(serialized, TRUE);
+          msg_error("Error rewinding backlog in disk-queue file",
+                    evt_tag_str("filename", qdisk_get_filename(self)));
           return FALSE;
         }
-      sa = serialize_string_archive_new(serialized);
-      for (i = 0; i < q_count; i++)
+    }
+
+  self->hdr->backlog_len = number_of_messages_stay_in_backlog;
+  self->hdr->read_head = new_read_head;
+  self->hdr->length = self->hdr->length + rewind_count;
+  return TRUE;
+}
+
+void
+qdisk_empty_backlog(QDisk *self)
+{
+  self->hdr->backlog_head = self->hdr->read_head;
+  self->hdr->backlog_len = 0;
+}
+
+static gboolean
+_overwrite_with_real_record_length(GString *serialized)
+{
+  guint32 record_length = GUINT32_TO_BE(serialized->len - sizeof(guint32));
+  if (record_length == 0)
+    return FALSE;
+
+  g_string_overwrite_len(serialized, 0, (gchar *) &record_length, sizeof(guint32));
+  return TRUE;
+}
+
+gboolean
+qdisk_serialize(GString *serialized, QDiskSerializeFunc serialize_func, gpointer user_data, GError **error)
+{
+  SerializeArchive *sa = serialize_string_archive_new(serialized);
+
+  /* Leave space for the real record_length for later */
+  if (!serialize_write_uint32(sa, 0))
+    {
+      g_set_error(error, QDISK_ERROR, QDISK_ERROR_SERIALIZE, "failed to write record length");
+      goto exit;
+    }
+
+  if (!serialize_func(sa, user_data))
+    {
+      g_set_error(error, QDISK_ERROR, QDISK_ERROR_SERIALIZE, "failed to serialize data");
+      goto exit;
+    }
+
+  if (!_overwrite_with_real_record_length(serialized))
+    {
+      g_set_error(error, QDISK_ERROR, QDISK_ERROR_SERIALIZE, "serializable data is empty");
+      goto exit;
+    }
+
+exit:
+  serialize_archive_free(sa);
+  return *error == NULL;
+}
+
+gboolean
+qdisk_deserialize(GString *serialized, QDiskDeSerializeFunc deserialize_func, gpointer user_data, GError **error)
+{
+  SerializeArchive *sa = serialize_string_archive_new(serialized);
+
+  if (!deserialize_func(sa, user_data))
+    {
+      g_set_error(error, QDISK_ERROR, QDISK_ERROR_DESERIALIZE, "failed to deserialize data");
+      goto exit;
+    }
+
+exit:
+  serialize_archive_free(sa);
+  return *error == NULL;
+}
+
+static FILE *
+_create_stream(QDisk *self, gint64 offset)
+{
+  int fd_copy = dup(self->fd);
+  FILE *f = fdopen(fd_copy, "r");
+  if (!f)
+    {
+      msg_error("Error opening file stream",
+                evt_tag_str("filename", self->filename),
+                evt_tag_error("error"));
+      close(fd_copy);
+      return NULL;
+    }
+
+  if (fseek(f, offset, SEEK_SET) != 0)
+    {
+      msg_error("diskq-serializer: error while seeking in file stream",
+                evt_tag_str("filename", self->filename),
+                evt_tag_error("error"));
+      fclose(f);
+      return NULL;
+    }
+
+  return f;
+}
+
+static gboolean
+_load_queue(QDisk *self, GQueue *q, gint64 q_ofs, guint32 q_len, guint32 q_count)
+{
+  if (q_ofs)
+    {
+      FILE *f = _create_stream(self, q_ofs);
+      if (!f)
+        return FALSE;
+
+      SerializeArchive *sa = serialize_file_archive_new(f);
+      for (guint32 i = 0; i < q_count; i++)
         {
           LogMessage *msg;
 
@@ -493,13 +766,18 @@ _load_queue(QDisk *self, GQueue *q, gint64 q_ofs, gint32 q_len, gint32 q_count)
             {
               msg_error("Error reading message from disk-queue file (maybe corrupted file) some messages will be lost",
                         evt_tag_str("filename", self->filename),
+                        evt_tag_long("num_of_messages", q_count),
+                        evt_tag_long("invalid_index", i),
                         evt_tag_int("lost_messages", q_count - i));
               log_msg_unref(msg);
               break;
             }
         }
-      g_string_free(serialized, TRUE);
       serialize_archive_free(sa);
+      if (fclose(f) != 0)
+        msg_warning("Error closing file stream",
+                    evt_tag_str("filename", self->filename),
+                    evt_tag_error("error"));
     }
   return TRUE;
 }
@@ -508,7 +786,7 @@ static gboolean
 _try_to_load_queue(QDisk *self, GQueue *queue, QDiskQueuePosition *pos, gchar *type)
 {
   gint64 ofs;
-  gint32 count, len;
+  guint32 count, len;
 
   count = pos->count;
   len = pos->len;
@@ -548,6 +826,22 @@ _load_non_reliable_queues(QDisk *self, GQueue *qout, GQueue *qbacklog, GQueue *q
 }
 
 #define _clear(obj) memset(&obj, 0, sizeof(obj));
+
+static gint64
+_number_of_messages(QDisk *self)
+{
+  if (self->options->reliable)
+    {
+      return self->hdr->length + self->hdr->backlog_len;
+    }
+  else
+    {
+      return self->hdr->length +
+             self->hdr->qbacklog_pos.count +
+             self->hdr->qout_pos.count +
+             self->hdr->qoverflow_pos.count;
+    }
+}
 
 static void
 _reset_queue_pointers(QDisk *self)
@@ -591,19 +885,24 @@ _load_state(QDisk *self, GQueue *qout, GQueue *qbacklog, GQueue *qoverflow)
       if (!_load_non_reliable_queues(self, qout, qbacklog, qoverflow))
         return FALSE;
 
-      gint64 end_ofs = QDISK_RESERVED_SPACE;
+      self->file_size = QDISK_RESERVED_SPACE;
       if (!self->options->read_only)
         {
-          qdisk_try_to_truncate_file_to_minimal(self, &end_ofs);
+          _truncate_file_to_minimal(self);
         }
-      self->file_size = MAX(end_ofs, QDISK_RESERVED_SPACE);
 
       msg_info("Disk-buffer state loaded",
                evt_tag_str("filename", self->filename),
-               evt_tag_long("qout_length", self->hdr->qout_pos.count),
-               evt_tag_long("qbacklog_length", self->hdr->qbacklog_pos.count),
-               evt_tag_long("qoverflow_length", self->hdr->qoverflow_pos.count),
-               evt_tag_long("qdisk_length", self->hdr->length));
+               evt_tag_long("number_of_messages", _number_of_messages(self)));
+
+      msg_debug("Disk-buffer internal state",
+                evt_tag_str("filename", self->filename),
+                evt_tag_long("qout_length", self->hdr->qout_pos.count),
+                evt_tag_long("qbacklog_length", self->hdr->qbacklog_pos.count),
+                evt_tag_long("qoverflow_length", self->hdr->qoverflow_pos.count),
+                evt_tag_long("qdisk_length", self->hdr->length),
+                evt_tag_long("read_head", self->hdr->read_head),
+                evt_tag_long("write_head", self->hdr->write_head));
 
       _reset_queue_pointers(self);
     }
@@ -614,15 +913,15 @@ _load_state(QDisk *self, GQueue *qout, GQueue *qbacklog, GQueue *qoverflow)
       self->file_size = st.st_size;
       msg_info("Reliable disk-buffer state loaded",
                evt_tag_str("filename", self->filename),
-               evt_tag_long("queue_length", self->hdr->length),
-               evt_tag_long("size", self->hdr->write_head - self->hdr->read_head));
+               evt_tag_long("number_of_messages", _number_of_messages(self)));
 
       msg_debug("Reliable disk-buffer internal state",
                 evt_tag_str("filename", self->filename),
+                evt_tag_long("queue_length", self->hdr->length),
+                evt_tag_long("backlog_len", self->hdr->backlog_len),
                 evt_tag_long("backlog_head", self->hdr->backlog_head),
                 evt_tag_long("read_head", self->hdr->read_head),
-                evt_tag_long("write_head", self->hdr->write_head),
-                evt_tag_long("backlog_len", self->hdr->backlog_len));
+                evt_tag_long("write_head", self->hdr->write_head));
     }
 
   return TRUE;
@@ -679,24 +978,24 @@ _save_queue(QDisk *self, GQueue *q, QDiskQueuePosition *q_pos)
        * disk anyway. */
 
       POINTER_TO_LOG_PATH_OPTIONS(g_queue_pop_head(q), &path_options);
-      log_msg_serialize(msg, sa, self->options->compaction ? LMSF_COMPACTION : 0);
+      log_msg_serialize(msg, sa, 0);
       log_msg_ack(msg, &path_options, AT_PROCESSED);
       log_msg_unref(msg);
       if (string_reached_memory_limit(serialized))
         {
           if (!qdisk_write_serialized_string_to_file(self, serialized, &current_offset))
             goto error;
-          if(!queue_start_position)
+          if (!queue_start_position)
             queue_start_position = current_offset;
           written_bytes += serialized->len;
           g_string_truncate(serialized, 0);
         }
     }
-  if(serialized->len)
+  if (serialized->len)
     {
       if (!qdisk_write_serialized_string_to_file(self, serialized, &current_offset))
         goto error;
-      if(!queue_start_position)
+      if (!queue_start_position)
         queue_start_position = current_offset;
       written_bytes += serialized->len;
     }
@@ -750,13 +1049,37 @@ qdisk_save_state(QDisk *self, GQueue *qout, GQueue *qbacklog, GQueue *qoverflow)
   return TRUE;
 }
 
-static void
-_update_header_with_default_values(QDisk *self)
+static gboolean
+_create_path(const gchar *filename)
 {
-  self->hdr->big_endian = TRUE;
-  self->hdr->version = 1;
-  self->hdr->backlog_head = self->hdr->read_head;
-  self->hdr->backlog_len = 0;
+  FilePermOptions fpermoptions;
+  file_perm_options_defaults(&fpermoptions);
+  return file_perm_options_create_containing_directory(&fpermoptions, filename);
+}
+
+static inline gboolean
+_is_header_version_current(QDisk *self)
+{
+  return self->hdr->version == QDISK_HDR_VERSION_CURRENT;
+}
+
+static void
+_upgrade_header(QDisk *self)
+{
+  if (self->hdr->version == 0)
+    {
+      self->hdr->big_endian = TRUE;
+      qdisk_empty_backlog(self);
+    }
+
+  if (self->hdr->version < 2)
+    {
+      struct stat st;
+      gboolean file_was_overwritten = (fstat(self->fd, &st) != 0 || st.st_size > self->options->disk_buf_size);
+      self->hdr->use_v1_wrap_condition = file_was_overwritten;
+    }
+
+  self->hdr->version = QDISK_HDR_VERSION_CURRENT;
 }
 
 gboolean
@@ -793,6 +1116,13 @@ qdisk_start(QDisk *self, const gchar *filename, GQueue *qout, GQueue *qbacklog, 
           new_file = TRUE;
         }
     }
+  if (!_create_path(filename))
+    {
+      msg_error("Error creating dir for disk-queue file",
+                evt_tag_str("filename", filename),
+                evt_tag_error("error"));
+      return FALSE;
+    }
 
   self->filename = g_strdup(filename);
   /* assumes self is zero initialized */
@@ -826,7 +1156,7 @@ qdisk_start(QDisk *self, const gchar *filename, GQueue *qout, GQueue *qbacklog, 
     {
       self->hdr = g_malloc(sizeof(QDiskFileHeader));
       memcpy(self->hdr, p, sizeof(QDiskFileHeader));
-      munmap(p, sizeof(QDiskFileHeader) );
+      munmap(p, sizeof(QDiskFileHeader));
       p = NULL;
     }
   else
@@ -841,7 +1171,7 @@ qdisk_start(QDisk *self, const gchar *filename, GQueue *qout, GQueue *qbacklog, 
       memset(&tmp, 0, sizeof(tmp));
       if (!pwrite_strict(self->fd, &tmp, sizeof(tmp), 0))
         {
-          msg_error("Error occurred while initalizing the new queue file",
+          msg_error("Error occurred while initializing the new queue file",
                     evt_tag_str("filename", self->filename),
                     evt_tag_error("error"));
           munmap((void *)self->hdr, sizeof(QDiskFileHeader));
@@ -850,13 +1180,15 @@ qdisk_start(QDisk *self, const gchar *filename, GQueue *qout, GQueue *qbacklog, 
           self->fd = -1;
           return FALSE;
         }
-      self->hdr->version = 1;
+      self->hdr->version = QDISK_HDR_VERSION_CURRENT;
       self->hdr->big_endian = (G_BYTE_ORDER == G_BIG_ENDIAN);
 
       self->hdr->read_head = QDISK_RESERVED_SPACE;
       self->hdr->write_head = QDISK_RESERVED_SPACE;
       self->hdr->backlog_head = self->hdr->read_head;
+      self->hdr->backlog_len = 0;
       self->hdr->length = 0;
+      self->hdr->use_v1_wrap_condition = FALSE;
       self->file_size = self->hdr->write_head;
 
       if (!qdisk_save_state(self, qout, qbacklog, qoverflow))
@@ -884,8 +1216,11 @@ qdisk_start(QDisk *self, const gchar *filename, GQueue *qout, GQueue *qbacklog, 
           self->fd = -1;
           return FALSE;
         }
-      if (self->hdr->version == 0)
-        _update_header_with_default_values(self);
+
+      if (!_is_header_version_current(self))
+        {
+          _upgrade_header(self);
+        }
 
       if ((self->hdr->big_endian && G_BYTE_ORDER == G_LITTLE_ENDIAN) ||
           (!self->hdr->big_endian && G_BYTE_ORDER == G_BIG_ENDIAN))
@@ -952,49 +1287,19 @@ qdisk_stop(QDisk *self)
       close(self->fd);
       self->fd = -1;
     }
-
-  self->options = NULL;
-}
-
-gssize
-qdisk_read(QDisk *self, gpointer buffer, gsize bytes_to_read, gint64 position)
-{
-  gssize res;
-  res = pread(self->fd, buffer, bytes_to_read, position);
-  if (res <= 0)
-    {
-      msg_error("Error reading disk-queue file",
-                evt_tag_str("error", res < 0 ? g_strerror(errno) : "short read"),
-                evt_tag_str("filename", self->filename));
-    }
-  return res;
-}
-
-guint64
-qdisk_skip_record(QDisk *self, guint64 position)
-{
-  guint64 new_position = position;
-  guint32 record_length;
-  qdisk_read (self, (gchar *) &record_length, sizeof(record_length), position);
-  record_length = GUINT32_FROM_BE(record_length);
-  new_position += record_length + sizeof(record_length);
-  if (new_position > self->hdr->write_head)
-    {
-      new_position = _correct_position_if_eof(self, (gint64 *)&new_position);
-    }
-  return new_position;
 }
 
 void
-qdisk_reset_file_if_possible(QDisk *self)
+qdisk_reset_file_if_empty(QDisk *self)
 {
-  if (qdisk_is_file_empty(self))
-    {
-      self->hdr->read_head = QDISK_RESERVED_SPACE;
-      self->hdr->write_head = QDISK_RESERVED_SPACE;
-      self->hdr->backlog_head = QDISK_RESERVED_SPACE;
-      _truncate_file (self, QDISK_RESERVED_SPACE);
-    }
+  if (!qdisk_is_file_empty(self))
+    return;
+
+  self->hdr->read_head = QDISK_RESERVED_SPACE;
+  self->hdr->write_head = QDISK_RESERVED_SPACE;
+  self->hdr->backlog_head = QDISK_RESERVED_SPACE;
+
+  _maybe_truncate_file(self, QDISK_RESERVED_SPACE);
 }
 
 DiskQueueOptions *
@@ -1007,12 +1312,6 @@ gint64
 qdisk_get_length(QDisk *self)
 {
   return self->hdr->length;
-}
-
-void
-qdisk_set_length(QDisk *self, gint64 new_value)
-{
-  self->hdr->length = new_value;
 }
 
 gint64
@@ -1028,6 +1327,12 @@ qdisk_get_filename(QDisk *self)
 }
 
 gint64
+qdisk_get_file_size(QDisk *self)
+{
+  return self->file_size;
+}
+
+gint64
 qdisk_get_writer_head(QDisk *self)
 {
   return self->hdr->write_head;
@@ -1039,40 +1344,10 @@ qdisk_get_reader_head(QDisk *self)
   return self->hdr->read_head;
 }
 
-void
-qdisk_set_reader_head(QDisk *self, gint64 new_value)
-{
-  self->hdr->read_head = new_value;
-}
-
 gint64
 qdisk_get_backlog_head(QDisk *self)
 {
   return self->hdr->backlog_head;
-}
-
-void
-qdisk_set_backlog_head(QDisk *self, gint64 new_value)
-{
-  self->hdr->backlog_head = new_value;
-}
-
-void
-qdisk_inc_backlog(QDisk *self)
-{
-  self->hdr->backlog_len++;
-}
-
-void
-qdisk_dec_backlog(QDisk *self)
-{
-  self->hdr->backlog_len--;
-}
-
-void
-qdisk_set_backlog_count(QDisk *self, gint64 new_value)
-{
-  self->hdr->backlog_len = new_value;
 }
 
 gint64
@@ -1096,12 +1371,14 @@ qdisk_is_read_only(QDisk *self)
 void
 qdisk_free(QDisk *self)
 {
+  self->options = NULL;
   g_free(self);
 }
 
 QDisk *
-qdisk_new(void)
+qdisk_new(DiskQueueOptions *options, const gchar *file_id)
 {
   QDisk *self = g_new0(QDisk, 1);
+  qdisk_init_instance(self, options, file_id);
   return self;
 }

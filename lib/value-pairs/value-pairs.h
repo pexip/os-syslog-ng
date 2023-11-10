@@ -27,20 +27,20 @@
 
 #include "syslog-ng.h"
 #include "logmsg/nvtable.h"
+#include "logmsg/type-hinting.h"
 #include "value-pairs/transforms.h"
-#include "type-hinting.h"
 #include "template/templates.h"
 #include "atomic.h"
 
 typedef struct _ValuePairs ValuePairs;
 
 typedef gboolean
-(*VPForeachFunc) (const gchar *name, TypeHint type, const gchar *value,
+(*VPForeachFunc) (const gchar *name, LogMessageValueType type, const gchar *value,
                   gsize value_len, gpointer user_data);
 
 typedef gboolean
 (*VPWalkValueCallbackFunc) (const gchar *name, const gchar *prefix,
-                            TypeHint type, const gchar *value, gsize value_len,
+                            LogMessageValueType type, const gchar *value, gsize value_len,
                             gpointer *prefix_data, gpointer user_data);
 typedef gboolean (*VPWalkCallbackFunc)(const gchar *name,
                                        const gchar *prefix, gpointer *prefix_data,
@@ -53,26 +53,27 @@ void value_pairs_add_glob_patterns(ValuePairs *vp, GList *patterns, gboolean inc
 void value_pairs_add_pair(ValuePairs *vp, const gchar *key, LogTemplate *value);
 
 void value_pairs_add_transforms(ValuePairs *vp, ValuePairsTransformSet *vpts);
+void value_pairs_set_cast_to_strings(ValuePairs *vp, gboolean enable);
+void value_pairs_set_auto_cast(ValuePairs *vp);
+gboolean value_pairs_is_cast_to_strings_explicit(ValuePairs *vp);
 
 gboolean value_pairs_foreach_sorted(ValuePairs *vp, VPForeachFunc func,
                                     GCompareFunc compare_func,
-                                    LogMessage *msg, gint32 seq_num, gint tz,
-                                    const LogTemplateOptions *template_options,
+                                    LogMessage *msg, LogTemplateEvalOptions *options,
                                     gpointer user_data);
 gboolean value_pairs_foreach(ValuePairs *vp, VPForeachFunc func,
-                             LogMessage *msg, gint32 seq_num, gint tz,
-                             const LogTemplateOptions *template_options,
+                             LogMessage *msg, LogTemplateEvalOptions *options,
                              gpointer user_data);
 
 gboolean value_pairs_walk(ValuePairs *vp,
                           VPWalkCallbackFunc obj_start_func,
                           VPWalkValueCallbackFunc process_value_func,
                           VPWalkCallbackFunc obj_end_func,
-                          LogMessage *msg, gint32 seq_num, gint tz,
-                          const LogTemplateOptions *template_options,
+                          LogMessage *msg, LogTemplateEvalOptions *options,
+                          gchar key_delimiter,
                           gpointer user_data);
 
-ValuePairs *value_pairs_new(void);
+ValuePairs *value_pairs_new(GlobalConfig *cfg);
 ValuePairs *value_pairs_new_default(GlobalConfig *cfg);
 ValuePairs *value_pairs_ref(ValuePairs *self);
 void value_pairs_unref(ValuePairs *self);

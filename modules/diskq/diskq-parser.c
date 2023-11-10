@@ -38,6 +38,7 @@ static CfgLexerKeyword diskq_keywords[] =
   { "mem_buf_size",      KW_MEM_BUF_SIZE },
   { "qout_size",         KW_QOUT_SIZE },
   { "dir",               KW_DIR },
+  { "truncate_size_ratio", KW_TRUNCATE_SIZE_RATIO },
   { NULL }
 };
 
@@ -53,4 +54,4 @@ CfgParser diskq_parser =
 
 };
 
-CFG_PARSER_IMPLEMENT_LEXER_BINDING(diskq_, LogDriverPlugin **)
+CFG_PARSER_IMPLEMENT_LEXER_BINDING(diskq_, DISKQ_, LogDriverPlugin **)

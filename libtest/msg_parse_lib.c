@@ -57,12 +57,45 @@ assert_log_message_doesnt_have_tag(LogMessage *log_message, const gchar *tag_nam
 }
 
 void
-assert_log_message_value(LogMessage *self, NVHandle handle, const gchar *expected_value)
+assert_log_message_value_unset(LogMessage *self, NVHandle handle)
+{
+  gssize key_name_length;
+  const gchar *key_name = log_msg_get_value_name(handle, &key_name_length);
+  const gchar *value = log_msg_get_value_if_set(self, handle, &key_name_length);
+
+  cr_assert(value == NULL, "Expected value for key %s to be unset but the actual value is %s", key_name, value);
+}
+
+void
+assert_log_message_value_unset_by_name(LogMessage *self, const gchar *name)
+{
+  assert_log_message_value_unset(self, log_msg_get_value_handle(name));
+}
+
+void
+assert_log_message_value_is_indirect(LogMessage *self, NVHandle handle)
+{
+  NVEntry *entry = nv_table_get_entry(self->payload, handle, NULL, NULL);
+  cr_assert(entry->indirect);
+}
+
+void
+assert_log_message_value_is_direct(LogMessage *self, NVHandle handle)
+{
+  NVEntry *entry = nv_table_get_entry(self->payload, handle, NULL, NULL);
+  cr_assert(!entry->indirect);
+}
+
+void
+assert_log_message_value_and_type(LogMessage *self, NVHandle handle,
+                                  const gchar *expected_value, LogMessageValueType expected_type)
 {
   gssize key_name_length;
   gssize value_length;
+  LogMessageValueType actual_type;
   const gchar *key_name = log_msg_get_value_name(handle, &key_name_length);
-  const gchar *actual_value = log_msg_get_value(self, handle, &value_length);
+  const gchar *actual_value_r = log_msg_get_value_with_type(self, handle, &value_length, &actual_type);
+  gchar *actual_value = g_strndup(actual_value_r, value_length);
 
   if (expected_value)
     {
@@ -71,12 +104,61 @@ assert_log_message_value(LogMessage *self, NVHandle handle, const gchar *expecte
     }
   else
     cr_assert_str_eq(actual_value, "", "No value is expected for key %s but its value is %s", key_name, actual_value);
+
+  if (expected_type != LM_VT_NONE)
+    cr_assert_eq(actual_type, expected_type,
+                 "Invalid value type for key %s; actual: %d, expected %d", key_name, actual_type, expected_type);
+
+  g_free(actual_value);
+}
+
+void
+assert_log_message_value(LogMessage *self, NVHandle handle, const gchar *expected_value)
+{
+  assert_log_message_value_and_type(self, handle, expected_value, LM_VT_NONE);
+}
+
+void
+assert_log_message_value_and_type_by_name(LogMessage *self, const gchar *name,
+                                          const gchar *expected_value, LogMessageValueType expected_type)
+{
+  assert_log_message_value_and_type(self, log_msg_get_value_handle(name), expected_value, expected_type);
+}
+
+void
+assert_log_message_match_value_and_type(LogMessage *self, gint index_,
+                                        const gchar *expected_value, LogMessageValueType expected_type)
+{
+  gssize value_length;
+  LogMessageValueType actual_type;
+  const gchar *actual_value_r = log_msg_get_match_with_type(self, index_, &value_length, &actual_type);
+  gchar *actual_value = g_strndup(actual_value_r, value_length);
+
+  if (expected_value)
+    {
+      cr_assert_str_eq(actual_value, expected_value, "Invalid value for $%d; actual: %s, expected: %s", index_,
+                       actual_value, expected_value);
+    }
+  else
+    cr_assert_str_eq(actual_value, "", "No value is expected for $%d but its value is %s", index_, actual_value);
+
+  if (expected_type != LM_VT_NONE)
+    cr_assert_eq(actual_type, expected_type,
+                 "Invalid value type for $%d; actual: %d, expected %d", index_, actual_type, expected_type);
+
+  g_free(actual_value);
+}
+
+void
+assert_log_message_match_value(LogMessage *self, gint index_, const gchar *expected_value)
+{
+  assert_log_message_match_value_and_type(self, index_, expected_value, LM_VT_NONE);
 }
 
 void
 assert_log_message_value_by_name(LogMessage *self, const gchar *name, const gchar *expected_value)
 {
-  assert_log_message_value(self, log_msg_get_value_handle(name), expected_value);
+  assert_log_message_value_and_type_by_name(self, name, expected_value, LM_VT_NONE);
 }
 
 void

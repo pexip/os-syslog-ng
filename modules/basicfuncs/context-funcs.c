@@ -30,9 +30,11 @@ tf_context_length_prepare(LogTemplateFunction *self, gpointer s,
 
 static void
 tf_context_length_call(LogTemplateFunction *self, gpointer s,
-                       const LogTemplateInvokeArgs *args, GString *result)
+                       const LogTemplateInvokeArgs *args,
+                       GString *result, LogMessageValueType *type)
 {
   g_string_append_printf(result, "%d", args->num_messages);
+  *type = LM_VT_INT32;
 }
 
 static void
@@ -53,13 +55,15 @@ TEMPLATE_FUNCTION(NULL, tf_context_length,
  * Returns in a syslog-ng style list of all elements
  */
 void
-tf_context_lookup_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *args, GString *result)
+tf_context_lookup_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *args,
+                       GString *result, LogMessageValueType *type)
 {
   gboolean first = TRUE;
   TFCondState *state = (TFCondState *) s;
   gint count = 0;
   GString *buf = g_string_sized_new(64);
 
+  *type = LM_VT_LIST;
   for (gint msg_ndx = 0; msg_ndx < args->num_messages; msg_ndx++)
     {
       LogMessage *msg = args->messages[msg_ndx];
@@ -73,7 +77,7 @@ tf_context_lookup_call(LogTemplateFunction *self, gpointer s, const LogTemplateI
                 g_string_append_c(result, ',');
 
               /* NOTE: not recursive, as the message context is just one message */
-              log_template_format(state->super.argv_templates[i], msg, args->opts, args->tz, args->seq_num, args->context_id, buf);
+              log_template_format(state->super.argv_templates[i], msg, args->options, buf);
               str_repr_encode_append(result, buf->str, buf->len, ",");
 
               first = FALSE;
@@ -94,12 +98,14 @@ TEMPLATE_FUNCTION(TFCondState, tf_context_lookup, tf_grep_prepare, NULL, tf_cont
  * Returns in a syslog-ng style list of all specified name value pairs in the entire context.
  */
 void
-tf_context_values_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *args, GString *result)
+tf_context_values_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *args,
+                       GString *result, LogMessageValueType *type)
 {
   gboolean first = TRUE;
   TFSimpleFuncState *state = (TFSimpleFuncState *) s;
   GString *buf = g_string_sized_new(64);
 
+  *type = LM_VT_LIST;
   for (gint msg_ndx = 0; msg_ndx < args->num_messages; msg_ndx++)
     {
       LogMessage *msg = args->messages[msg_ndx];
@@ -110,7 +116,7 @@ tf_context_values_call(LogTemplateFunction *self, gpointer s, const LogTemplateI
             g_string_append_c(result, ',');
 
           /* NOTE: not recursive, as the message context is just one message */
-          log_template_format(state->argv_templates[i], msg, args->opts, args->tz, args->seq_num, args->context_id, buf);
+          log_template_format(state->argv_templates[i], msg, args->options, buf);
           str_repr_encode_append(result, buf->str, buf->len, ",");
 
           first = FALSE;

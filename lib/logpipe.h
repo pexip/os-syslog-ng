@@ -232,6 +232,12 @@ struct _LogPipe
   gboolean (*deinit)(LogPipe *self);
   void (*post_deinit)(LogPipe *self);
 
+  /* this event function is used to perform necessary operation, such as
+   * starting worker thread, and etc. therefore, syslog-ng will terminate if
+   * return value is false.
+   */
+  gboolean (*on_config_inited)(LogPipe *self);
+
   const gchar *(*generate_persist_name)(const LogPipe *self);
   GList *(*arcs)(LogPipe *self);
 
@@ -259,7 +265,7 @@ G_STATIC_ASSERT(G_STRUCT_OFFSET(LogPipe, queue) - G_STRUCT_OFFSET(LogPipe, flags
 extern gboolean (*pipe_single_step_hook)(LogPipe *pipe, LogMessage *msg, const LogPathOptions *path_options);
 
 LogPipe *log_pipe_ref(LogPipe *self);
-void log_pipe_unref(LogPipe *self);
+gboolean log_pipe_unref(LogPipe *self);
 LogPipe *log_pipe_new(GlobalConfig *cfg);
 void log_pipe_init_instance(LogPipe *self, GlobalConfig *cfg);
 void log_pipe_forward_notify(LogPipe *self, gint notify_code, gpointer user_data);
@@ -270,6 +276,7 @@ void log_pipe_detach_expr_node(LogPipe *self);
 static inline GlobalConfig *
 log_pipe_get_config(LogPipe *s)
 {
+  g_assert(s->cfg);
   return s->cfg;
 }
 
@@ -317,6 +324,14 @@ log_pipe_deinit(LogPipe *s)
         }
       return FALSE;
     }
+  return TRUE;
+}
+
+static inline gboolean
+log_pipe_on_config_inited(LogPipe *s)
+{
+  if (s->on_config_inited)
+    return s->on_config_inited(s);
   return TRUE;
 }
 

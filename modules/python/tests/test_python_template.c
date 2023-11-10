@@ -19,6 +19,11 @@
  * COPYING for details.
  */
 
+/* this has to come first for modules which include the Python.h header */
+#include "python-module.h"
+
+#include <criterion/criterion.h>
+
 #include "python-helpers.h"
 #include "python-logmsg.h"
 #include "python-logtemplate.h"
@@ -27,10 +32,11 @@
 #include "logmsg/logmsg.h"
 #include "syslog-format.h"
 #include "timeutils/format.h"
+#include "cfg.h"
+#include "scratch-buffers.h"
 
 #include "python-integerpointer.h"
 
-#include <criterion/criterion.h>
 
 static MsgFormatOptions parse_options;
 
@@ -53,7 +59,7 @@ _py_init_interpreter(void)
   }
   PyGILState_Release(gstate);
 
-  PyEval_InitThreads();
+  py_init_threads();
   py_log_message_init();
   py_log_template_init();
   py_integer_pointer_init();
@@ -74,11 +80,15 @@ _init_python_main(void)
 void setup(void)
 {
   app_startup();
+  configuration = cfg_new_snippet();
+  cfg_load_module(configuration, "syslogformat");
+
   log_template_options_defaults(&log_template_options);
-  log_template_options.ts_format = TS_FMT_BSD;
-  log_template_options.time_zone_info[LTZ_SEND]=time_zone_info_new("+05:00");
+  log_template_options.time_zone[LTZ_SEND] = g_strdup("+05:00");
+  log_template_options_init(&log_template_options, configuration);
 
   msg_format_options_defaults(&parse_options);
+  msg_format_options_init(&parse_options, configuration);
   _py_init_interpreter();
   _init_python_main();
 }
@@ -90,6 +100,11 @@ void teardown(void)
     Py_DECREF(py_template_options);
   }
   PyGILState_Release(gstate);
+
+  msg_format_options_destroy(&parse_options);
+  log_template_options_destroy(&log_template_options);
+  cfg_free(configuration);
+  scratch_buffers_explicit_gc();
   app_shutdown();
 }
 
@@ -98,10 +113,7 @@ TestSuite(python_log_logtemplate, .init = setup, .fini = teardown);
 static PyLogMessage *
 create_parsed_message(const gchar *raw_msg)
 {
-  LogMessage *msg = log_msg_new_empty();
-  MsgFormatOptions template_parse_options = {0};
-  msg_format_options_defaults(&template_parse_options);
-  syslog_format_handler(&template_parse_options, (const guchar *)raw_msg, strlen(raw_msg), msg);
+  LogMessage *msg = msg_format_parse(&parse_options, (const guchar *) raw_msg, strlen(raw_msg));
 
   PyLogMessage *py_log_msg = (PyLogMessage *)py_log_message_new(msg);
   log_msg_unref(msg);

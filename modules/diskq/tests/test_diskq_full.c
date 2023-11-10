@@ -21,17 +21,17 @@
  *
  */
 
+#include <criterion/criterion.h>
+#include "libtest/queue_utils_lib.h"
+#include "test_diskq_tools.h"
+
 #include "messages.h"
 #include "logqueue-disk.h"
 #include "logqueue-disk-reliable.h"
 #include "logqueue-disk-non-reliable.h"
 #include "apphook.h"
 #include "plugin.h"
-#include <criterion/criterion.h>
-#include "queue_utils_lib.h"
-#include "test_diskq_tools.h"
 
-#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -71,7 +71,7 @@ test_diskq_become_full(gboolean reliable, const gchar *filename)
 
   stats_lock();
   StatsClusterKey sc_key;
-  stats_cluster_logpipe_key_set(&sc_key, SCS_DESTINATION, q->persist_name, NULL );
+  stats_cluster_logpipe_key_set(&sc_key, SCS_DESTINATION, q->persist_name, NULL);
   stats_register_counter(0, &sc_key, SC_TYPE_DROPPED, &q->dropped_messages);
   stats_counter_set(q->dropped_messages, 0);
   stats_unlock();

@@ -19,19 +19,23 @@
  * COPYING for details.
  */
 
+/* this has to come first for modules which include the Python.h header */
+#include "python-module.h"
+
+#include <criterion/criterion.h>
+#include "libtest/persist_lib.h"
+
 #include "python-persist.h"
 #include "python-main.h"
 #include "apphook.h"
-#include "persist_lib.h"
 
-#include <criterion/criterion.h>
 
 static PyObject *_python_main;
 static PyObject *_python_main_dict;
 
 static GlobalConfig *cfg;
 
-YYLTYPE yyltype;
+CFG_LTYPE yyltype;
 GlobalConfig *empty_cfg;
 
 static void
@@ -51,7 +55,7 @@ _py_init_interpreter(void)
   Py_Initialize();
   py_init_argv();
 
-  PyEval_InitThreads();
+  py_init_threads();
   py_persist_init();
   PyEval_SaveThread();
 }

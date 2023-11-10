@@ -21,6 +21,11 @@
  *
  */
 
+#include <criterion/criterion.h>
+#include <criterion/parameterized.h>
+#include "libtest/queue_utils_lib.h"
+#include "test_diskq_tools.h"
+
 #include "logqueue.h"
 #include "logqueue-fifo.h"
 #include "logqueue-disk.h"
@@ -34,10 +39,6 @@
 #include "mainloop-call.h"
 #include "mainloop-io-worker.h"
 #include "tls-support.h"
-#include "queue_utils_lib.h"
-#include "test_diskq_tools.h"
-#include <criterion/criterion.h>
-#include <criterion/parameterized.h>
 #include "timeutils/misc.h"
 #include <stdlib.h>
 #include <string.h>
@@ -64,7 +65,7 @@ Test(diskq, testcase_zero_diskbuf_and_normal_acks)
   log_queue_set_use_backlog(q, TRUE);
 
   filename = g_string_sized_new(32);
-  g_string_sprintf(filename, "test-normal_acks.qf");
+  g_string_printf(filename, "test-normal_acks.qf");
   unlink(filename->str);
   log_queue_disk_load_queue(q, filename->str);
   fed_messages = 0;
@@ -97,7 +98,7 @@ Test(diskq, testcase_zero_diskbuf_alternating_send_acks)
   log_queue_set_use_backlog(q, TRUE);
 
   filename = g_string_sized_new(32);
-  g_string_sprintf(filename, "test-send_acks.qf");
+  g_string_printf(filename, "test-send_acks.qf");
   unlink(filename->str);
   log_queue_disk_load_queue(q, filename->str);
   fed_messages = 0;
@@ -131,7 +132,7 @@ Test(diskq, testcase_ack_and_rewind_messages)
   log_queue_set_use_backlog(q, TRUE);
 
   StatsClusterKey sc_key;
-  stats_cluster_logpipe_key_set(&sc_key, SCS_DESTINATION, "queued messages", NULL );
+  stats_cluster_logpipe_key_set(&sc_key, SCS_DESTINATION, "queued messages", NULL);
   stats_lock();
   stats_register_counter(0, &sc_key, SC_TYPE_QUEUED, &q->queued_messages);
   stats_unlock();
@@ -139,7 +140,7 @@ Test(diskq, testcase_ack_and_rewind_messages)
   cr_assert_eq(stats_counter_get(q->queued_messages), 0, "queued messages: %d", __LINE__);
 
   filename = g_string_sized_new(32);
-  g_string_sprintf(filename, "test-rewind_and_acks.qf");
+  g_string_printf(filename, "test-rewind_and_acks.qf");
   unlink(filename->str);
   log_queue_disk_load_queue(q, filename->str);
 
@@ -148,7 +149,7 @@ Test(diskq, testcase_ack_and_rewind_messages)
   feed_some_messages(q, 1000);
   cr_assert_eq(stats_counter_get(q->queued_messages), 1000, "queued messages: %d", __LINE__);
 
-  for(i = 0; i < 10; i++)
+  for (i = 0; i < 10; i++)
     {
       send_some_messages(q, 1);
       cr_assert_eq(stats_counter_get(q->queued_messages), 999, "queued messages wrong number %d", __LINE__);
@@ -174,7 +175,7 @@ Test(diskq, testcase_ack_and_rewind_messages)
 #define MESSAGES_SUM (FEEDERS * MESSAGES_PER_FEEDER)
 #define TEST_RUNS 10
 
-GStaticMutex tlock;
+GMutex tlock;
 glong sum_time;
 
 static gpointer
@@ -187,10 +188,8 @@ threaded_feed(gpointer args)
   GTimeVal start, end;
   glong diff;
 
-  iv_init();
-
   /* emulate main loop for LogQueue */
-  main_loop_worker_thread_start(NULL);
+  main_loop_worker_thread_start(MLW_ASYNC_WORKER);
 
   tmpl = log_msg_new_empty();
   g_get_current_time(&start);
@@ -209,9 +208,9 @@ threaded_feed(gpointer args)
   main_loop_worker_invoke_batch_callbacks();
   g_get_current_time(&end);
   diff = g_time_val_diff(&end, &start);
-  g_static_mutex_lock(&tlock);
+  g_mutex_lock(&tlock);
   sum_time += diff;
-  g_static_mutex_unlock(&tlock);
+  g_mutex_unlock(&tlock);
   main_loop_worker_thread_stop();
   log_msg_unref(tmpl);
   return NULL;
@@ -225,15 +224,14 @@ threaded_consume(gpointer st)
   gint i;
 
   /* just to make sure time is properly cached */
-  iv_init();
-  main_loop_worker_thread_start(NULL);
+  main_loop_worker_thread_start(MLW_ASYNC_WORKER);
 
   for (i = 0; i < MESSAGES_SUM; i++)
     {
       LogMessage *msg = NULL;
       gint slept = 0;
 
-      while(!msg)
+      while (!msg)
         {
           main_loop_worker_run_gc();
 
@@ -280,16 +278,16 @@ Test(diskq, testcase_with_threads)
 
       q = log_queue_disk_reliable_new(&options, NULL);
       filename = g_string_sized_new(32);
-      g_string_sprintf(filename, "test-%04d.qf", i);
+      g_string_printf(filename, "test-%04d.qf", i);
       unlink(filename->str);
       log_queue_disk_load_queue(q, filename->str);
 
       for (j = 0; j < FEEDERS; j++)
         {
-          thread_feed[j] = g_thread_create(threaded_feed, q, TRUE, NULL);
+          thread_feed[j] = g_thread_new(NULL, threaded_feed, q);
         }
 
-      thread_consume = g_thread_create(threaded_consume, q, TRUE, NULL);
+      thread_consume = g_thread_new(NULL, threaded_consume, q);
 
       for (j = 0; j < FEEDERS; j++)
         {
@@ -363,8 +361,8 @@ ParameterizedTest(restart_test_parameters *test_case, diskq, testcase_diskbuffer
   stat(filename_corrupted_dq, &file_stat);
   cr_assert_eq(S_ISREG(file_stat.st_mode), TRUE,
                "Corrupted disk-queue file does not exists!!");
-  assert_string(qdisk_get_filename(disk_queue->qdisk), filename,
-                "New disk-queue file's name should be the same\n");
+  cr_assert_str_eq(qdisk_get_filename(disk_queue->qdisk), filename,
+                   "New disk-queue file's name should be the same\n");
   cr_assert_eq(qdisk_get_maximum_size(disk_queue->qdisk), original_disk_buf_size,
                "Disk-queue option does not match the original configured value!\n");
   cr_assert_eq(qdisk_get_length(disk_queue->qdisk), 0,
@@ -395,20 +393,11 @@ is_valid_msg_size(guint32 one_msg_size)
   return (one_msg_size == empty_msg_size);
 }
 
-struct diskq_tester_parameters;
-
-typedef LogQueue *(*queue_constructor_t)(DiskQueueOptions *, const gchar *);
-typedef void (*first_msg_asserter_t)(LogQueue *q, struct diskq_tester_parameters *parameters);
-typedef void (*second_msg_asserter_t)(LogQueue *q, struct diskq_tester_parameters *parameters, gssize one_msg_size);
-
 typedef struct diskq_tester_parameters
 {
   guint32 disk_size;
   gboolean reliable;
   gboolean overflow_expected;
-  queue_constructor_t constructor;
-  first_msg_asserter_t first_msg_asserter;
-  second_msg_asserter_t second_msg_asserter;
   guint32 qout_size;
   const gchar *filename;
 } diskq_tester_parameters_t;
@@ -419,9 +408,9 @@ init_statistics(LogQueue *q)
 
   StatsClusterKey sc_key1, sc_key2;
   stats_lock();
-  stats_cluster_logpipe_key_set(&sc_key1, SCS_DESTINATION, "queued messages", NULL );
+  stats_cluster_logpipe_key_set(&sc_key1, SCS_DESTINATION, "queued messages", NULL);
   stats_register_counter(0, &sc_key1, SC_TYPE_QUEUED, &q->queued_messages);
-  stats_cluster_logpipe_key_set(&sc_key2, SCS_DESTINATION, "memory usage", NULL );
+  stats_cluster_logpipe_key_set(&sc_key2, SCS_DESTINATION, "memory usage", NULL);
   stats_register_counter(1, &sc_key2, SC_TYPE_MEMORY_USAGE, &q->memory_usage);
   stats_unlock();
   stats_counter_set(q->queued_messages, 0);
@@ -456,7 +445,10 @@ testcase_diskq_prepare(DiskQueueOptions *options, diskq_tester_parameters_t *par
   _construct_options(options, parameters->disk_size, 100000, parameters->reliable);
   options->qout_size = parameters->qout_size;
 
-  q = parameters->constructor(options, NULL);
+  if (parameters->reliable)
+    q = log_queue_disk_reliable_new(options, NULL);
+  else
+    q = log_queue_disk_non_reliable_new(options, NULL);
 
   init_statistics(q);
   cr_assert_eq(stats_counter_get(q->queued_messages), 0, "queued messages: line: %d", __LINE__);
@@ -468,108 +460,73 @@ testcase_diskq_prepare(DiskQueueOptions *options, diskq_tester_parameters_t *par
   return q;
 }
 
-static void
-assert_first_message_reliable(LogQueue *q, diskq_tester_parameters_t *parameters)
+ParameterizedTestParameters(diskq, test_diskq_statistics)
 {
-  feed_some_messages(q, 1);
-  cr_assert_eq(stats_counter_get(q->queued_messages), 1, "queued messages: line: %d", __LINE__);
-  /* For reliable queue we have qout = 0, so messages go to the overflow area.
-     But qreliable pushes 3 elements per message: msg, options, position */
-  if (parameters->overflow_expected)
-    cr_assert_eq(((LogQueueDiskReliable *)q)->qreliable->length, 3, "one message on overflow area: line: %d", __LINE__);
+  static diskq_tester_parameters_t test_cases[] =
+  {
+    // small enough to trigger overflow
+    { .disk_size = 10*1024, .reliable = TRUE, .overflow_expected = TRUE, .qout_size = 0, .filename = "file1.qf" },
+
+    // no overflow
+    { .disk_size = 500*1024, .reliable = TRUE, .overflow_expected = FALSE, .qout_size = 0, .filename = "file2.qf" },
+
+    // nonreliable version moves msgs from qoverflow only if there is free space in qout: qout_size must be 1
+    { .disk_size = 1*1024, .reliable = FALSE, .overflow_expected = TRUE, .qout_size = 1, .filename = "file3.qf" }
+  };
+
+  return cr_make_param_array(diskq_tester_parameters_t, test_cases, sizeof(test_cases) / sizeof(test_cases[0]));
 }
 
-static void
-assert_first_message_non_reliable(LogQueue *q, diskq_tester_parameters_t *parameters)
+static inline void
+assert_overflow_queue_length(diskq_tester_parameters_t *parameters, LogQueue *q, gsize sent_msgs)
 {
-  LogQueueDiskNonReliable *queue = (LogQueueDiskNonReliable *)q;
-  feed_some_messages(q, 1);
-  cr_assert_eq(stats_counter_get(q->queued_messages), 1, "queued messages: line: %d", __LINE__);
-  cr_assert_eq(queue->qoverflow->length, 0, "one message on overflow area: line: %d", __LINE__);
+  gsize expected_length = sent_msgs - parameters->qout_size;
+
+  if (parameters->reliable)
+    {
+      cr_assert_eq(((LogQueueDiskReliable *)q)->qreliable->length, 3 * expected_length,
+                   "%"G_GSIZE_FORMAT" message on overflow area: line: %d", expected_length, __LINE__);
+      return;
+    }
+
+  cr_assert_eq(((LogQueueDiskNonReliable *)q)->qoverflow->length, 2 * expected_length,
+               "%"G_GSIZE_FORMAT" message on overflow area: line: %d", expected_length, __LINE__);
 }
 
-static void
-assert_second_message_reliable(LogQueue *q, diskq_tester_parameters_t *parameters, gssize one_msg_size)
-{
-  LogQueueDiskReliable *queue = (LogQueueDiskReliable *)q;
-  feed_some_messages(q, 1);
-  cr_assert_eq(stats_counter_get(q->queued_messages), 2, "queued messages: line: %d", __LINE__);
-  cr_assert_eq(stats_counter_get(q->memory_usage), one_msg_size*2, "memory_usage: line: %d", __LINE__);
-
-  if (parameters->overflow_expected)
-    cr_assert_eq(queue->qreliable->length, 6, "one message on overflow area: line: %d", __LINE__);
-}
-
-static void
-assert_second_message_non_reliable(LogQueue *q, diskq_tester_parameters_t *parameters, gssize one_msg_size)
-{
-  feed_some_messages(q, 1);
-  cr_assert_eq(stats_counter_get(q->queued_messages), 2, "queued messages: line: %d", __LINE__);
-  cr_assert_eq(stats_counter_get(q->memory_usage), one_msg_size*2, "memory_usage: line: %d", __LINE__);
-
-  /* qout must be 1 for nonreliable case so we have only one message. But nonreliable pushes two elements: msg + options */
-  cr_assert_eq(((LogQueueDiskNonReliable *)q)->qoverflow->length, 2, "one message on overflow area: line: %d", __LINE__);
-}
-
-
-static void
-testcase_diskq_statistics(diskq_tester_parameters_t parameters)
+ParameterizedTest(diskq_tester_parameters_t *parameters, diskq, test_diskq_statistics)
 {
   LogQueue *q;
   DiskQueueOptions options = {0};
 
-  q = testcase_diskq_prepare(&options, &parameters);
+  q = testcase_diskq_prepare(&options, parameters);
 
-  parameters.first_msg_asserter(q, &parameters);
+  feed_some_messages(q, 1);
+  cr_assert_eq(stats_counter_get(q->queued_messages), 1, "queued messages: line: %d", __LINE__);
+
+  if (parameters->overflow_expected)
+    assert_overflow_queue_length(parameters, q, 1);
 
   guint32 one_msg_size = stats_counter_get(q->memory_usage);
-  if (parameters.overflow_expected)
+  if (parameters->overflow_expected)
     /* Only when overflow. If there is no overflow, the first
        msg is put to the output queue so statistics is not increased: one_msg_size == 0 */
     cr_assert(is_valid_msg_size(one_msg_size), "one_msg_size %d: line: %d", one_msg_size, __LINE__);
   else
     cr_assert_eq(stats_counter_get(q->memory_usage), 0, "queued messages: line: %d", __LINE__);
 
-  parameters.second_msg_asserter(q, &parameters, one_msg_size);
+  feed_some_messages(q, 1);
+  cr_assert_eq(stats_counter_get(q->queued_messages), 2, "queued messages: line: %d", __LINE__);
+  cr_assert_eq(stats_counter_get(q->memory_usage), one_msg_size*2, "memory_usage: line: %d", __LINE__);
+
+  if (parameters->overflow_expected)
+    assert_overflow_queue_length(parameters, q, 2);
 
   assert_general_message_flow(q, one_msg_size);
 
-  unlink(parameters.filename);
+  unlink(parameters->filename);
 
   log_queue_unref(q);
   disk_queue_options_destroy(&options);
-}
-
-ParameterizedTestParameters(diskq, test_diskq_statistics)
-{
-  static diskq_tester_parameters_t test_cases[] =
-  {
-    // small enough to trigger overflow
-    { 10*1024, TRUE, TRUE, log_queue_disk_reliable_new, assert_first_message_reliable, assert_second_message_reliable, 0, "file1.qf" },
-
-    // no overflow
-    { 500*1024, TRUE, FALSE, log_queue_disk_reliable_new, assert_first_message_reliable, assert_second_message_reliable, 0, "file2.qf" },
-
-    // nonreliable version moves msgs from qoverflow only if there is free space in qout: qout_size must be 1
-    { 1*1024, FALSE, TRUE, log_queue_disk_non_reliable_new, assert_first_message_non_reliable, assert_second_message_non_reliable, 1, "file3.qf" }
-  };
-
-  return cr_make_param_array(diskq_tester_parameters_t, test_cases, sizeof(test_cases) / sizeof(test_cases[0]));
-}
-
-ParameterizedTest(diskq_tester_parameters_t *test_cases, diskq, test_diskq_statistics)
-{
-  testcase_diskq_statistics((diskq_tester_parameters_t)
-  {
-    .disk_size = test_cases->disk_size,
-    .reliable = test_cases->reliable,
-    .overflow_expected = test_cases->overflow_expected,
-    .constructor = test_cases->constructor,
-    .first_msg_asserter = test_cases->first_msg_asserter,
-    .second_msg_asserter = test_cases->second_msg_asserter,
-    .qout_size = test_cases->qout_size,
-    .filename = test_cases->filename
-  });
 }
 
 static void
@@ -587,7 +544,7 @@ setup(void)
   configuration = cfg_new_snippet();
   configuration->stats_options.level = 1;
 
-  assert_true(cfg_init(configuration), "cfg_init failed!");
+  cr_assert(cfg_init(configuration));
 }
 
 static void

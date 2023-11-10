@@ -32,7 +32,7 @@
  * Some information about how we embed the Python interpreter:
  *  - instead of using the __main__ module, we use a separate _syslogng_main
  *    module as we want to replace it every time syslog-ng is reloaded
- *  - hanlding of our separate main module is implemented by this module
+ *  - handling of our separate main module is implemented by this module
  *  - this separate __main__ module requires some magic though (most of it
  *    is in _py_construct_main_module(), see below.
  *  - the PyObject reference to the current main module is stored in the
@@ -64,9 +64,10 @@ _py_construct_main_module(void)
   if (!module)
     {
       gchar buf[256];
+      _py_format_exception_text(buf, sizeof(buf));
 
       msg_error("Error creating syslog-ng main module",
-                evt_tag_str("exception", _py_format_exception_text(buf, sizeof(buf))));
+                evt_tag_str("exception", buf));
       _py_finish_exception_handling();
       return NULL;
     }
@@ -133,7 +134,6 @@ _py_evaluate_global_code(PythonConfig *pc, const gchar *filename, const gchar *c
   PyObject *module;
   PyObject *dict;
   PyObject *code_object;
-  gchar buf[256];
 
   module = _py_get_main_module(pc);
   if (!module)
@@ -160,8 +160,11 @@ _py_evaluate_global_code(PythonConfig *pc, const gchar *filename, const gchar *c
   code_object = Py_CompileString((char *) code, filename, Py_file_input);
   if (!code_object)
     {
+      gchar buf[256];
+      _py_format_exception_text(buf, sizeof(buf));
+
       msg_error("Error compiling Python global code block",
-                evt_tag_str("exception", _py_format_exception_text(buf, sizeof(buf))));
+                evt_tag_str("exception", buf));
       _py_finish_exception_handling();
       return FALSE;
     }
@@ -170,8 +173,11 @@ _py_evaluate_global_code(PythonConfig *pc, const gchar *filename, const gchar *c
 
   if (!module)
     {
+      gchar buf[256];
+      _py_format_exception_text(buf, sizeof(buf));
+
       msg_error("Error evaluating global Python block",
-                evt_tag_str("exception", _py_format_exception_text(buf, sizeof(buf))));
+                evt_tag_str("exception", buf));
       _py_finish_exception_handling();
       return FALSE;
     }
@@ -179,7 +185,7 @@ _py_evaluate_global_code(PythonConfig *pc, const gchar *filename, const gchar *c
 }
 
 gboolean
-python_evaluate_global_code(GlobalConfig *cfg, const gchar *code, YYLTYPE *yylloc)
+python_evaluate_global_code(GlobalConfig *cfg, const gchar *code, CFG_LTYPE *yylloc)
 {
   PyGILState_STATE gstate;
   gchar buf[256];

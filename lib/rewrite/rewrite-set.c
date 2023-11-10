@@ -50,12 +50,15 @@ log_rewrite_set_process(LogRewrite *s, LogMessage **pmsg, const LogPathOptions *
 {
   LogRewriteSet *self = (LogRewriteSet *) s;
   GString *result;
+  LogMessageValueType type;
 
   result = scratch_buffers_alloc();
-  log_template_format(self->value_template, *pmsg, &self->template_options, LTZ_SEND, 0, NULL, result);
+
+  LogTemplateEvalOptions options = {&self->template_options, LTZ_SEND, 0, NULL, LM_VT_STRING};
+  log_template_format_value_and_type(self->value_template, *pmsg, &options, result, &type);
 
   log_msg_make_writable(pmsg, path_options);
-  log_msg_set_value(*pmsg, self->super.value_handle, result->str, result->len);
+  log_msg_set_value_with_type(*pmsg, self->super.value_handle, result->str, result->len, type);
 }
 
 static LogPipe *
@@ -66,10 +69,9 @@ log_rewrite_set_clone(LogPipe *s)
 
   cloned = (LogRewriteSet *) log_rewrite_set_new(self->value_template, s->cfg);
   cloned->super.value_handle = self->super.value_handle;
+  cloned->super.condition = filter_expr_clone(self->super.condition);
 
-  if (self->super.condition)
-    cloned->super.condition = filter_expr_ref(self->super.condition);
-
+  log_template_options_clone(&self->template_options, &cloned->template_options);
   return &cloned->super.super;
 }
 

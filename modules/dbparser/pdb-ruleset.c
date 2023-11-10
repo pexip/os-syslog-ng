@@ -56,11 +56,11 @@ _add_matches_to_message(LogMessage *msg, GArray *matches, NVHandle ref_handle, c
         }
       else if (ref_handle != LM_V_NONE && log_msg_is_handle_settable_with_an_indirect_value(match->handle))
         {
-          log_msg_set_value_indirect(msg, match->handle, ref_handle, match->type, match->ofs, match->len);
+          log_msg_set_value_indirect_with_type(msg, match->handle, ref_handle, match->ofs, match->len, match->type);
         }
       else
         {
-          log_msg_set_value(msg, match->handle, input_string + match->ofs, match->len);
+          log_msg_set_value_with_type(msg, match->handle, input_string + match->ofs, match->len, match->type);
         }
     }
 }
@@ -72,7 +72,7 @@ _calculate_program(PDBLookupParams *lookup, LogMessage *msg, gssize *program_len
     return log_msg_get_value(msg, lookup->program_handle, program_len);
 
   GString *program = scratch_buffers_alloc();
-  log_template_format(lookup->program_template, msg, NULL, LTZ_LOCAL, 0, NULL, program);
+  log_template_format(lookup->program_template, msg, &DEFAULT_TEMPLATE_EVAL_OPTIONS, program);
   *program_len = program->len;
   return program->str;
 }

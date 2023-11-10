@@ -22,106 +22,154 @@
  */
 
 #include <criterion/criterion.h>
+#include "libtest/cr_template.h"
+#include "libtest/msg_parse_lib.h"
+#include "libtest/config_parse_lib.h"
+#include "libtest/mock-logpipe.h"
 
 #include "groupingby.h"
+#include "filter/filter-expr-parser.h"
+#include "filter/filter-expr.h"
 #include "apphook.h"
 #include "cfg.h"
+#include "scratch-buffers.h"
 
-static LogTemplate *
-_get_template(const gchar *template, GlobalConfig *cfg)
+static LogParser *
+_compile_grouping_by(gchar *expr)
 {
-  LogTemplate *self = log_template_new(cfg, "dummy");
-
-  log_template_compile(self, template, NULL);
-
-  return self;
+  LogParser *gby;
+  cr_assert(parse_config(expr, LL_CONTEXT_PARSER, NULL, (gpointer *) &gby) == TRUE);
+  return gby;
 }
 
-Test(grouping_by, create_grouping_by)
+static LogMessage *
+_create_input_msg(const gchar *prog)
 {
-  GlobalConfig *cfg = cfg_new_snippet();
-  LogParser *parser = grouping_by_new(cfg);
+  LogMessage *msg = log_msg_new_empty();
+  log_msg_set_value_by_name(msg, "key", "thesamekey", -1);
+  log_msg_set_value_by_name(msg, "PROGRAM", prog, -1);
+  return msg;
+}
 
-  grouping_by_set_synthetic_message(parser, synthetic_message_new());
+void
+_process_msg(LogParser *parser, const gchar *prog)
+{
+  LogPathOptions path_options = LOG_PATH_OPTIONS_INIT;
 
-  grouping_by_set_timeout(parser, 1);
+  LogMessage *msg = _create_input_msg(prog);
+  /* NOTE: log_pipe_queue() consumes a reference */
+  log_pipe_queue(&parser->super, msg, &path_options);
+}
 
-  LogTemplate *template = _get_template("$TEMPLATE", cfg);
-  grouping_by_set_key_template(parser, template);
-  log_template_unref(template);
 
-  cr_assert(log_pipe_init(&parser->super));
+Test(grouping_by, grouping_by_produces_aggregate_as_the_trigger_is_received)
+{
+  LogPipeMock *capture = log_pipe_mock_new(configuration);
+  LogParser *parser = _compile_grouping_by(
+                        "grouping-by(key(\"$key\")"
+                        "    aggregate("
+                        "        value(\"aggr\" \"$(list-slice :-1 $(context-values $PROGRAM))\")"
+                        "    )"
+                        "    timeout(1)"
+                        "    inject-mode(pass-through)"
+                        "    trigger(\"$(context-length)\" == \"3\")"
+                        ");");
 
-  cr_assert(log_pipe_deinit(&parser->super));
+  log_pipe_append(&parser->super, &capture->super);
+  cr_assert(log_pipe_init(&capture->super) == TRUE);
+  cr_assert(log_pipe_init(&parser->super) == TRUE);
+
+  _process_msg(parser, "first");
+  _process_msg(parser, "second");
+  _process_msg(parser, "third");
+
+  cr_assert(capture->captured_messages->len == 4);
+  assert_log_message_value_by_name(log_pipe_mock_get_message(capture, 0), "PROGRAM", "first");
+  assert_log_message_value_by_name(log_pipe_mock_get_message(capture, 1), "PROGRAM", "second");
+  /* the aggregate comes before the triggering message */
+  assert_log_message_value_by_name(log_pipe_mock_get_message(capture, 2), "aggr", "first,second,third");
+  assert_log_message_value_by_name(log_pipe_mock_get_message(capture, 3), "PROGRAM", "third");
 
   log_pipe_unref(&parser->super);
-  cfg_free(cfg);
+  log_pipe_unref(&capture->super);
+}
+
+Test(grouping_by, grouping_by_drops_original_messages_if_inject_mode_is_aggregate_only)
+{
+  LogPipeMock *capture = log_pipe_mock_new(configuration);
+  LogParser *parser = _compile_grouping_by(
+                        "grouping-by(key(\"$key\")"
+                        "    aggregate("
+                        "        value(\"aggr\" \"$(list-slice :-1 $(context-values $PROGRAM))\")"
+                        "    )"
+                        "    timeout(1)"
+                        "    inject-mode(aggregate-only)"
+                        "    trigger(\"$(context-length)\" == \"3\")"
+                        ");");
+
+  log_pipe_append(&parser->super, &capture->super);
+  cr_assert(log_pipe_init(&capture->super) == TRUE);
+  cr_assert(log_pipe_init(&parser->super) == TRUE);
+
+  _process_msg(parser, "first");
+  _process_msg(parser, "second");
+  _process_msg(parser, "third");
+
+  cr_assert(capture->captured_messages->len == 1);
+  assert_log_message_value_by_name(log_pipe_mock_get_message(capture, 0), "aggr", "first,second,third");
+
+  log_pipe_unref(&parser->super);
+  log_pipe_unref(&capture->super);
 }
 
 Test(grouping_by, cfg_persist_name_not_equal)
 {
-  GlobalConfig *cfg = cfg_new_snippet();
-  LogParser *parser = grouping_by_new(cfg);
+  LogParser *parser = _compile_grouping_by("grouping-by(key(\"$TEMPLATE1\"));");
 
-  LogTemplate *template = _get_template("$TEMPLATE1", cfg);
-  grouping_by_set_key_template(parser, template);
-  log_template_unref(template);
+  gchar *persist_name1 = g_strdup(log_pipe_get_persist_name(&parser->super));
+  log_pipe_unref(&parser->super);
 
-  gchar *persist_name1 = g_strdup(grouping_by_format_persist_name(parser));
-
-  template = _get_template("$TEMPLATE2", cfg);
-  grouping_by_set_key_template(parser, template);
-  log_template_unref(template);
-
-  gchar *persist_name2 = g_strdup(grouping_by_format_persist_name(parser));
+  parser = _compile_grouping_by("grouping-by(key(\"$TEMPLATE2\"));");
+  gchar *persist_name2 = g_strdup(log_pipe_get_persist_name(&parser->super));
+  log_pipe_unref(&parser->super);
 
   cr_assert_str_neq(persist_name1, persist_name2);
 
   g_free(persist_name1);
   g_free(persist_name2);
-
-  log_pipe_unref(&parser->super);
-  cfg_free(cfg);
 }
 
 Test(grouping_by, cfg_persist_name_equal)
 {
-  GlobalConfig *cfg = cfg_new_snippet();
-  LogParser *parser = grouping_by_new(cfg);
+  LogParser *parser = _compile_grouping_by("grouping-by(key(\"$TEMPLATE1\"));");
+  gchar *persist_name1 = g_strdup(log_pipe_get_persist_name(&parser->super));
+  log_pipe_unref(&parser->super);
 
-  LogTemplate *template = _get_template("$TEMPLATE1", cfg);
-  grouping_by_set_key_template(parser, template);
-  log_template_unref(template);
-
-  gchar *persist_name1 = g_strdup(grouping_by_format_persist_name(parser));
-
-  template = _get_template("$TEMPLATE1", cfg);
-  grouping_by_set_key_template(parser, template);
-  log_template_unref(template);
-
-  gchar *persist_name2 = g_strdup(grouping_by_format_persist_name(parser));
+  parser = _compile_grouping_by("grouping-by(key(\"$TEMPLATE1\"));");
+  gchar *persist_name2 = g_strdup(log_pipe_get_persist_name(&parser->super));
+  log_pipe_unref(&parser->super);
 
   cr_assert_str_eq(persist_name1, persist_name2);
 
   g_free(persist_name1);
   g_free(persist_name2);
-
-  log_pipe_unref(&parser->super);
-  cfg_free(cfg);
 }
 
 static void
 setup(void)
 {
   app_startup();
-};
+  configuration = cfg_new_snippet();
+  cfg_load_module(configuration, "basicfuncs");
+  cfg_load_module(configuration, "dbparser");
+}
 
 static void
 teardown(void)
 {
+  scratch_buffers_explicit_gc();
+  cfg_free(configuration);
   app_shutdown();
 }
 
 TestSuite(grouping_by, .init = setup, .fini = teardown);
-
-

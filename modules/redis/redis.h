@@ -25,6 +25,24 @@
 #define REDIS_H_INCLUDED
 
 #include "driver.h"
+#include "logthrdest/logthrdestdrv.h"
+
+
+typedef struct _RedisDriver
+{
+  LogThreadedDestDriver super;
+
+  gchar *host;
+  gint   port;
+  gchar *auth;
+  struct timeval timeout;
+
+  LogTemplateOptions template_options;
+
+  GString *command;
+  GList *arguments;
+} RedisDriver;
+
 
 LogDriver *redis_dd_new(GlobalConfig *cfg);
 

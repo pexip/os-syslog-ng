@@ -30,15 +30,11 @@
 
 %code {
 
-#include "cfg-parser.h"
-#include "cfg-grammar.h"
-#include "afamqp-grammar.h"
-#include "plugin.h"
-#include "value-pairs/value-pairs.h"
+#include "cfg-grammar-internal.h"
 
 }
 
-%name-prefix "afamqp_"
+%define api.prefix {afamqp_}
 %lex-param {CfgLexer *lexer}
 %parse-param {CfgLexer *lexer}
 %parse-param {LogDriver **instance}
@@ -74,7 +70,7 @@ start
           {
             last_driver = *instance = afamqp_dd_new(configuration);
           }
-          '(' afamqp_options ')'		{ YYACCEPT; }
+          '(' _inner_dest_context_push afamqp_options _inner_dest_context_pop ')'		{ YYACCEPT; }
 	;
 
 afamqp_options
@@ -89,8 +85,8 @@ afamqp_option
 	| KW_EXCHANGE '(' string ')'               { afamqp_dd_set_exchange(last_driver, $3); free($3); }
 	| KW_EXCHANGE_DECLARE '(' yesno ')'        { afamqp_dd_set_exchange_declare(last_driver, $3); }
 	| KW_EXCHANGE_TYPE '(' string ')'          { afamqp_dd_set_exchange_type(last_driver, $3); free($3); }
-	| KW_ROUTING_KEY '(' string ')'            { afamqp_dd_set_routing_key(last_driver, $3); free($3); }
-	| KW_BODY '(' string ')'                   { afamqp_dd_set_body(last_driver, $3); free($3); }
+	| KW_ROUTING_KEY '(' template_content ')'  { afamqp_dd_set_routing_key(last_driver, $3); }
+	| KW_BODY '(' template_content ')'         { afamqp_dd_set_body(last_driver, $3); }
 	| KW_PERSISTENT '(' yesno ')'              { afamqp_dd_set_persistent(last_driver, $3); }
 	| KW_AUTH_METHOD '(' string ')'            { CHECK_ERROR(afamqp_dd_set_auth_method(last_driver, $3), @3, "unknown auth-method() argument"); free($3); }
 	| KW_USERNAME '(' string ')'               { afamqp_dd_set_user(last_driver, $3); free($3); }
@@ -99,7 +95,7 @@ afamqp_option
 	| KW_FRAME_SIZE '(' positive_integer ')'   { afamqp_dd_set_frame_size(last_driver, $3); }
 	| KW_HEARTBEAT '(' nonnegative_integer ')' { afamqp_dd_set_offered_heartbeat(last_driver, $3); }
 	| value_pair_option                        { afamqp_dd_set_value_pairs(last_driver, $1); }
-	| threaded_dest_driver_option
+	| threaded_dest_driver_general_option
 	| afamqp_tls_option
 	| KW_TLS '(' afamqp_tls_options ')'
 	| { last_template_options = afamqp_dd_get_template_options(last_driver); } template_option

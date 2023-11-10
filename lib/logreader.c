@@ -23,8 +23,10 @@
  */
 
 #include "logreader.h"
+#include "stats/stats-cluster-single.h"
 #include "mainloop-call.h"
 #include "ack-tracker/ack_tracker.h"
+#include "ack-tracker/ack_tracker_factory.h"
 
 static void log_reader_io_handle_in(gpointer s);
 static gboolean log_reader_fetch_log(LogReader *self);
@@ -73,14 +75,14 @@ log_reader_set_options(LogReader *s, LogPipe *control, LogReaderOptions *options
    */
 
   g_assert(self->proto != NULL);
-  gboolean pos_tracked = log_proto_server_is_position_tracked(self->proto);
 
   log_source_set_options(&self->super, &options->super, stats_id, stats_instance,
-                         (options->flags & LR_THREADED), pos_tracked, control->expr_node);
+                         (options->flags & LR_THREADED), control->expr_node);
+  AckTrackerFactory *factory = log_proto_server_get_ack_tracker_factory(self->proto);
+  log_source_set_ack_tracker_factory(&self->super, ack_tracker_factory_ref(factory));
 
   log_pipe_unref(self->control);
-  log_pipe_ref(control);
-  self->control = control;
+  self->control = log_pipe_ref(control);
 
   self->options = options;
   log_proto_server_set_options(self->proto, &self->options->proto_options.super);
@@ -263,12 +265,12 @@ log_reader_close_proto(LogReader *self)
 
   if (!main_loop_is_main_thread())
     {
-      g_static_mutex_lock(&self->pending_close_lock);
+      g_mutex_lock(&self->pending_close_lock);
       while (self->pending_close)
         {
-          g_cond_wait(self->pending_close_cond, g_static_mutex_get_mutex(&self->pending_close_lock));
+          g_cond_wait(&self->pending_close_cond, &self->pending_close_lock);
         }
-      g_static_mutex_unlock(&self->pending_close_lock);
+      g_mutex_unlock(&self->pending_close_lock);
     }
 }
 
@@ -371,13 +373,13 @@ log_reader_work_finished(void *s)
        * log_writer_reopen() call, quite possibly coming from a
        * non-main thread. */
 
-      g_static_mutex_lock(&self->pending_close_lock);
+      g_mutex_lock(&self->pending_close_lock);
 
       log_reader_apply_proto_and_poll_events(self, NULL, NULL);
       self->pending_close = FALSE;
 
-      g_cond_signal(self->pending_close_cond);
-      g_static_mutex_unlock(&self->pending_close_lock);
+      g_cond_signal(&self->pending_close_cond);
+      g_mutex_unlock(&self->pending_close_lock);
     }
 
   if (self->notify_code)
@@ -426,6 +428,8 @@ log_reader_process_handshake(LogReader *self)
       return status == LPS_ERROR ? NC_READ_ERROR : NC_CLOSE;
     case LPS_SUCCESS:
       break;
+    case LPS_AGAIN:
+      break;
     default:
       g_assert_not_reached();
       break;
@@ -433,20 +437,32 @@ log_reader_process_handshake(LogReader *self)
   return 0;
 }
 
+static void
+_log_reader_insert_msg_length_stats(LogReader *self, gsize len)
+{
+  stats_aggregator_insert_data(self->max_message_size, len);
+  stats_aggregator_insert_data(self->average_messages_size, len);
+}
+
 static gboolean
 log_reader_handle_line(LogReader *self, const guchar *line, gint length, LogTransportAuxData *aux)
 {
   LogMessage *m;
 
+  m = msg_format_construct_message(&self->options->parse_options, line, length);
   msg_debug("Incoming log entry",
-            evt_tag_printf("line", "%.*s", length, line));
-  /* use the current time to get the time zone offset */
-  m = log_msg_new((gchar *) line, length,
-                  &self->options->parse_options);
+            evt_tag_mem("input", line, length),
+            evt_tag_msg_reference(m));
 
-  log_msg_set_saddr(m, aux->peer_addr ? : self->peer_addr);
-  log_msg_set_daddr(m, aux->local_addr ? : self->local_addr);
-  m->proto = aux->proto;
+  msg_format_parse_into(&self->options->parse_options, m, line, length);
+
+  _log_reader_insert_msg_length_stats(self, length);
+  if (aux)
+    {
+      log_msg_set_saddr(m, aux->peer_addr ? : self->peer_addr);
+      log_msg_set_daddr(m, aux->local_addr ? : self->local_addr);
+      m->proto = aux->proto;
+    }
   log_msg_refcache_start_producer(m);
 
   log_transport_aux_data_foreach(aux, _add_aux_nvpair, m);
@@ -462,9 +478,12 @@ log_reader_fetch_log(LogReader *self)
 {
   gint msg_count = 0;
   gboolean may_read = TRUE;
-  LogTransportAuxData aux;
+  LogTransportAuxData aux_storage, *aux = &aux_storage;
 
-  log_transport_aux_data_init(&aux);
+  if ((self->options->flags & LR_IGNORE_AUX_DATA))
+    aux = NULL;
+
+  log_transport_aux_data_init(aux);
   if (log_proto_server_handshake_in_progress(self->proto))
     {
       return log_reader_process_handshake(self);
@@ -489,18 +508,20 @@ log_reader_fetch_log(LogReader *self)
        * protocol, it resets may_read to FALSE after the first read was issued.
        */
 
-      log_transport_aux_data_reinit(&aux);
+      log_transport_aux_data_reinit(aux);
       bookmark = ack_tracker_request_bookmark(self->super.ack_tracker);
-      status = log_proto_server_fetch(self->proto, &msg, &msg_len, &may_read, &aux, bookmark);
+      status = log_proto_server_fetch(self->proto, &msg, &msg_len, &may_read, aux, bookmark);
       switch (status)
         {
         case LPS_EOF:
-          g_sockaddr_unref(aux.peer_addr);
+          log_transport_aux_data_destroy(aux);
           return NC_CLOSE;
         case LPS_ERROR:
-          g_sockaddr_unref(aux.peer_addr);
+          log_transport_aux_data_destroy(aux);
           return NC_READ_ERROR;
         case LPS_SUCCESS:
+          break;
+        case LPS_AGAIN:
           break;
         default:
           g_assert_not_reached();
@@ -516,14 +537,14 @@ log_reader_fetch_log(LogReader *self)
         {
           msg_count++;
 
-          if (!log_reader_handle_line(self, msg, msg_len, &aux))
+          if (!log_reader_handle_line(self, msg, msg_len, aux))
             {
               /* window is full, don't generate further messages */
               break;
             }
         }
     }
-  log_transport_aux_data_destroy(&aux);
+  log_transport_aux_data_destroy(aux);
 
   if (msg_count == self->options->fetch_limit)
     self->immediate_check = TRUE;
@@ -552,10 +573,50 @@ log_reader_io_handle_in(gpointer s)
        */
       if (!main_loop_worker_job_quit())
         {
+          log_pipe_ref(&self->super.super);
           log_reader_work_perform(s, G_IO_IN);
           log_reader_work_finished(s);
+          log_pipe_unref(&self->super.super);
         }
     }
+}
+
+static void
+_register_aggregated_stats(LogReader *self)
+{
+  StatsClusterKey sc_key_eps_input;
+  stats_cluster_logpipe_key_set(&sc_key_eps_input, self->super.options->stats_source | SCS_SOURCE, self->super.stats_id,
+                                self->super.stats_instance);
+
+  stats_aggregator_lock();
+  StatsClusterKey sc_key;
+
+  stats_cluster_single_key_set_with_name(&sc_key, self->super.options->stats_source | SCS_SOURCE, self->super.stats_id,
+                                         self->super.stats_instance, "msg_size_max");
+  stats_register_aggregator_maximum(self->super.options->stats_level, &sc_key, &self->max_message_size);
+
+  stats_cluster_single_key_set_with_name(&sc_key, self->super.options->stats_source | SCS_SOURCE, self->super.stats_id,
+                                         self->super.stats_instance, "msg_size_avg");
+  stats_register_aggregator_average(self->super.options->stats_level, &sc_key, &self->average_messages_size);
+
+  stats_cluster_single_key_set_with_name(&sc_key, self->super.options->stats_source | SCS_SOURCE, self->super.stats_id,
+                                         self->super.stats_instance, "eps");
+  stats_register_aggregator_cps(self->super.options->stats_level, &sc_key, &sc_key_eps_input, SC_TYPE_PROCESSED,
+                                &self->CPS);
+
+  stats_aggregator_unlock();
+}
+
+static void
+_unregister_aggregated_stats(LogReader *self)
+{
+  stats_aggregator_lock();
+
+  stats_unregister_aggregator_maximum(&self->max_message_size);
+  stats_unregister_aggregator_average(&self->average_messages_size);
+  stats_unregister_aggregator_cps(&self->CPS);
+
+  stats_aggregator_unlock();
 }
 
 /*****************************************************************************
@@ -587,6 +648,8 @@ log_reader_init(LogPipe *s)
 
   log_reader_start_watches(self);
 
+  _register_aggregated_stats(self);
+
   return TRUE;
 }
 
@@ -603,6 +666,7 @@ log_reader_deinit(LogPipe *s)
 
   log_reader_stop_watches(self);
 
+  _unregister_aggregated_stats(self);
   if (!log_source_deinit(s))
     return FALSE;
 
@@ -649,8 +713,8 @@ log_reader_free(LogPipe *s)
   log_pipe_unref(self->control);
   g_sockaddr_unref(self->peer_addr);
   g_sockaddr_unref(self->local_addr);
-  g_static_mutex_free(&self->pending_close_lock);
-  g_cond_free(self->pending_close_cond);
+  g_mutex_clear(&self->pending_close_lock);
+  g_cond_clear(&self->pending_close_cond);
   log_source_free(s);
 }
 
@@ -684,8 +748,8 @@ log_reader_new(GlobalConfig *cfg)
   self->super.schedule_dynamic_window_realloc = _schedule_dynamic_window_realloc;
   self->immediate_check = FALSE;
   log_reader_init_watches(self);
-  g_static_mutex_init(&self->pending_close_lock);
-  self->pending_close_cond = g_cond_new();
+  g_mutex_init(&self->pending_close_lock);
+  g_cond_init(&self->pending_close_cond);
   return self;
 }
 
@@ -777,6 +841,7 @@ CfgFlagHandler log_reader_flag_handlers[] =
   { "kernel",                     CFH_SET, offsetof(LogReaderOptions, flags),               LR_KERNEL },
   { "empty-lines",                CFH_SET, offsetof(LogReaderOptions, flags),               LR_EMPTY_LINES },
   { "threaded",                   CFH_SET, offsetof(LogReaderOptions, flags),               LR_THREADED },
+  { "ignore-aux-data",            CFH_SET, offsetof(LogReaderOptions, flags),               LR_IGNORE_AUX_DATA },
   { NULL },
 };
 

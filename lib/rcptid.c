@@ -30,11 +30,8 @@ static struct _RcptidService
 {
   PersistState *persist_state;
   PersistEntryHandle persist_handle;
-  GStaticMutex lock;
-} rcptid_service =
-{
-  .lock = G_STATIC_MUTEX_INIT
-};
+  GMutex lock;
+} rcptid_service;
 
 /* NOTE: RcptIdInstance is a singleton, so we don't pass self around as an argument */
 
@@ -120,14 +117,14 @@ rcptid_set_id(guint64 id)
   if (!rcptid_is_initialized())
     return;
 
-  g_static_mutex_lock(&rcptid_service.lock);
+  g_mutex_lock(&rcptid_service.lock);
 
   data = rcptid_map_state();
   data->g_rcptid = id;
 
   rcptid_unmap_state();
 
-  g_static_mutex_unlock(&rcptid_service.lock);
+  g_mutex_unlock(&rcptid_service.lock);
 }
 
 guint64
@@ -139,7 +136,7 @@ rcptid_generate_id(void)
   if (!rcptid_is_initialized())
     return 0;
 
-  g_static_mutex_lock(&rcptid_service.lock);
+  g_mutex_lock(&rcptid_service.lock);
 
   data = rcptid_map_state();
 
@@ -149,13 +146,13 @@ rcptid_generate_id(void)
 
   rcptid_unmap_state();
 
-  g_static_mutex_unlock(&rcptid_service.lock);
+  g_mutex_unlock(&rcptid_service.lock);
 
   return new_id;
 }
 
 /*restore RCTPID from persist file, if possible, else
-  create new enrty point with "next.rcptid" name*/
+  create new entry point with "next.rcptid" name*/
 gboolean
 rcptid_init(PersistState *state, gboolean use_rcptid)
 {

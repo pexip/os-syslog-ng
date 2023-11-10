@@ -38,8 +38,6 @@ GOptionEntry verbose_options[] =
 gint
 slng_verbose(int argc, char *argv[], const gchar *mode, GOptionContext *ctx)
 {
-  gint ret = 0;
-  GString *rsp = NULL;
   gchar buff[256];
 
   if (!verbose_set)
@@ -48,16 +46,11 @@ slng_verbose(int argc, char *argv[], const gchar *mode, GOptionContext *ctx)
     g_snprintf(buff, 255, "LOG %s %s\n", mode,
                strncasecmp(verbose_set, "on", 2) == 0 || verbose_set[0] == '1' ? "ON" : "OFF");
 
-  g_strup(buff);
+  gchar *command = g_ascii_strup(buff, -1);
 
-  rsp = slng_run_command(buff);
-  if (rsp == NULL)
-    return 1;
+  gint ret = dispatch_command(command);
 
-  ret = process_response_status(rsp);
-  printf("%s\n", rsp->str);
-
-  g_string_free(rsp, TRUE);
+  g_free(command);
 
   return ret;
 }

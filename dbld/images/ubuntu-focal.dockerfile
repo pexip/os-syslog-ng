@@ -1,9 +1,11 @@
-FROM ubuntu:20.04
+FROM ubuntu:focal
 LABEL maintainer="Laszlo Budai <laszlo.budai@outlook.com>, Andras Mitzki <andras.mitzki@balabit.com>, Laszlo Szemere <laszlo.szemere@balabit.com>, Balazs Scheidler <balazs.scheidler@oneidentity.com>"
+ENV OS_DISTRIBUTION=ubuntu
+ENV OS_DISTRIBUTION_CODE_NAME=focal
 
-ARG OS_PLATFORM
+ARG ARG_IMAGE_PLATFORM
 ARG COMMIT
-ENV OS_PLATFORM ${OS_PLATFORM}
+ENV IMAGE_PLATFORM ${ARG_IMAGE_PLATFORM}
 LABEL COMMIT=${COMMIT}
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -20,7 +22,6 @@ RUN /dbld/builddeps install_debian_build_deps
 RUN /dbld/builddeps install_pip_packages
 
 RUN /dbld/builddeps install_criterion
-RUN /dbld/builddeps install_gosu amd64
 
 VOLUME /source
 VOLUME /build

@@ -57,7 +57,7 @@ struct _LogQueue
     atomic_gssize queued_messages;
   } stats_cache;
 
-  GStaticMutex lock;
+  GMutex lock;
   LogQueuePushNotifyFunc parallel_push_notify;
   gpointer parallel_push_data;
   GDestroyNotify parallel_push_data_destroy;
@@ -200,6 +200,12 @@ log_queue_set_use_backlog(LogQueue *self, gboolean use_backlog)
     self->use_backlog = use_backlog;
 }
 
+static inline gboolean
+log_queue_has_type(LogQueue *self, QueueType type)
+{
+  return g_strcmp0(self->type, type) == 0;
+}
+
 void log_queue_memory_usage_add(LogQueue *self, gsize value);
 void log_queue_memory_usage_sub(LogQueue *self, gsize value);
 
@@ -207,6 +213,7 @@ void log_queue_queued_messages_add(LogQueue *self, gsize value);
 void log_queue_queued_messages_sub(LogQueue *self, gsize value);
 void log_queue_queued_messages_inc(LogQueue *self);
 void log_queue_queued_messages_dec(LogQueue *self);
+void log_queue_queued_messages_reset(LogQueue *self);
 
 void log_queue_push_notify(LogQueue *self);
 void log_queue_reset_parallel_push(LogQueue *self);

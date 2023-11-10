@@ -29,13 +29,13 @@
 
 %code {
 
-#include "cfg-grammar.h"
+#include "cfg-grammar-internal.h"
 #include "plugin.h"
 #include "value-pairs/value-pairs.h"
 
 }
 
-%name-prefix "afmongodb_"
+%define api.prefix {afmongodb_}
 %lex-param {CfgLexer *lexer}
 %parse-param {CfgLexer *lexer}
 %parse-param {LogDriver **instance}
@@ -55,7 +55,7 @@ start
         {
             last_driver = *instance = afmongodb_dd_new(configuration);
         }
-        '(' afmongodb_options ')'         { YYACCEPT; }
+        '(' _inner_dest_context_push afmongodb_options _inner_dest_context_pop ')'         { YYACCEPT; }
     ;
 
 afmongodb_options
@@ -68,15 +68,13 @@ afmongodb_option
         {
             afmongodb_dd_set_uri(last_driver, $3); free($3);
         }
-    | KW_COLLECTION '(' string ')'
-        {
-            afmongodb_dd_set_collection(last_driver, $3); free($3);
-        }
+    | KW_COLLECTION '(' template_content ')' { afmongodb_dd_set_collection(last_driver, $3); }
     | value_pair_option
         {
             afmongodb_dd_set_value_pairs(last_driver, $1);
         }
-    | threaded_dest_driver_option
+    | threaded_dest_driver_general_option
+    | threaded_dest_driver_workers_option
     | { last_template_options = afmongodb_dd_get_template_options(last_driver); } template_option
     ;
 

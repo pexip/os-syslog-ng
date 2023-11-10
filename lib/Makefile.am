@@ -1,4 +1,4 @@
-DIST_SUBDIRS				+= @IVYKIS_SUBDIRS@ @JSON_SUBDIRS@
+DIST_SUBDIRS				+= @IVYKIS_SUBDIRS@
 
 include lib/ack-tracker/Makefile.am
 include lib/eventlog/src/Makefile.am
@@ -84,14 +84,6 @@ UNINSTALL_HOOKS				+= uninstall-ivykis
 endif
 
 
-
-if JSON_INTERNAL
-lib/jsonc/libjson-c.la:
-	${MAKE} CFLAGS="${CFLAGS} -Wno-error" -C lib/jsonc
-
-CLEAN_SUBDIRS				+= @JSON_SUBDIRS@
-endif
-
 # this is intentionally formatted so conflicts are less likely to arise. one name in every line.
 pkginclude_HEADERS			+= \
 	lib/afinter.h			\
@@ -103,6 +95,7 @@ pkginclude_HEADERS			+= \
 	lib/cache.h			\
 	lib/cfg.h			\
 	lib/cfg-grammar.h		\
+	lib/cfg-grammar-internal.h	\
 	lib/cfg-lexer.h			\
 	lib/cfg-lexer-subst.h		\
 	lib/cfg-args.h			\
@@ -121,6 +114,7 @@ pkginclude_HEADERS			+= \
 	lib/fdhelpers.h			\
 	lib/file-perms.h		\
 	lib/find-crlf.h			\
+	lib/generic-number.h		\
 	lib/gprocess.h			\
 	lib/gsockaddr.h			\
 	lib/gsocket.h			\
@@ -138,6 +132,7 @@ pkginclude_HEADERS			+= \
 	lib/mainloop.h			\
 	lib/mainloop-call.h		\
 	lib/mainloop-worker.h		\
+	lib/mainloop-threaded-worker.h	\
 	lib/mainloop-io-worker.h	\
 	lib/mainloop-control.h		\
 	lib/module-config.h		\
@@ -174,7 +169,6 @@ pkginclude_HEADERS			+= \
 	lib/tls-support.h		\
 	lib/thread-utils.h		\
 	lib/tlscontext.h  		\
-	lib/type-hinting.h		\
 	lib/uuid.h			\
 	lib/userdb.h			\
 	lib/utf8utils.h			\
@@ -210,6 +204,7 @@ lib_libsyslog_ng_la_SOURCES		= \
 	lib/fdhelpers.c			\
 	lib/file-perms.c		\
 	lib/find-crlf.c			\
+	lib/generic-number.c		\
 	lib/globals.c			\
 	lib/gprocess.c			\
 	lib/gsockaddr.c			\
@@ -228,6 +223,7 @@ lib_libsyslog_ng_la_SOURCES		= \
 	lib/signal-handler.c		\
 	lib/mainloop-call.c		\
 	lib/mainloop-worker.c		\
+	lib/mainloop-threaded-worker.c	\
 	lib/mainloop-io-worker.c	\
 	lib/mainloop-control.c		\
 	lib/module-config.c		\
@@ -254,7 +250,6 @@ lib_libsyslog_ng_la_SOURCES		= \
 	lib/str-utils.c			\
 	lib/syslog-names.c		\
 	lib/string-list.c		\
-	lib/type-hinting.c		\
 	lib/ringbuffer.c		\
 	lib/crypto.c			\
 	lib/tlscontext.c		\
@@ -267,6 +262,7 @@ lib_libsyslog_ng_la_SOURCES		= \
 	lib/window-size-counter.c       \
 	lib/cfg-lex.l			\
 	lib/cfg-grammar.y		\
+	lib/cfg-grammar-internal.c	\
 	lib/block-ref-grammar.y		\
 	lib/pragma-grammar.y		\
 	$(ack_tracker_sources) \
@@ -316,10 +312,6 @@ if IVYKIS_INTERNAL
 lib/ivykis/ ivykis: lib/ivykis/src/libivykis.la
 endif
 
-if JSON_INTERNAL
-lib/jsonc/ jsonc: lib/jsonc/libjson-c.la
-endif
-
-.PHONY: lib/ libsyslog-ng ivykis lib/ivykis/ lib/jsonc/ jsonc
+.PHONY: lib/ libsyslog-ng ivykis lib/ivykis/
 
 include lib/tests/Makefile.am

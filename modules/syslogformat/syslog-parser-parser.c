@@ -32,6 +32,7 @@ int syslog_parser_parse(CfgLexer *lexer, LogParser **instance, gpointer arg);
 static CfgLexerKeyword syslog_parser_keywords[] =
 {
   { "syslog_parser",          KW_SYSLOG_PARSER },
+  { "drop_invalid",           KW_DROP_INVALID },
   { NULL }
 };
 
@@ -46,4 +47,4 @@ CfgParser syslog_parser_parser =
   .cleanup = (void (*)(gpointer)) log_pipe_unref,
 };
 
-CFG_PARSER_IMPLEMENT_LEXER_BINDING(syslog_parser_, LogParser **)
+CFG_PARSER_IMPLEMENT_LEXER_BINDING(syslog_parser_, SYSLOG_PARSER_, LogParser **)

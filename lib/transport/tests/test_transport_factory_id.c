@@ -21,14 +21,17 @@
  *
  */
 
-#include "transport/transport-factory-id.h"
-#include "apphook.h"
 #include <criterion/criterion.h>
 
-TestSuite(transport_factory_id, .init = app_startup, .fini = app_shutdown);
+#include "transport/transport-factory-id.h"
+#include "apphook.h"
 
-Test(transport_factory_id, lifecycle)
+TestSuite(transport_factory_id, .init = transport_factory_id_global_init, .fini = transport_factory_id_global_deinit);
+
+Test(transport_factory_id_lifecycle, lifecycle)
 {
+  transport_factory_id_global_init();
+
   GList *ids = _transport_factory_id_clone_registered_ids();
 
   cr_expect_null(ids);

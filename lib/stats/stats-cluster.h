@@ -59,9 +59,15 @@ struct _StatsCounterGroup
 
 struct _StatsCounterGroupInit
 {
-  const gchar **counter_names;
+  union
+  {
+    const gchar **names;
+    const gchar *name;
+  } counter;
   void (*init)(StatsCounterGroupInit *self, StatsCounterGroup *counter_group);
   gboolean (*equals)(const StatsCounterGroupInit *self, const StatsCounterGroupInit *other);
+  void (*clone)(StatsCounterGroupInit *dst, const StatsCounterGroupInit *src);
+  void (*cloned_free)(StatsCounterGroupInit *self);
 };
 
 gboolean stats_counter_group_init_equals(const StatsCounterGroupInit *self, const StatsCounterGroupInit *other);
@@ -108,6 +114,8 @@ const gchar *stats_cluster_get_component_name(StatsCluster *self, gchar *buf, gs
 
 void stats_cluster_foreach_counter(StatsCluster *self, StatsForeachCounterFunc func, gpointer user_data);
 
+StatsClusterKey *stats_cluster_key_clone(StatsClusterKey *dst, const StatsClusterKey *src);
+void stats_cluster_key_cloned_free(StatsClusterKey *self);
 gboolean stats_cluster_key_equal(const StatsClusterKey *key1, const StatsClusterKey *key2);
 gboolean stats_cluster_equal(const StatsCluster *sc1, const StatsCluster *sc2);
 guint stats_cluster_hash(const StatsCluster *self);
@@ -117,6 +125,12 @@ StatsCounterItem *stats_cluster_get_counter(StatsCluster *self, gint type);
 void stats_cluster_untrack_counter(StatsCluster *self, gint type, StatsCounterItem **counter);
 gboolean stats_cluster_is_alive(StatsCluster *self, gint type);
 gboolean stats_cluster_is_indexed(StatsCluster *self, gint type);
+
+static inline gboolean
+stats_cluster_is_orphaned(StatsCluster *self)
+{
+  return self->use_count == 0;
+}
 
 StatsCluster *stats_cluster_new(const StatsClusterKey *key);
 StatsCluster *stats_cluster_dynamic_new(const StatsClusterKey *key);

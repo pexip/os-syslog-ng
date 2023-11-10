@@ -21,11 +21,12 @@
  *
  */
 
+#include <criterion/criterion.h>
+#include "libtest/grab-logging.h"
+#include "libtest/mock-cfg-parser.h"
+
 #include "apphook.h"
 #include "cfg-grammar.h"
-#include "mock-cfg-parser.h"
-#include "grab-logging.h"
-#include <criterion/criterion.h>
 
 #define TESTDATA_DIR TOP_SRCDIR "/modules/confgen/tests"
 
@@ -43,7 +44,7 @@ _next_token(void)
   cfg_parser_mock_next_token(parser);
 }
 
-static YYSTYPE *
+static CFG_STYPE *
 _current_token(void)
 {
   return parser->yylval;

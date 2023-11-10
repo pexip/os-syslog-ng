@@ -2,8 +2,8 @@ lib_tests_TESTS		= \
 	lib/tests/test_cfg_lexer_subst	\
 	lib/tests/test_lexer_block	\
 	lib/tests/test_cfg_tree		\
-	lib/tests/test_type_hints	\
 	lib/tests/test_parse_number	\
+	lib/tests/test_generic_number	\
 	lib/tests/test_reloc		\
 	lib/tests/test_hostname		\
 	lib/tests/test_rcptid		\
@@ -22,14 +22,25 @@ lib_tests_TESTS		= \
 	lib/tests/test_dynamic_window \
 	lib/tests/test_logqueue \
 	lib/tests/test_logsource \
-	lib/tests/test_persist_state
+	lib/tests/test_persist_state	\
+	lib/tests/test_matcher		   \
+	lib/tests/test_clone_logmsg   \
+	lib/tests/test_serialize 	   \
+	lib/tests/test_msgparse	   \
+	lib/tests/test_dnscache	   \
+	lib/tests/test_findcrlf	   \
+	lib/tests/test_ringbuffer	   \
+	lib/tests/test_hostid		   \
+	lib/tests/test_zone		   \
+	lib/tests/test_logwriter	\
+	lib/tests/test_thread_wakeup
 
 EXTRA_DIST += lib/tests/CMakeLists.txt
 
 check_PROGRAMS		+= ${lib_tests_TESTS}
 
 if ENABLE_TESTING
-noinst_PROGRAMS 	= \
+noinst_PROGRAMS 	+= \
 	lib/tests/test_host_resolve
 
 lib_tests_test_host_resolve_CFLAGS	=	\
@@ -53,14 +64,15 @@ lib_tests_test_cfg_tree_CFLAGS		=	\
 lib_tests_test_cfg_tree_LDADD		=	\
 	$(TEST_LDADD)
 
-lib_tests_test_type_hints_CFLAGS	=	\
-	$(TEST_CFLAGS)
-lib_tests_test_type_hints_LDADD	=	\
-	$(TEST_LDADD)
 
 lib_tests_test_parse_number_CFLAGS	=	\
 	$(TEST_CFLAGS)
 lib_tests_test_parse_number_LDADD	=	\
+	$(TEST_LDADD)
+
+lib_tests_test_generic_number_CFLAGS	=	\
+	$(TEST_CFLAGS)
+lib_tests_test_generic_number_LDADD	=	\
 	$(TEST_LDADD)
 
 lib_tests_test_reloc_CFLAGS	=	\
@@ -175,6 +187,50 @@ lib_tests_test_messages_CFLAGS	=	\
 	$(TEST_CFLAGS)
 lib_tests_test_messages_LDADD	=	\
 	$(TEST_LDADD)
+
+
+lib_tests_test_logwriter_LDADD		= \
+	$(TEST_LDADD) $(PREOPEN_SYSLOGFORMAT)
+lib_tests_test_logwriter_CFLAGS	= $(TEST_CFLAGS)
+
+lib_tests_test_matcher_CFLAGS		= $(TEST_CFLAGS)
+lib_tests_test_matcher_LDADD		= $(TEST_LDADD)
+
+lib_tests_test_clone_logmsg_CFLAGS	= $(TEST_CFLAGS)
+lib_tests_test_clone_logmsg_LDADD	= \
+	$(TEST_LDADD) $(PREOPEN_SYSLOGFORMAT)
+
+lib_tests_test_serialize_CFLAGS	= $(TEST_CFLAGS)
+lib_tests_test_serialize_LDADD		= \
+	$(TEST_LDADD) $(PREOPEN_SYSLOGFORMAT)
+
+lib_tests_test_msgparse_CFLAGS		= $(TEST_CFLAGS)
+lib_tests_test_msgparse_LDADD		= \
+	$(TEST_LDADD) $(PREOPEN_SYSLOGFORMAT)
+
+lib_tests_test_dnscache_CFLAGS		= $(TEST_CFLAGS)
+lib_tests_test_dnscache_LDADD		= \
+	$(TEST_LDADD) $(PREOPEN_SYSLOGFORMAT)
+
+lib_tests_test_findcrlf_CFLAGS		= $(TEST_CFLAGS)
+lib_tests_test_findcrlf_LDADD		= \
+	$(TEST_LDADD) $(PREOPEN_SYSLOGFORMAT)
+
+lib_tests_test_ringbuffer_CFLAGS	= $(TEST_CFLAGS)
+lib_tests_test_ringbuffer_LDADD	= \
+	$(TEST_LDADD) $(PREOPEN_SYSLOGFORMAT)
+
+lib_tests_test_hostid_CFLAGS		= $(TEST_CFLAGS)
+lib_tests_test_hostid_LDADD		= \
+	$(TEST_LDADD) $(PREOPEN_SYSLOGFORMAT)
+
+lib_tests_test_zone_LDADD		= \
+	$(TEST_LDADD) $(PREOPEN_SYSLOGFORMAT)
+lib_tests_test_zone_CFLAGS		= $(TEST_CFLAGS)
+
+lib_tests_test_thread_wakeup_CFLAGS	= $(TEST_CFLAGS)
+lib_tests_test_thread_wakeup_LDADD	= $(TEST_LDADD)
+
 
 EXTRA_DIST += \
 	lib/tests/testdata-lexer/include-test/bar.conf			\

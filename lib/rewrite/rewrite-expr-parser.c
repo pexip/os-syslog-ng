@@ -36,8 +36,12 @@ static CfgLexerKeyword rewrite_expr_keywords[] =
   { "subst",              KW_SUBST },
   { "set_tag",            KW_SET_TAG },
   { "clear_tag",          KW_CLEAR_TAG },
+  { "set_matches",        KW_SET_MATCHES },
+  { "unset_matches",      KW_UNSET_MATCHES },
+  { "set_pri",            KW_SET_PRI },
   { "set_severity",       KW_SET_SEVERITY },
   { "set_facility",       KW_SET_FACILITY },
+  { "rename",             KW_RENAME },
 
   { "groupset",           KW_GROUP_SET },
   { "groupunset",         KW_GROUP_UNSET },
@@ -57,4 +61,4 @@ CfgParser rewrite_expr_parser =
   .parse = (gint (*)(CfgLexer *, gpointer *, gpointer)) rewrite_expr_parse,
 };
 
-CFG_PARSER_IMPLEMENT_LEXER_BINDING(rewrite_expr_, LogExprNode **)
+CFG_PARSER_IMPLEMENT_LEXER_BINDING(rewrite_expr_, REWRITE_EXPR_, LogExprNode **)

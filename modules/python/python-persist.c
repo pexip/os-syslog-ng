@@ -227,8 +227,10 @@ _persist_type_init(PyObject *s, PyObject *args, PyObject *kwds)
   if (!self->persist_state)
     {
       gchar buf[256];
+      _py_format_exception_text(buf, sizeof(buf));
+
       msg_error("Error importing persist_state",
-                evt_tag_str("exception", _py_format_exception_text(buf, sizeof(buf))));
+                evt_tag_str("exception", buf));
       _py_finish_exception_handling();
 
       g_assert_not_reached();
@@ -458,6 +460,8 @@ _insert_to_dict(gchar *key, gint entry_size, Entry *entry, gpointer *user_data)
   PyObject *key_object = _py_string_from_string(start + strlen(SUBKEY_DELIMITER), -1);
   PyObject *value_object = entry_to_pyobject(entry->type, entry->data);
   PyDict_SetItem(entries, key_object, value_object);
+  Py_XDECREF(key_object);
+  Py_XDECREF(value_object);
 }
 
 PyObject *py_persist_type_iter(PyObject *o)

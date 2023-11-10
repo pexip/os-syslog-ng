@@ -31,10 +31,11 @@
 #include <openssl/evp.h>
 
 static void
-tf_uuid(LogMessage *msg, gint argc, GString *argv[], GString *result)
+tf_uuid(LogMessage *msg, gint argc, GString *argv[], GString *result, LogMessageValueType *type)
 {
   char uuid_str[37];
 
+  *type = LM_VT_STRING;
   uuid_gen_random(uuid_str, sizeof(uuid_str));
   g_string_append (result, uuid_str);
 }
@@ -57,6 +58,17 @@ typedef struct _TFHashState
   gint length;
   const EVP_MD *md;
 } TFHashState;
+
+static gboolean
+tf_hash_md4_is_available(void)
+{
+#ifdef SYSLOG_NG_HAVE_DECL_DIGEST_MD4
+  msg_warning_once("WARNING: MD4 hash template function is deprecated and will be removed in future versions");
+  return TRUE;
+#else
+  return FALSE;
+#endif
+}
 
 static gboolean
 tf_hash_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent, gint argc, gchar *argv[], GError **error)
@@ -93,7 +105,14 @@ tf_hash_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent, gint
       return FALSE;
     }
   state->length = length;
-  md = EVP_get_digestbyname(strcmp(argv[0], "hash") == 0 ? "sha256" : argv[0]);
+  const char *digest_name = strcmp(argv[0], "hash") == 0 ? "sha256" : argv[0];
+  if (strcmp(digest_name, "md4") == 0 && !tf_hash_md4_is_available())
+    {
+      g_set_error(error, LOG_TEMPLATE_ERROR, LOG_TEMPLATE_ERROR_COMPILE,
+                  "MD4 hash function is not available starting with OpenSSL 3.0.");
+      return FALSE;
+    }
+  md = EVP_get_digestbyname(digest_name);
   if (!md)
     {
       g_set_error(error, LOG_TEMPLATE_ERROR, LOG_TEMPLATE_ERROR_COMPILE, "$(hash) parsing failed, unknown digest type");
@@ -128,7 +147,8 @@ _hash(const EVP_MD *md, GString *const *argv, gint argc, guchar *hash, guint has
 }
 
 static void
-tf_hash_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *args, GString *result)
+tf_hash_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *args, GString *result,
+             LogMessageValueType *type)
 {
   TFHashState *state = (TFHashState *) s;
   gint argc;
@@ -136,6 +156,7 @@ tf_hash_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs 
   gchar hash_str[EVP_MAX_MD_SIZE * 2 + 1];
   guint md_len;
 
+  *type = LM_VT_STRING;
   argc = state->super.argc;
   md_len = _hash(state->md, args->argv, argc, hash, sizeof(hash));
   // we fetch the entire hash in a hex format otherwise we cannot truncate at

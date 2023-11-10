@@ -170,21 +170,21 @@ afamqp_dd_set_exchange_type(LogDriver *d, const gchar *exchange_type)
 }
 
 void
-afamqp_dd_set_routing_key(LogDriver *d, const gchar *routing_key)
+afamqp_dd_set_routing_key(LogDriver *d, LogTemplate *routing_key_template)
 {
   AMQPDestDriver *self = (AMQPDestDriver *) d;
 
-  log_template_compile(self->routing_key_template, routing_key, NULL);
+  log_template_unref(self->routing_key_template);
+  self->routing_key_template = routing_key_template;
 }
 
 void
-afamqp_dd_set_body(LogDriver *d, const gchar *body)
+afamqp_dd_set_body(LogDriver *d, LogTemplate *body_template)
 {
   AMQPDestDriver *self = (AMQPDestDriver *) d;
 
-  if (!self->body_template)
-    self->body_template = log_template_new(configuration, NULL);
-  log_template_compile(self->body_template, body, NULL);
+  log_template_unref(self->body_template);
+  self->body_template = body_template;
 }
 
 void
@@ -408,53 +408,84 @@ afamqp_is_ok(AMQPDestDriver *self, const gchar *context, amqp_rpc_reply_t ret)
 }
 
 static gboolean
+_is_using_tls(AMQPDestDriver *self)
+{
+  return self->ca_file != NULL;
+}
+
+static gboolean
+_tls_socket_init(AMQPDestDriver *self)
+{
+  self->sockfd = amqp_ssl_socket_new(self->conn);
+  if (self->sockfd == NULL)
+    {
+      msg_error("Error connecting to AMQP server while initializing socket with TLS",
+                evt_tag_str("driver", self->super.super.super.id),
+                evt_tag_int("time_reopen", self->super.time_reopen));
+
+      return FALSE;
+    }
+
+  int ca_file_ret = amqp_ssl_socket_set_cacert(self->sockfd, self->ca_file);
+  if (ca_file_ret != AMQP_STATUS_OK)
+    {
+      msg_error("Error connecting to AMQP server while setting ca_file",
+                evt_tag_str("driver", self->super.super.super.id),
+                evt_tag_str("error", amqp_error_string2(ca_file_ret)),
+                evt_tag_int("time_reopen", self->super.time_reopen));
+
+      return FALSE;
+    }
+
+  if (self->key_file && self->cert_file)
+    {
+      int setkey_ret = amqp_ssl_socket_set_key(self->sockfd, self->cert_file, self->key_file);
+      if (setkey_ret != AMQP_STATUS_OK)
+        {
+          msg_error("Error connecting to AMQP server while setting key_file and cert_file",
+                    evt_tag_str("driver", self->super.super.super.id),
+                    evt_tag_str("error", amqp_error_string2(setkey_ret)),
+                    evt_tag_int("time_reopen", self->super.time_reopen));
+
+          return FALSE;
+        }
+    }
+
+  amqp_compat_set_verify(self->sockfd, self->peer_verify);
+
+  return TRUE;
+}
+
+static gboolean
+_tcp_socket_init(AMQPDestDriver *self)
+{
+  self->sockfd = amqp_tcp_socket_new(self->conn);
+  if (self->sockfd == NULL)
+    {
+      msg_error("Error connecting to AMQP server while initializing socket",
+                evt_tag_str("driver", self->super.super.super.id),
+                evt_tag_int("time_reopen", self->super.time_reopen));
+
+      return FALSE;
+    }
+
+  return TRUE;
+}
+
+static gboolean
 afamqp_dd_socket_init(AMQPDestDriver *self)
 {
-
   self->conn = amqp_new_connection();
-
   if (self->conn == NULL)
     {
       msg_error("Error allocating AMQP connection.");
       return FALSE;
     }
 
-  if (self->ca_file)
-    {
-      int ca_file_ret;
-      self->sockfd = amqp_ssl_socket_new(self->conn);
-      ca_file_ret = amqp_ssl_socket_set_cacert(self->sockfd, self->ca_file);
-      if(ca_file_ret != AMQP_STATUS_OK)
-        {
-          msg_error("Error connecting to AMQP server while setting ca_file",
-                    evt_tag_str("driver", self->super.super.super.id),
-                    evt_tag_str("error", amqp_error_string2(ca_file_ret)),
-                    evt_tag_int("time_reopen", self->super.time_reopen));
+  if (_is_using_tls(self))
+    return _tls_socket_init(self);
 
-          return FALSE;
-
-        }
-
-      if (self->key_file && self->cert_file)
-        {
-          int setkey_ret = amqp_ssl_socket_set_key(self->sockfd, self->cert_file, self->key_file);
-          if(setkey_ret != AMQP_STATUS_OK)
-            {
-              msg_error("Error connecting to AMQP server while setting key_file and cert_file",
-                        evt_tag_str("driver", self->super.super.super.id),
-                        evt_tag_str("error", amqp_error_string2(setkey_ret)),
-                        evt_tag_int("time_reopen", self->super.time_reopen));
-
-              return FALSE;
-
-            }
-        }
-      amqp_compat_set_verify(self->sockfd, self->peer_verify);
-    }
-  else
-    self->sockfd = amqp_tcp_socket_new(self->conn);
-
-  return TRUE;
+  return _tcp_socket_init(self);
 }
 
 static gboolean
@@ -586,7 +617,7 @@ exception_amqp_dd_connect_failed_init:
 /* TODO escape '\0' when passing down the value */
 static gboolean
 afamqp_vp_foreach(const gchar *name,
-                  TypeHint type, const gchar *value, gsize value_len,
+                  LogMessageValueType type, const gchar *value, gsize value_len,
                   gpointer user_data)
 {
   amqp_table_entry_t **entries = (amqp_table_entry_t **) ((gpointer *)user_data)[0];
@@ -609,22 +640,36 @@ afamqp_vp_foreach(const gchar *name,
   return FALSE;
 }
 
-static gboolean
+static LogThreadedResult
+map_amqp_result_to_log_threaded_result(gint amqp_result)
+{
+  switch (amqp_result)
+    {
+    case AMQP_STATUS_OK:
+      return LTR_SUCCESS;
+    case AMQP_STATUS_TABLE_TOO_BIG:
+      return LTR_DROP;
+    default:
+      return LTR_ERROR;
+    }
+}
+
+static LogThreadedResult
 afamqp_worker_publish(AMQPDestDriver *self, LogMessage *msg)
 {
-  gint pos = 0, ret;
+  gint pos = 0, amqp_result;
   amqp_table_t table;
   amqp_basic_properties_t props;
-  gboolean success = TRUE;
   GString *routing_key = scratch_buffers_alloc();
   GString *body = scratch_buffers_alloc();
   amqp_bytes_t body_bytes = amqp_cstring_bytes("");
 
   gpointer user_data[] = { &self->entries, &pos, &self->max_entries };
 
-  value_pairs_foreach(self->vp, afamqp_vp_foreach, msg,
-                      self->super.worker.instance.seq_num,
-                      LTZ_SEND, &self->template_options, user_data);
+  LogTemplateEvalOptions options = {&self->template_options,
+                                    LTZ_SEND, self->super.worker.instance.seq_num, NULL, LM_VT_STRING
+                                   };
+  value_pairs_foreach(self->vp, afamqp_vp_foreach, msg, &options, user_data);
 
   table.num_entries = pos;
   table.entries = self->entries;
@@ -635,29 +680,27 @@ afamqp_worker_publish(AMQPDestDriver *self, LogMessage *msg)
   props.delivery_mode = self->persistent;
   props.headers = table;
 
-  log_template_format(self->routing_key_template, msg, &self->template_options, LTZ_LOCAL,
-                      self->super.worker.instance.seq_num,
-                      NULL, routing_key);
+  LogTemplateEvalOptions routing_key_options = {&self->template_options, LTZ_LOCAL,
+                                                self->super.worker.instance.seq_num, NULL, LM_VT_STRING
+                                               };
+  log_template_format(self->routing_key_template, msg, &routing_key_options, routing_key);
 
   if (self->body_template)
     {
-      log_template_format(self->body_template, msg, &self->template_options, LTZ_LOCAL,
-                          self->super.worker.instance.seq_num,
-                          NULL, body);
+      log_template_format(self->body_template, msg, &options, body);
       body_bytes = amqp_cstring_bytes(body->str);
     }
 
-  ret = amqp_basic_publish(self->conn, 1, amqp_cstring_bytes(self->exchange),
-                           amqp_cstring_bytes(routing_key->str),
-                           0, 0, &props, body_bytes);
+  amqp_result = amqp_basic_publish(self->conn, 1, amqp_cstring_bytes(self->exchange),
+                                   amqp_cstring_bytes(routing_key->str),
+                                   0, 0, &props, body_bytes);
 
-  if (ret < 0)
+  if (amqp_result < 0)
     {
       msg_error("Network error while inserting into AMQP server",
                 evt_tag_str("driver", self->super.super.super.id),
-                evt_tag_str("error", amqp_error_string2(-ret)),
+                evt_tag_str("error", amqp_error_string2(amqp_result)),
                 evt_tag_int("time_reopen", self->super.time_reopen));
-      success = FALSE;
     }
 
   while (--pos >= 0)
@@ -666,7 +709,7 @@ afamqp_worker_publish(AMQPDestDriver *self, LogMessage *msg)
       amqp_bytes_free(self->entries[pos].value.value.bytes);
     }
 
-  return success;
+  return map_amqp_result_to_log_threaded_result(amqp_result);
 }
 
 static LogThreadedResult
@@ -677,10 +720,7 @@ afamqp_worker_insert(LogThreadedDestDriver *s, LogMessage *msg)
   if (!afamqp_dd_connect(self))
     return LTR_NOT_CONNECTED;
 
-  if (!afamqp_worker_publish (self, msg))
-    return LTR_ERROR;
-
-  return LTR_SUCCESS;
+  return afamqp_worker_publish(self, msg);
 }
 
 static void
@@ -718,15 +758,15 @@ afamqp_dd_init(LogPipe *s)
   AMQPDestDriver *self = (AMQPDestDriver *) s;
   GlobalConfig *cfg = log_pipe_get_config(s);
 
-  if (!log_threaded_dest_driver_init_method(s))
-    return FALSE;
-
   if (self->auth_method == AMQP_SASL_METHOD_PLAIN && (!self->user || !self->password))
     {
       msg_error("Error initializing AMQP destination: username and password MUST be set!",
                 evt_tag_str("driver", self->super.super.super.id));
       return FALSE;
     }
+
+  if (!log_threaded_dest_driver_init_method(s))
+    return FALSE;
 
   log_template_options_init(&self->template_options, cfg);
 
@@ -737,7 +777,7 @@ afamqp_dd_init(LogPipe *s)
               evt_tag_str("exchange", self->exchange),
               evt_tag_str("exchange_type", self->exchange_type));
 
-  return log_threaded_dest_driver_start_workers(&self->super);
+  return TRUE;
 }
 
 static void
@@ -794,6 +834,7 @@ afamqp_dd_new(GlobalConfig *cfg)
   self->super.stats_source = stats_register_type("amqp");
 
   self->routing_key_template = log_template_new(cfg, NULL);
+  log_template_compile_literal_string(self->routing_key_template, "");
 
   LogDriver *driver = &self->super.super.super;
   afamqp_dd_set_auth_method(driver, "plain");
@@ -802,7 +843,6 @@ afamqp_dd_new(GlobalConfig *cfg)
   afamqp_dd_set_port(driver, 5672);
   afamqp_dd_set_exchange(driver, "syslog");
   afamqp_dd_set_exchange_type(driver, "fanout");
-  afamqp_dd_set_routing_key(driver, "");
   afamqp_dd_set_persistent(driver, TRUE);
   afamqp_dd_set_exchange_declare(driver, FALSE);
   afamqp_dd_set_max_channel(driver, AMQP_DEFAULT_MAX_CHANNELS);

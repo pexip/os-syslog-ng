@@ -116,11 +116,12 @@ _py_init_bindings(PythonParser *self)
   if (!self->py.class)
     {
       gchar buf[256];
+      _py_format_exception_text(buf, sizeof(buf));
 
       msg_error("Error looking Python parser class",
                 evt_tag_str("parser", self->super.name),
                 evt_tag_str("class", self->class),
-                evt_tag_str("exception", _py_format_exception_text(buf, sizeof(buf))));
+                evt_tag_str("exception", buf));
       _py_finish_exception_handling();
       return FALSE;
     }
@@ -129,11 +130,12 @@ _py_init_bindings(PythonParser *self)
   if (!self->py.instance)
     {
       gchar buf[256];
+      _py_format_exception_text(buf, sizeof(buf));
 
       msg_error("Error instantiating Python parser class",
                 evt_tag_str("parser", self->super.name),
                 evt_tag_str("class", self->class),
-                evt_tag_str("exception", _py_format_exception_text(buf, sizeof(buf))));
+                evt_tag_str("exception", buf));
       _py_finish_exception_handling();
       return FALSE;
     }
@@ -183,10 +185,10 @@ python_parser_process(LogParser *s, LogMessage **pmsg, const LogPathOptions *pat
     LogMessage *msg = log_msg_make_writable(pmsg, path_options);
 
     msg_trace("python-parser message processing started",
-              evt_tag_str ("input", input),
+              evt_tag_str("input", input),
               evt_tag_str("parser", self->super.name),
               evt_tag_str("class", self->class),
-              evt_tag_printf("msg", "%p", msg));
+              evt_tag_msg_reference(msg));
 
     PyObject *msg_object = py_log_message_new(msg);
     result = _py_invoke_parser_process(self, msg_object);

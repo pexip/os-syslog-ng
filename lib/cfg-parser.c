@@ -79,10 +79,12 @@ static CfgLexerKeyword main_keywords[] =
   { "add_prefix",         KW_ADD_PREFIX },
   { "replace",            KW_REPLACE_PREFIX, KWS_OBSOLETE, "replace_prefix" },
   { "replace_prefix",     KW_REPLACE_PREFIX },
+  { "cast",               KW_CAST },
 
   /* option items */
   { "flags",              KW_FLAGS },
   { "pad_size",           KW_PAD_SIZE },
+  { "truncate_size",      KW_TRUNCATE_SIZE },
   { "mark_freq",          KW_MARK_FREQ },
   { "mark",               KW_MARK_FREQ, KWS_OBSOLETE, "mark_freq" },
   { "mark_mode",          KW_MARK_MODE },
@@ -158,10 +160,16 @@ static CfgLexerKeyword main_keywords[] =
   { "dns_cache_size",     KW_DNS_CACHE_SIZE },
   { "dns_cache_expire",   KW_DNS_CACHE_EXPIRE },
   { "dns_cache_expire_failed", KW_DNS_CACHE_EXPIRE_FAILED },
-  { "pass_unix_credentials",   KW_PASS_UNIX_CREDENTIALS },
+  {
+    "pass_unix_credentials",   KW_PASS_UNIX_CREDENTIALS, KWS_OBSOLETE,
+    "The use of pass-unix-credentials() has been deprecated in " VERSION_3_35 " in favour of "
+    "the 'so-passcred()' source option or the 'ignore-aux-data' source flag"
+  },
+
   { "persist_name",            KW_PERSIST_NAME, VERSION_VALUE_3_8 },
 
   { "retries",            KW_RETRIES },
+  { "workers",            KW_WORKERS },
   { "batch_lines",        KW_BATCH_LINES },
   { "batch_timeout",      KW_BATCH_TIMEOUT },
 
@@ -196,7 +204,7 @@ CfgParser main_parser =
   .parse = main_parse,
 };
 
-CFG_PARSER_IMPLEMENT_LEXER_BINDING(main_, gpointer *)
+CFG_PARSER_IMPLEMENT_LEXER_BINDING(main_, MAIN_, gpointer *)
 
 /* display CONTEXT lines before and after the offending line */
 #define CONTEXT 5
@@ -231,7 +239,7 @@ _print_underline(const gchar *line, gint whitespace_before, gint number_of_caret
 }
 
 static void
-_print_underlined_source_block(YYLTYPE *yylloc, gchar **lines, gint error_index)
+_print_underlined_source_block(const CFG_LTYPE *yylloc, gchar **lines, gint error_index)
 {
   gint line_ndx;
   gchar line_prefix[12];
@@ -266,18 +274,19 @@ _print_underlined_source_block(YYLTYPE *yylloc, gchar **lines, gint error_index)
 }
 
 static void
-_report_file_location(const gchar *filename, YYLTYPE *yylloc)
+_report_file_location(const gchar *filename, const CFG_LTYPE *yylloc)
 {
   FILE *f;
   gint lineno = 0;
-  gchar buf[1024];
+  gsize buflen = 65520;
+  gchar *buf = g_malloc(buflen);
   GPtrArray *context = g_ptr_array_new();
   gint error_index = 0;
 
   f = fopen(filename, "r");
   if (f)
     {
-      while (fgets(buf, sizeof(buf), f))
+      while (fgets(buf, buflen, f))
         {
           lineno++;
           if (lineno > (gint) yylloc->first_line + CONTEXT)
@@ -297,12 +306,13 @@ _report_file_location(const gchar *filename, YYLTYPE *yylloc)
   _print_underlined_source_block(yylloc, (gchar **) context->pdata, error_index);
 
 exit:
+  g_free(buf);
   g_ptr_array_foreach(context, (GFunc) g_free, NULL);
   g_ptr_array_free(context, TRUE);
 }
 
 static void
-_report_buffer_location(const gchar *buffer_content, YYLTYPE *yylloc)
+_report_buffer_location(const gchar *buffer_content, const CFG_LTYPE *yylloc)
 {
   gchar **lines = g_strsplit(buffer_content, "\n", yylloc->first_line + CONTEXT + 1);
   gint num_lines = g_strv_length(lines);
@@ -324,38 +334,49 @@ exit:
 }
 
 void
-report_syntax_error(CfgLexer *lexer, YYLTYPE *yylloc, const char *what, const char *msg, gboolean in_main_grammar)
+report_syntax_error(CfgLexer *lexer, const CFG_LTYPE *yylloc, const char *what, const char *msg,
+                    gboolean in_main_grammar)
 {
   CfgIncludeLevel *level = yylloc->level, *from;
 
   for (from = level; from >= lexer->include_stack; from--)
     {
+      const CFG_LTYPE *from_lloc;
+
       if (from == level)
         {
+          /* the location on the initial level is the one we get as
+           * argument, instead of what we have in the lexer's state.  This
+           * is because the lexer might be one token in advance (because of
+           * LALR) and the grammar is kind enough to pass us the original
+           * location.  */
+
+          from_lloc = yylloc;
           fprintf(stderr, "Error parsing %s, %s in %s:%d:%d-%d:%d:\n",
                   what,
                   msg,
-                  from->lloc.level->name,
-                  from->lloc.first_line,
-                  from->lloc.first_column,
-                  from->lloc.last_line,
-                  from->lloc.last_column);
+                  from_lloc->level->name,
+                  from_lloc->first_line,
+                  from_lloc->first_column,
+                  from_lloc->last_line,
+                  from_lloc->last_column);
         }
       else
         {
+          from_lloc = &from->lloc;
           fprintf(stderr, "Included from %s:%d:%d-%d:%d:\n", from->name,
-                  from->lloc.first_line,
-                  from->lloc.first_column,
-                  from->lloc.last_line,
-                  from->lloc.last_column);
+                  from_lloc->first_line,
+                  from_lloc->first_column,
+                  from_lloc->last_line,
+                  from_lloc->last_column);
         }
       if (from->include_type == CFGI_FILE)
         {
-          _report_file_location(from->name, &from->lloc);
+          _report_file_location(from->name, from_lloc);
         }
       else if (from->include_type == CFGI_BUFFER)
         {
-          _report_buffer_location(from->buffer.original_content, &from->lloc);
+          _report_buffer_location(from->buffer.original_content, from_lloc);
         }
       fprintf(stderr, "\n");
     }

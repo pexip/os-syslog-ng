@@ -409,12 +409,13 @@ snmpdest_worker_insert(LogThreadedDestDriver *s, LogMessage *msg)
   GList *snmp_template = self->snmp_templates;
   GString *fs = g_string_sized_new(128);
 
+  LogTemplateEvalOptions options = {&self->template_options, LTZ_LOCAL, 0, NULL, LM_VT_STRING};
   /* go through the snmp objects and add them to the message */
   while (snmp_obj)
     {
       oid_cnt = parse_oid_tokens(snmp_obj->data, parsed_oids, MAX_OIDS);
 
-      log_template_format(snmp_template->data, msg, &self->template_options, LTZ_LOCAL, 0, NULL, fs);
+      log_template_format(snmp_template->data, msg, &options, fs);
 
       gint code = *((gint *)snmp_code->data);
       sanitize_fs(fs, code);
@@ -565,7 +566,7 @@ snmpdest_dd_session_init(SNMPDestDriver *self)
 
       /*
        * setup the engineID based on IP addr.  Need a different
-       * algorthim here.  This will cause problems with agents on the
+       * algorithm here.  This will cause problems with agents on the
        * same machine sending traps.
        */
       setup_engineID(NULL, NULL);
@@ -623,9 +624,6 @@ snmpdest_dd_init(LogPipe *s)
   SNMPDestDriver *self = (SNMPDestDriver *)s;
   GlobalConfig *cfg = log_pipe_get_config(s);
 
-  if (!log_threaded_dest_driver_init_method(s))
-    return FALSE;
-
   msg_verbose("Initializing SNMP destination",
               evt_tag_str("driver", self->super.super.super.id),
               evt_tag_str("host", self->host),
@@ -638,8 +636,11 @@ snmpdest_dd_init(LogPipe *s)
       return FALSE;
     }
 
+  if (!log_threaded_dest_driver_init_method(s))
+    return FALSE;
+
   log_template_options_init(&self->template_options, cfg);
-  return log_threaded_dest_driver_start_workers(&self->super);
+  return TRUE;
 }
 
 static void
@@ -758,7 +759,6 @@ snmpdest_dd_new(GlobalConfig *cfg)
   self->transport = g_strdup("UDP");
 
   log_template_options_defaults(&self->template_options);
-  self->worker_options.is_output_thread = TRUE;
 
   return (LogDriver *)self;
 }

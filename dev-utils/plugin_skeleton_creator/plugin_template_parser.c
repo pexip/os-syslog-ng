@@ -35,7 +35,7 @@ static CfgLexerKeyword @PLUGIN_NAME_US@_keywords[] =
 
 CfgParser @PLUGIN_NAME_US@_parser =
 {
-#if ENABLE_DEBUG
+#if SYSLOG_NG_ENABLE_DEBUG
   .debug_flag = &@PLUGIN_NAME_US@_debug,
 #endif
   .name = "@PLUGIN_NAME@",
@@ -44,5 +44,4 @@ CfgParser @PLUGIN_NAME_US@_parser =
   .cleanup = (void (*)(gpointer)) log_pipe_unref,
 };
 
-CFG_PARSER_IMPLEMENT_LEXER_BINDING(@PLUGIN_NAME_US@_, LogDriver **)
-
+CFG_PARSER_IMPLEMENT_LEXER_BINDING(@PLUGIN_NAME_US@_, @PLUGIN_NAME_USUC@_, LogDriver **)

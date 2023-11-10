@@ -147,42 +147,6 @@ vp_cmdline_parse_rekey(const gchar *option_name, const gchar *value,
   return TRUE;
 }
 
-static void
-value_pairs_parse_type(gchar *spec, gchar **value, gchar **type)
-{
-  char *sp, *ep;
-
-  *type = NULL;
-  sp = spec;
-
-  while (g_ascii_isalnum(*sp) || (*sp) == '_')
-    sp++;
-
-  while (*sp == ' ' || *sp == '\t')
-    sp++;
-
-  if (*sp != '(' ||
-      !((g_ascii_toupper(spec[0]) >= 'A' &&
-         g_ascii_toupper(spec[0]) <= 'Z') ||
-        spec[0] == '_'))
-    {
-      *value = spec;
-      return;
-    }
-
-  ep = strrchr(sp, ')');
-  if (ep == NULL || ep[1] != '\0')
-    {
-      *value = spec;
-      return;
-    }
-
-  *value = sp + 1;
-  *type = spec;
-  sp[0] = '\0';
-  ep[0] = '\0';
-}
-
 static gboolean
 vp_cmdline_parse_pair (const gchar *option_name, const gchar *value,
                        gpointer data, GError **error)
@@ -190,7 +154,7 @@ vp_cmdline_parse_pair (const gchar *option_name, const gchar *value,
   gpointer *args = (gpointer *) data;
   ValuePairs *vp = (ValuePairs *) args[1];
   GlobalConfig *cfg = (GlobalConfig *) args[0];
-  gchar **kv, *v, *t;
+  gchar **kv;
   gboolean res = FALSE;
   LogTemplate *template;
 
@@ -204,12 +168,9 @@ vp_cmdline_parse_pair (const gchar *option_name, const gchar *value,
     }
 
   kv = g_strsplit(value, "=", 2);
-  value_pairs_parse_type(kv[1], &v, &t);
 
   template = log_template_new(cfg, NULL);
-  if (!log_template_compile(template, v, error))
-    goto error;
-  if (!log_template_set_type_hint(template, t, error))
+  if (!log_template_compile_with_type_hint(template, kv[1], error))
     goto error;
 
   value_pairs_add_pair(vp, kv[0], template);
@@ -385,17 +346,31 @@ vp_cmdline_parse_rekey_shift_levels (const gchar *option_name, const gchar *valu
   return TRUE;
 }
 
-ValuePairs *
-value_pairs_new_from_cmdline (GlobalConfig *cfg,
-                              gint *argc, gchar ***argv,
-                              gboolean ignore_unknown_options,
-                              GError **error)
+static gboolean
+vp_cmdline_parse_cast(const gchar *option_name, const gchar *value,
+                      gpointer data, GError **error)
 {
-  ValuePairs *vp;
+  gpointer *args = (gpointer *) data;
+  ValuePairs *vp = (ValuePairs *) args[1];
+
+  if (strcmp(option_name, "--no-cast") == 0)
+    value_pairs_set_cast_to_strings(vp, FALSE);
+  else if (strcmp(option_name, "--cast") == 0)
+    value_pairs_set_cast_to_strings(vp, TRUE);
+  else if (strcmp(option_name, "--auto-cast") == 0)
+    value_pairs_set_auto_cast(vp);
+  else
+    return FALSE;
+  return TRUE;
+}
+
+static gboolean
+value_pairs_parse_command_line(ValuePairs *vp,
+                               gint *argc, gchar ***argv,
+                               GOptionGroup *custom_options,
+                               GError **error)
+{
   GOptionContext *ctx;
-
-  vp = value_pairs_new();
-
   GOptionEntry vp_options[] =
   {
     {
@@ -447,34 +422,62 @@ value_pairs_new_from_cmdline (GlobalConfig *cfg,
       NULL, NULL
     },
     {
+      "cast", 0, G_OPTION_FLAG_NO_ARG, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_cast,
+      NULL, NULL
+    },
+    {
+      "no-cast", 0, G_OPTION_FLAG_NO_ARG, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_cast,
+      NULL, NULL
+    },
+    {
+      "auto-cast", 0, G_OPTION_FLAG_NO_ARG, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_cast,
+      NULL, NULL
+    },
+    {
       G_OPTION_REMAINING, 0, 0, G_OPTION_ARG_CALLBACK, vp_cmdline_parse_pair_or_key,
       NULL, NULL
     },
     { NULL }
   };
-  GOptionGroup *og;
   gpointer user_data_args[4];
   gboolean success;
 
-  user_data_args[0] = cfg;
+  user_data_args[0] = vp->cfg;
   user_data_args[1] = vp;
   user_data_args[2] = NULL;
   user_data_args[3] = NULL;
 
   ctx = g_option_context_new("value-pairs");
-  og = g_option_group_new(NULL, NULL, NULL, user_data_args, NULL);
+  GOptionGroup *og = g_option_group_new("value-pairs", "", "", user_data_args, NULL);
   g_option_group_add_entries(og, vp_options);
+
+  /* only the main group gets to process G_OPTION_REMAINING options, so
+   * vp_options is the main one */
+
   g_option_context_set_main_group(ctx, og);
-  g_option_context_set_ignore_unknown_options(ctx, ignore_unknown_options);
+  if (custom_options)
+    g_option_context_add_group(ctx, custom_options);
 
   success = g_option_context_parse(ctx, argc, argv, error);
   vp_cmdline_parse_rekey_finish(user_data_args);
   g_option_context_free(ctx);
+  return success;
+}
 
-  if (!success)
+ValuePairs *
+value_pairs_new_from_cmdline(GlobalConfig *cfg,
+                             gint *argc, gchar ***argv,
+                             GOptionGroup *custom_options,
+                             GError **error)
+{
+  ValuePairs *vp;
+
+  vp = value_pairs_new(cfg);
+
+  if (!value_pairs_parse_command_line(vp, argc, argv, custom_options, error))
     {
       value_pairs_unref(vp);
-      vp = NULL;
+      return NULL;
     }
 
   return vp;

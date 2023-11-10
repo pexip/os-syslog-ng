@@ -30,12 +30,12 @@
 
 %code {
 
-#include "cfg-grammar.h"
+#include "cfg-grammar-internal.h"
 #include "cfg-parser.h"
 #include "plugin.h"
 }
 
-%name-prefix "map_value_pairs_"
+%define api.prefix {map_value_pairs_}
 %lex-param {CfgLexer *lexer}
 %parse-param {CfgLexer *lexer}
 %parse-param {LogParser **instance}
@@ -50,7 +50,7 @@
 start
 	: LL_CONTEXT_PARSER KW_MAP_VALUE_PAIRS
           {
-            last_value_pairs = value_pairs_new();
+            last_value_pairs = value_pairs_new(configuration);
             *instance = last_parser = map_value_pairs_new(configuration, last_value_pairs);
           }
           '(' map_names_options ')'				{ YYACCEPT; }

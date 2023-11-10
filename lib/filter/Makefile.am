@@ -26,7 +26,7 @@ filter_sources = 				\
 	lib/filter/filter-re.c			\
 	lib/filter/filter-pri.c			\
 	lib/filter/filter-pipe.c		\
-	lib/filter/filter-expr-parser.c		\
+	lib/filter/filter-expr-parser.c	\
 	lib/filter/filter-expr-grammar.y
 
 BUILT_SOURCES += 				\

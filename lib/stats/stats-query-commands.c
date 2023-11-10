@@ -24,7 +24,7 @@
 #include "messages.h"
 #include "stats-query-commands.h"
 #include "stats/stats-query.h"
-#include "control/control-server.h"
+#include "control/control-connection.h"
 
 typedef enum _QueryCommand
 {
@@ -183,7 +183,7 @@ _dispatch_query(gint cmd_id, const gchar *filter_expr, GString *result)
 }
 
 void
-process_query_command(ControlConnection *cc, GString *command, gpointer user_data)
+process_query_command(ControlConnection *cc, GString *command, gpointer user_data, gboolean *cancelled)
 {
   GString *result = g_string_new("");
   gchar **cmds = g_strsplit(command->str, " ", 3);

@@ -21,18 +21,19 @@
  *
  */
 
+#include <criterion/criterion.h>
+#include <criterion/parameterized.h>
+
 #include "patternize.h"
 #include "logmsg/logmsg.h"
 #include "cfg.h"
 #include "plugin.h"
 #include "apphook.h"
+#include "msg-format.h"
 
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-
-#include <criterion/criterion.h>
-#include <criterion/parameterized.h>
 
 MsgFormatOptions parse_options;
 
@@ -80,7 +81,7 @@ _get_logmessages(const gchar *logs)
       if (logline[len-1] == '\n')
         logline[len-1] = 0;
 
-      msg = log_msg_new(logline, len, &parse_options);
+      msg = msg_format_parse(&parse_options, (const guchar *) logline, len);
       g_ptr_array_add(self->logmessages, msg);
       ++(self->num_of_logs);
       g_free(logline);

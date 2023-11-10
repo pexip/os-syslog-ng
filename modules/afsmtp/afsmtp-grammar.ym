@@ -30,15 +30,14 @@
 %code {
 
 #include "cfg-parser.h"
-#include "cfg-grammar.h"
-#include "afsmtp-grammar.h"
+#include "cfg-grammar-internal.h"
 #include "plugin.h"
 
 extern LogDriver *last_driver;
 
 }
 
-%name-prefix "afsmtp_"
+%define api.prefix {afsmtp_}
 %lex-param {CfgLexer *lexer}
 %parse-param {CfgLexer *lexer}
 %parse-param {LogDriver **instance}
@@ -64,7 +63,7 @@ start
           {
             last_driver = *instance = afsmtp_dd_new(configuration);
           }
-          '(' afsmtp_options ')'         { YYACCEPT; }
+          '(' _inner_dest_context_push afsmtp_options _inner_dest_context_pop ')'         { YYACCEPT; }
         ;
 
 afsmtp_options
@@ -161,7 +160,7 @@ afsmtp_option
             log_template_unref($3);
             log_template_unref($4);
           }
-        | threaded_dest_driver_option
+        | threaded_dest_driver_general_option
         | { last_template_options = afsmtp_dd_get_template_options(last_driver); } template_option
         ;
 

@@ -92,6 +92,11 @@ struct _LogProtoBufferedServer
   GIConv convert;
   guchar *buffer;
 
+  GIConv reverse_convert;
+  gchar *reverse_buffer;
+  gsize reverse_buffer_len;
+  gint convert_scale;
+
   /* auxiliary data (e.g. GSockAddr, other transport related meta
    * data) associated with the already buffered data */
   LogTransportAuxData buffer_aux;
@@ -119,5 +124,8 @@ gboolean log_proto_buffered_server_validate_options_method(LogProtoServer *s);
 void log_proto_buffered_server_init(LogProtoBufferedServer *self, LogTransport *transport,
                                     const LogProtoServerOptions *options);
 void log_proto_buffered_server_free_method(LogProtoServer *s);
+
+LogProtoStatus log_proto_buffered_server_fetch(LogProtoServer *s, const guchar **msg, gsize *msg_len,
+                                               gboolean *may_read, LogTransportAuxData *aux, Bookmark *bookmark);
 
 #endif
