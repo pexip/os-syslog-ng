@@ -1,5 +1,9 @@
 lib_rewrite_tests_TESTS = \
     lib/rewrite/tests/test_rewrite \
+    lib/rewrite/tests/test_set_pri \
+    lib/rewrite/tests/test_set_matches \
+    lib/rewrite/tests/test_set_tag \
+    lib/rewrite/tests/test_rename \
     lib/rewrite/tests/test_set_severity \
     lib/rewrite/tests/test_set_facility
 
@@ -13,6 +17,11 @@ lib_rewrite_tests_test_rewrite_LDADD = $(TEST_LDADD)    \
 lib_rewrite_tests_test_rewrite_SOURCES =    \
     lib/rewrite/tests/test_rewrite.c
 
+lib_rewrite_tests_test_rename_CFLAGS = $(TEST_CFLAGS)
+lib_rewrite_tests_test_rename_LDADD = $(TEST_LDADD)
+lib_rewrite_tests_test_rename_SOURCES =    \
+    lib/rewrite/tests/test_rename.c
+
 lib_rewrite_tests_test_set_severity_CFLAGS = $(TEST_CFLAGS)
 lib_rewrite_tests_test_set_severity_LDADD = $(TEST_LDADD)
 lib_rewrite_tests_test_set_severity_SOURCES =    \
@@ -22,3 +31,18 @@ lib_rewrite_tests_test_set_facility_CFLAGS = $(TEST_CFLAGS)
 lib_rewrite_tests_test_set_facility_LDADD = $(TEST_LDADD)
 lib_rewrite_tests_test_set_facility_SOURCES =    \
     lib/rewrite/tests/test_set_facility.c
+
+lib_rewrite_tests_test_set_pri_CFLAGS = $(TEST_CFLAGS)
+lib_rewrite_tests_test_set_pri_LDADD = $(TEST_LDADD)
+lib_rewrite_tests_test_set_pri_SOURCES =    \
+    lib/rewrite/tests/test_set_pri.c
+
+lib_rewrite_tests_test_set_matches_CFLAGS = $(TEST_CFLAGS)
+lib_rewrite_tests_test_set_matches_LDADD = $(TEST_LDADD)
+lib_rewrite_tests_test_set_matches_SOURCES =    \
+    lib/rewrite/tests/test_set_matches.c
+
+lib_rewrite_tests_test_set_tag_CFLAGS = $(TEST_CFLAGS)
+lib_rewrite_tests_test_set_tag_LDADD = $(TEST_LDADD)
+lib_rewrite_tests_test_set_tag_SOURCES =    \
+    lib/rewrite/tests/test_set_tag.c

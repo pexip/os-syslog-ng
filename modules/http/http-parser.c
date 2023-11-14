@@ -43,6 +43,8 @@ static CfgLexerKeyword http_keywords[] =
   { "cert_file",        KW_CERT_FILE },
   { "key_file",         KW_KEY_FILE },
   { "cipher_suite",     KW_CIPHER_SUITE },
+  { "tls12_and_older",  KW_TLS12_AND_OLDER },
+  { "tls13",            KW_TLS13 },
   { "proxy",      KW_PROXY },
   { "use_system_cert_store", KW_USE_SYSTEM_CERT_STORE },
   { "ssl_version",      KW_SSL_VERSION },
@@ -62,7 +64,6 @@ static CfgLexerKeyword http_keywords[] =
   { "body_prefix",      KW_BODY_PREFIX },
   { "body_suffix",      KW_BODY_SUFFIX },
   { "delimiter",        KW_DELIMITER },
-  { "workers",          KW_WORKERS },
   { NULL }
 };
 
@@ -77,4 +78,4 @@ CfgParser http_parser =
   .cleanup = (void (*)(gpointer)) log_pipe_unref,
 };
 
-CFG_PARSER_IMPLEMENT_LEXER_BINDING(http_, LogDriver **)
+CFG_PARSER_IMPLEMENT_LEXER_BINDING(http_, HTTP_, LogDriver **)

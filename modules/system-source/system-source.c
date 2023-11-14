@@ -164,7 +164,7 @@ system_sysblock_add_freebsd_klog(GString *sysblock, const gchar *release)
       strncmp(release, "9.0", 3) == 0)
     system_sysblock_add_file(sysblock, "/dev/klog", 1, "kernel", "no-parse", NULL, FALSE);
   else
-    system_sysblock_add_file(sysblock, "/dev/klog", 0, "kernel", "no-parse", NULL, FALSE);
+    system_sysblock_add_file(sysblock, "/dev/klog", 0, "kernel", NULL, NULL, FALSE);
 }
 
 static gboolean
@@ -301,6 +301,10 @@ system_generate_system_transports(GString *sysblock, CfgArgs *args)
       system_sysblock_add_unix_dgram(sysblock, "/var/run/log", NULL, NULL);
       system_sysblock_add_freebsd_klog(sysblock, u.release);
     }
+  else if (strcmp(u.sysname, "NetBSD") == 0)
+    {
+      system_sysblock_add_unix_dgram(sysblock, "/var/run/log", NULL, NULL);
+    }
   else if (strcmp(u.sysname, "HP-UX") == 0)
     {
       system_sysblock_add_pipe(sysblock, "/dev/log", 2048);
@@ -314,6 +318,10 @@ system_generate_system_transports(GString *sysblock, CfgArgs *args)
   else if (strcmp(u.sysname, "OpenBSD") == 0)
     {
       g_string_append(sysblock, "openbsd();");
+    }
+  else if (strcmp(u.sysname, "Darwin") == 0)
+    {
+      system_sysblock_add_file(sysblock, "/var/log/system.log", 1, NULL, NULL, NULL, FALSE);
     }
   else
     {

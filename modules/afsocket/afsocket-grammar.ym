@@ -31,7 +31,6 @@
 
 #include "afsocket.h"
 #include "cfg-parser.h"
-#include "afsocket-grammar.h"
 #include "afunix-source.h"
 #include "afunix-dest.h"
 #include "afinet-source.h"
@@ -39,8 +38,9 @@
 #include "messages.h"
 #include "syslog-names.h"
 #include "plugin.h"
-#include "cfg-grammar.h"
+#include "cfg-grammar-internal.h"
 #include "socket-options-inet.h"
+#include "socket-options-unix.h"
 #include "transport-mapper-inet.h"
 #include "service-management.h"
 
@@ -117,7 +117,7 @@ systemd_syslog_grammar_set_source_driver(SystemDSyslogSourceDriver *sd)
 
 }
 
-%name-prefix "afsocket_"
+%define api.prefix {afsocket_}
 
 /* this parameter is needed in order to instruct bison to use a complete
  * argument list for yylex/yyerror */
@@ -149,6 +149,7 @@ systemd_syslog_grammar_set_source_driver(SystemDSyslogSourceDriver *sd)
 %token KW_TCP_KEEPALIVE_TIME
 %token KW_TCP_KEEPALIVE_PROBES
 %token KW_TCP_KEEPALIVE_INTVL
+%token KW_SO_PASSCRED
 %token KW_LISTEN_BACKLOG
 %token KW_SPOOF_SOURCE
 %token KW_SPOOF_SOURCE_MAX_MSGLEN
@@ -186,10 +187,15 @@ systemd_syslog_grammar_set_source_driver(SystemDSyslogSourceDriver *sd)
 %token KW_TRUSTED_KEYS
 %token KW_TRUSTED_DN
 %token KW_CIPHER_SUITE
+%token KW_TLS12_AND_OLDER
+%token KW_TLS13
+%token KW_SIGALGS
+%token KW_CLIENT_SIGALGS
 %token KW_ECDH_CURVE_LIST
 %token KW_SSL_OPTIONS
 %token KW_SNI
 %token KW_ALLOW_COMPRESS
+%token KW_KEYLOG_FILE
 
 /* INCLUDE_DECLS */
 
@@ -236,7 +242,7 @@ start
         : driver
           {
             *instance = $1;
-            if (yychar != YYEMPTY)
+            if (yychar != AFSOCKET_EMPTY)
               cfg_lexer_unput_token(lexer, &yylval);
             YYACCEPT;
           }
@@ -256,8 +262,8 @@ driver
 
 
 source_afunix
-        : KW_UNIX_DGRAM '(' source_afunix_dgram_params ')'	                                { $$ = $3; }
-	| KW_UNIX_STREAM '(' source_afunix_stream_params ')' 	                                { $$ = $3; }
+        : KW_UNIX_DGRAM '(' _inner_src_context_push source_afunix_dgram_params _inner_src_context_pop ')'	        { $$ = $4; }
+	| KW_UNIX_STREAM '(' _inner_src_context_push source_afunix_stream_params _inner_src_context_pop ')' 	        { $$ = $4; }
 	;
 
 source_afunix_dgram_params
@@ -287,7 +293,7 @@ source_afunix_option
 	| source_afsocket_stream_params		{}
 	| source_reader_option			{}
 	| source_driver_option
-	| socket_option				{}
+	| unix_socket_option			{}
 	| KW_OPTIONAL '(' yesno ')'		{ last_driver->optional = $3; }
 	| KW_PASS_UNIX_CREDENTIALS '(' yesno ')'
 	  {
@@ -302,10 +308,10 @@ source_afunix_option
 	;
 
 source_afinet
-	: KW_UDP '(' source_afinet_udp_params ')'		{ $$ = $3; }
-	| KW_TCP '(' source_afinet_tcp_params ')'		{ $$ = $3; }
-	| KW_UDP6 '(' source_afinet_udp6_params ')'		{ $$ = $3; }
-	| KW_TCP6 '(' source_afinet_tcp6_params ')'		{ $$ = $3; }
+	: KW_UDP '(' _inner_src_context_push source_afinet_udp_params _inner_src_context_pop ')'	{ $$ = $4; }
+	| KW_TCP '(' _inner_src_context_push source_afinet_tcp_params _inner_src_context_pop ')'	{ $$ = $4; }
+	| KW_UDP6 '(' _inner_src_context_push source_afinet_udp6_params _inner_src_context_pop ')'	{ $$ = $4; }
+	| KW_TCP6 '(' _inner_src_context_push source_afinet_tcp6_params _inner_src_context_pop ')'	{ $$ = $4; }
         ;
 
 source_afinet_udp_params
@@ -392,13 +398,12 @@ source_afsocket_stream_params
 	| KW_MAX_CONNECTIONS '(' positive_integer ')'	 { afsocket_sd_set_max_connections(last_driver, $3); }
 	| KW_LISTEN_BACKLOG '(' positive_integer ')'	{ afsocket_sd_set_listen_backlog(last_driver, $3); }
 	| KW_DYNAMIC_WINDOW_SIZE '(' nonnegative_integer ')' { afsocket_sd_set_dynamic_window_size(last_driver, $3); }
-  | KW_DYNAMIC_WINDOW_STATS_FREQ '(' nonnegative_integer ')' { afsocket_sd_set_dynamic_window_stats_freq(last_driver, $3); }
-  | KW_DYNAMIC_WINDOW_STATS_FREQ '(' LL_FLOAT ')' { afsocket_sd_set_dynamic_window_stats_freq(last_driver, $3); }
+  | KW_DYNAMIC_WINDOW_STATS_FREQ '(' nonnegative_float ')' { afsocket_sd_set_dynamic_window_stats_freq(last_driver, $3); }
   | KW_DYNAMIC_WINDOW_REALLOC_TICKS '(' nonnegative_integer ')' { afsocket_sd_set_dynamic_window_realloc_ticks(last_driver, $3); }
 	;
 
 source_afsyslog
-	: KW_SYSLOG '(' source_afsyslog_params ')'		{ $$ = $3; }
+	: KW_SYSLOG '(' _inner_src_context_push source_afsyslog_params _inner_src_context_pop ')'	{ $$ = $4; }
 	;
 
 source_afsyslog_params
@@ -424,7 +429,7 @@ source_afsyslog_option
 	;
 
 source_afnetwork
-	: KW_NETWORK '(' source_afnetwork_params ')'    { $$ = $3; }
+	: KW_NETWORK '(' _inner_src_context_push source_afnetwork_params _inner_src_context_pop ')'    { $$ = $4; }
 	;
 
 source_afnetwork_params
@@ -482,7 +487,7 @@ source_afsocket_transport
         ;
 
 source_systemd_syslog
-	: KW_SYSTEMD_SYSLOG '(' source_systemd_syslog_params ')'  { $$ = $3; }
+	: KW_SYSTEMD_SYSLOG '(' _inner_src_context_push source_systemd_syslog_params _inner_src_context_pop ')'  { $$ = $4; }
 	;
 
 source_systemd_syslog_params
@@ -512,8 +517,8 @@ source_systemd_syslog_option
         ;
 
 dest_afunix
-	: KW_UNIX_DGRAM '(' dest_afunix_dgram_params ')'	{ $$ = $3; }
-	| KW_UNIX_STREAM '(' dest_afunix_stream_params ')'	{ $$ = $3; }
+	: KW_UNIX_DGRAM '(' _inner_dest_context_push dest_afunix_dgram_params _inner_dest_context_pop ')'	{ $$ = $4; }
+	| KW_UNIX_STREAM '(' _inner_dest_context_push dest_afunix_stream_params _inner_dest_context_pop ')'	{ $$ = $4; }
 	;
 
 dest_afunix_dgram_params
@@ -549,10 +554,10 @@ dest_afunix_option
 	;
 
 dest_afinet
-	: KW_UDP '(' dest_afinet_udp_params ')'			{ $$ = $3; }
-	| KW_TCP '(' dest_afinet_tcp_params ')'			{ $$ = $3; }
-	| KW_UDP6 '(' dest_afinet_udp6_params ')'		{ $$ = $3; }
-	| KW_TCP6 '(' dest_afinet_tcp6_params ')'		{ $$ = $3; }
+	: KW_UDP '(' _inner_dest_context_push dest_afinet_udp_params _inner_dest_context_pop ')'			{ $$ = $4; }
+	| KW_TCP '(' _inner_dest_context_push dest_afinet_tcp_params _inner_dest_context_pop ')'			{ $$ = $4; }
+	| KW_UDP6 '(' _inner_dest_context_push dest_afinet_udp6_params _inner_dest_context_pop ')'		{ $$ = $4; }
+	| KW_TCP6 '(' _inner_dest_context_push dest_afinet_tcp6_params	_inner_dest_context_pop ')'		{ $$ = $4; }
 	;
 
 dest_afinet_udp_params
@@ -618,11 +623,14 @@ dest_failback_probe_option
 	| KW_SUCCESSFUL_PROBES_REQUIRED '(' positive_integer ')' { afinet_dd_set_failback_successful_probes_required(last_driver, $3); }
 	;
 
+dest_afinet_dgram_option
+	: KW_SPOOF_SOURCE '(' yesno ')'		{ afinet_dd_set_spoof_source(last_driver, $3); }
+	| KW_SPOOF_SOURCE_MAX_MSGLEN '(' positive_integer ')' { afinet_dd_set_spoof_source_max_msglen(last_driver, $3); }
+	;
 
 dest_afinet_udp_option
 	: dest_afinet_option
-	| KW_SPOOF_SOURCE '(' yesno ')'		{ afinet_dd_set_spoof_source(last_driver, $3); }
-	| KW_SPOOF_SOURCE_MAX_MSGLEN '(' positive_integer ')' { afinet_dd_set_spoof_source_max_msglen(last_driver, $3); }
+	| dest_afinet_dgram_option
 	;
 
 dest_afinet_tcp_params
@@ -674,7 +682,7 @@ dest_afsocket_option
 
 
 dest_afsyslog
-        : KW_SYSLOG '(' dest_afsyslog_params ')'   { $$ = $3; }
+        : KW_SYSLOG '(' _inner_dest_context_push dest_afsyslog_params _inner_dest_context_pop ')'   { $$ = $4; }
 
 dest_afsyslog_params
         : string
@@ -698,7 +706,7 @@ dest_afsyslog_option
 	;
 
 dest_afnetwork
-	: KW_NETWORK '(' dest_afnetwork_params ')'	{ $$ = $3; }
+	: KW_NETWORK '(' _inner_dest_context_push dest_afnetwork_params _inner_dest_context_pop ')'	{ $$ = $4; }
 	;
 
 dest_afnetwork_params
@@ -741,7 +749,7 @@ dest_afsocket_transport
             transport_mapper_set_transport(last_transport_mapper, $3);
           }
         ')'	{ free($3); }
-	| KW_SPOOF_SOURCE '(' yesno ')'		         { afinet_dd_set_spoof_source(last_driver, $3); }
+	| dest_afinet_dgram_option
 	| KW_TLS
 	  {
             gchar buf[256];
@@ -800,6 +808,12 @@ tls_option
 	    tls_context_set_key_file(last_tls_context, $3);
             free($3);
           }
+	| KW_KEYLOG_FILE '(' string ')'
+	  {
+	    GError *error = NULL;
+	    CHECK_ERROR_GERROR(tls_context_set_keylog_file(last_tls_context, $3, &error), @3, error, "Error setting keylog-file()");
+	    free($3);
+	  }
 	| KW_CERT_FILE '(' path_check ')'
 	  {
 	    tls_context_set_cert_file(last_tls_context, $3);
@@ -838,11 +852,25 @@ tls_option
           {
             tls_session_set_trusted_dn(last_tls_context, $3);
           }
-	| KW_CIPHER_SUITE '(' string ')'
-	  {
+        | KW_CIPHER_SUITE '(' tls_cipher_suites ')'
+        | KW_CIPHER_SUITE '(' string ')'
+          {
+            /* compat for specifying TLS 1.2-or-older ciphers */
             tls_context_set_cipher_suite(last_tls_context, $3);
             free($3);
-	  }
+          }
+        | KW_SIGALGS '(' string ')'
+          {
+            GError *error = NULL;
+            CHECK_ERROR_GERROR(tls_context_set_sigalgs(last_tls_context, $3, &error), @3, error, "Error setting sigalgs()");
+            free($3);
+          }
+        | KW_CLIENT_SIGALGS '(' string ')'
+          {
+            GError *error = NULL;
+            CHECK_ERROR_GERROR(tls_context_set_client_sigalgs(last_tls_context, $3, &error), @3, error, "Error setting client-sigalgs()");
+            free($3);
+          }
         | KW_ECDH_CURVE_LIST '(' string ')'
           {
             tls_context_set_ecdh_curve_list(last_tls_context, $3);
@@ -861,6 +889,24 @@ tls_option
 }
         ;
 
+tls_cipher_suites
+        : tls_cipher_suite tls_cipher_suites
+        |
+        ;
+
+tls_cipher_suite
+        : KW_TLS12_AND_OLDER '(' string ')'
+          {
+            tls_context_set_cipher_suite(last_tls_context, $3);
+            free($3);
+          }
+        | KW_TLS13 '(' string ')'
+          {
+            GError *error = NULL;
+            CHECK_ERROR_GERROR(tls_context_set_tls13_cipher_suite(last_tls_context, $3, &error), @3, error, "Error setting cipher-suite(tls13())");
+            free($3);
+          }
+        ;
 
 socket_option
 	: KW_SO_SNDBUF '(' nonnegative_integer ')'
@@ -878,15 +924,32 @@ socket_option
 	| KW_SO_REUSEPORT '(' yesno ')'             { last_sock_options->so_reuseport = $3; }
 	;
 
+unix_socket_option
+        : socket_option
+        | KW_SO_PASSCRED '(' yesno ')'              { socket_options_unix_set_so_passcred(last_sock_options, $3); }
+        ;
+
 inet_socket_option
 	: socket_option
 	| KW_IP_TTL '(' nonnegative_integer ')'               { ((SocketOptionsInet *) last_sock_options)->ip_ttl = $3; }
 	| KW_IP_TOS '(' nonnegative_integer ')'               { ((SocketOptionsInet *) last_sock_options)->ip_tos = $3; }
 	| KW_IP_FREEBIND '(' yesno ')'              { ((SocketOptionsInet *) last_sock_options)->ip_freebind = $3; }
 	| KW_INTERFACE '(' string ')'		    { socket_options_inet_set_interface_name((SocketOptionsInet *) last_sock_options, $3); free($3); }
-	| KW_TCP_KEEPALIVE_TIME '(' nonnegative_integer ')'   { ((SocketOptionsInet *) last_sock_options)->tcp_keepalive_time = $3; }
-	| KW_TCP_KEEPALIVE_INTVL '(' nonnegative_integer ')'  { ((SocketOptionsInet *) last_sock_options)->tcp_keepalive_intvl = $3; }
-	| KW_TCP_KEEPALIVE_PROBES '(' nonnegative_integer ')' { ((SocketOptionsInet *) last_sock_options)->tcp_keepalive_probes = $3; }
+	| KW_TCP_KEEPALIVE_TIME '(' nonnegative_integer ')'
+	  {
+	    CHECK_ERROR(socket_options_inet_set_tcp_keepalive_time((SocketOptionsInet *) last_sock_options, $3), @1,
+		            "The tcp-keepalive-time() option is not supported on this platform");
+	  }
+	| KW_TCP_KEEPALIVE_INTVL '(' nonnegative_integer ')'
+	  {
+	    CHECK_ERROR(socket_options_inet_set_tcp_keepalive_intvl((SocketOptionsInet *) last_sock_options, $3), @1,
+		            "The tcp-keepalive-intvl() option is not supported on this platform");
+	  }
+	| KW_TCP_KEEPALIVE_PROBES '(' nonnegative_integer ')'
+	  {
+	    CHECK_ERROR(socket_options_inet_set_tcp_keepalive_probes((SocketOptionsInet *) last_sock_options, $3), @1,
+		            "The tcp-keepalive-probes() option is not supported on this platform");
+	  }
 	;
 
 inet_ip_protocol_option

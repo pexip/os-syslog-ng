@@ -29,6 +29,8 @@
 #include <sys/time.h>
 
 #define LOGGEN_PLUGIN_INFO "loggen_plugin_info"
+#define LOGGEN_PLUGIN_LIB_PREFIX "libloggen_"
+#define LOGGEN_PLUGIN_NAME_MAXSIZE 100
 
 typedef struct _plugin_option
 {
@@ -42,6 +44,12 @@ typedef struct _plugin_option
   const char *target; /* command line argument */
   const char *port;
   int  rate;
+  int reconnect;
+  gboolean proxied;
+  char *proxy_src_ip;
+  char *proxy_dst_ip;
+  char *proxy_src_port;
+  char *proxy_dst_port;
 } PluginOption;
 
 typedef struct _thread_data
@@ -52,12 +60,13 @@ typedef struct _thread_data
   struct timeval start_time;
   struct timeval last_throttle_check;
   long buckets;
+  gboolean proxy_header_sent;
 } ThreadData;
 
 typedef GOptionEntry *(*get_option_func)(void);
 typedef gboolean (*start_plugin_func)(PluginOption *option);
 typedef void (*stop_plugin_func)(PluginOption *option);
-typedef int (*generate_message_func)(char *buffer, int buffer_size, int thread_id, unsigned long seq);
+typedef int (*generate_message_func)(char *buffer, int buffer_size, ThreadData *thread_context, unsigned long seq);
 typedef void (*set_generate_message_func)(generate_message_func gen_message);
 typedef int (*get_thread_count_func)(void);
 typedef gboolean (*is_plugin_activated_func)(void);

@@ -26,14 +26,18 @@
 #define LOGREADER_H_INCLUDED
 
 #include "logsource.h"
+#include "stats/aggregator/stats-aggregator.h"
+#include "stats/aggregator/stats-aggregator-registry.h"
 #include "logproto/logproto-server.h"
 #include "poll-events.h"
 #include "mainloop-io-worker.h"
+#include "msg-format.h"
 #include <iv_event.h>
 
 /* flags */
 #define LR_KERNEL          0x0002
 #define LR_EMPTY_LINES     0x0004
+#define LR_IGNORE_AUX_DATA 0x0008
 #define LR_THREADED        0x0040
 
 /* options */
@@ -62,6 +66,9 @@ struct _LogReader
   PollEvents *poll_events;
   GSockAddr *peer_addr;
   GSockAddr *local_addr;
+  StatsAggregator *max_message_size;
+  StatsAggregator *average_messages_size;
+  StatsAggregator *CPS;
 
   /* NOTE: these used to be LogReaderWatch members, which were merged into
    * LogReader with the multi-thread refactorization */
@@ -78,8 +85,8 @@ struct _LogReader
    * self->poll_events, they get applied to the production ones as soon as
    * the previous work is finished */
   gboolean pending_close;
-  GCond *pending_close_cond;
-  GStaticMutex pending_close_lock;
+  GCond pending_close_cond;
+  GMutex pending_close_lock;
 
   struct iv_timer idle_timer;
 };

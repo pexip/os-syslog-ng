@@ -101,9 +101,10 @@ _add_context_data_to_message(gpointer pmsg, const ContextualDataRecord *record)
 {
   LogMessage *msg = (LogMessage *) pmsg;
   GString *result = scratch_buffers_alloc();
+  LogMessageValueType type;
 
-  log_template_format(record->value, msg, NULL, LTZ_LOCAL, 0, NULL, result);
-  log_msg_set_value(msg, record->value_handle, result->str, result->len);
+  log_template_format_value_and_type(record->value, msg, &DEFAULT_TEMPLATE_EVAL_OPTIONS, result, &type);
+  log_msg_set_value_with_type(msg, record->value_handle, result->str, result->len, type);
 }
 
 static gboolean
@@ -123,7 +124,7 @@ _process(LogParser *s, LogMessage **pmsg,
             evt_tag_str("message", input),
             evt_tag_str("resolved_selector", resolved_selector),
             evt_tag_str("selector", selector),
-            evt_tag_printf("msg", "%p", *pmsg));
+            evt_tag_msg_reference(*pmsg));
 
   if (selector)
     context_info_db_foreach_record(self->context_info_db, selector,

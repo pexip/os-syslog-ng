@@ -21,12 +21,13 @@
  *
  */
 
-#include "queue_utils_lib.h"
+#include <criterion/criterion.h>
+#include "libtest/queue_utils_lib.h"
 #include "test_diskq_tools.h"
+
 #include "qdisk.c"
 #include "logqueue-disk-reliable.h"
 #include "apphook.h"
-#include <criterion/criterion.h>
 #include "plugin.h"
 
 #include <sys/types.h>
@@ -34,7 +35,6 @@
 #include <unistd.h>
 
 
-MsgFormatOptions parse_options;
 
 #define TEST_DISKQ_SIZE QDISK_RESERVED_SPACE + 1000 /* 4096 + 1000 */
 
@@ -45,8 +45,6 @@ static gint mark_message_serialized_size;
 DiskQueueOptions options;
 
 #define NUMBER_MESSAGES_IN_QUEUE(n) (n * 3)
-
-MsgFormatOptions parse_options;
 
 static void
 _dummy_ack(LogMessage *lm,  AckType ack_type)
@@ -93,7 +91,7 @@ get_serialized_message_size(LogMessage *msg)
   serialized = g_string_sized_new(64);
   sa = serialize_string_archive_new(serialized);
 
-  assert_true(log_msg_serialize(msg, sa, 0), NULL);
+  cr_assert(log_msg_serialize(msg, sa, 0));
 
   result = serialized->len;
 
@@ -115,7 +113,7 @@ static void
 _prepare_eof_test(LogQueueDiskReliable *dq, LogMessage **msg1, LogMessage **msg2)
 {
   LogPathOptions local_options = LOG_PATH_OPTIONS_INIT;
-  gint64 start_pos = TEST_DISKQ_SIZE;
+  gint64 start_pos = TEST_DISKQ_SIZE - 1;
 
   *msg1 = log_msg_new_mark();
   *msg2 = log_msg_new_mark();
@@ -361,7 +359,7 @@ test_rewind_backlog_use_whole_qbacklog(LogQueueDiskReliable *dq)
 Test(diskq_reliable, test_rewind_backlog)
 {
   const gchar *file_name = "test_rewind_backlog.rqf";
-  LogQueueDiskReliable *dq = _init_diskq_for_test(file_name, QDISK_RESERVED_SPACE + mark_message_serialized_size * 10,
+  LogQueueDiskReliable *dq = _init_diskq_for_test(file_name, QDISK_RESERVED_SPACE + mark_message_serialized_size * 10 + 1,
                                                   mark_message_serialized_size * 5);
   gint64 old_read_pos;
 
@@ -384,10 +382,7 @@ setup(void)
   tzset();
 
   configuration = cfg_new_snippet();
-  cfg_load_module(configuration, "syslogformat");
   cfg_load_module(configuration, "disk-buffer");
-  msg_format_options_defaults(&parse_options);
-  msg_format_options_init(&parse_options, configuration);
 
   set_mark_message_serialized_size();
 }

@@ -22,17 +22,13 @@
  */
 
 #include <criterion/criterion.h>
-
-#include "msg_parse_lib.h"
-#include "apphook.h"
-#include "logpipe.h"
-#include "rcptid.h"
+#include "libtest/msg_parse_lib.h"
 #include "libtest/persist_lib.h"
 
-#include <stdlib.h>
-#include <glib/gprintf.h>
-
-MsgFormatOptions parse_options;
+#include "apphook.h"
+#include "logpipe.h"
+#include "scratch-buffers.h"
+#include "rcptid.h"
 
 typedef struct _LogMessageTestParams
 {
@@ -49,7 +45,7 @@ _construct_log_message(void)
   const gchar *raw_msg = "foo";
   LogMessage *msg;
 
-  msg = log_msg_new(raw_msg, strlen(raw_msg), &parse_options);
+  msg = log_msg_new_empty();
   log_msg_set_value(msg, LM_V_HOST, raw_msg, -1);
   return msg;
 }
@@ -80,6 +76,7 @@ static void
 assert_log_msg_clear_clears_all_properties(LogMessage *message, NVHandle nv_handle,
                                            NVHandle sd_handle, const gchar *tag_name)
 {
+  message->flags |= LF_LOCAL + LF_UTF8 + LF_INTERNAL + LF_MARK;
   log_msg_clear(message);
 
   cr_assert_str_empty(log_msg_get_value(message, nv_handle, NULL),
@@ -91,6 +88,10 @@ assert_log_msg_clear_clears_all_properties(LogMessage *message, NVHandle nv_hand
   cr_assert_null(message->saddr, "Message still contains an saddr after log_msg_clear");
   cr_assert_not(log_msg_is_tag_by_name(message, tag_name),
                 "Message still contains a valid tag after log_msg_clear");
+  cr_assert((message->flags & LF_LOCAL) == 0, "Message still contains the 'local' flag after log_msg_clear");
+  cr_assert((message->flags & LF_UTF8) == 0, "Message still contains the 'utf8' flag after log_msg_clear");
+  cr_assert((message->flags & LF_MARK) == 0, "Message still contains the 'mark' flag after log_msg_clear");
+  cr_assert((message->flags & LF_INTERNAL) == 0, "Message still contains the 'internal' flag after log_msg_clear");
 }
 
 static void
@@ -153,12 +154,12 @@ void
 setup(void)
 {
   app_startup();
-  init_parse_options_and_load_syslogformat(&parse_options);
 }
 
 void
 teardown(void)
 {
+  scratch_buffers_explicit_gc();
   deinit_syslogformat_module();
   app_shutdown();
 }
@@ -183,6 +184,35 @@ Test(log_message, test_log_message_can_be_cleared)
                                              params->sd_handle, params->tag_name);
 
   log_message_test_params_free(params);
+}
+
+Test(log_message, test_log_msg_clear_handles_cloned_noninline_tags_properly)
+{
+  LogMessage *msg = _construct_log_message();
+
+  for (gint i = 0; i < 100; i++)
+    {
+      gchar tag_name[32];
+
+      g_snprintf(tag_name, sizeof(tag_name), "tag%d", i);
+      log_msg_set_tag_by_name(msg, tag_name);
+    }
+
+  LogPathOptions path_options = LOG_PATH_OPTIONS_INIT;
+  LogMessage *cloned = log_msg_clone_cow(msg, &path_options);
+
+  log_msg_clear(cloned);
+
+  for (gint i = 0; i < 100; i++)
+    {
+      gchar tag_name[32];
+
+      g_snprintf(tag_name, sizeof(tag_name), "tag%d", i);
+      cr_assert(log_msg_is_tag_by_name(cloned, tag_name) == FALSE);
+    }
+  log_msg_unref(cloned);
+  log_msg_unref(msg);
+
 }
 
 Test(log_message, test_rcptid_is_automatically_assigned_to_a_newly_created_log_message)
@@ -299,7 +329,7 @@ Test(log_message, test_log_msg_set_value_indirect_with_self_referencing_handle_r
   LogMessageTestParams *params = log_message_test_params_new();
   gssize value_len;
 
-  log_msg_set_value_indirect(params->message, params->nv_handle, params->nv_handle, 0, 0, 5);
+  log_msg_set_value_indirect(params->message, params->nv_handle, params->nv_handle, 0, 5);
   cr_assert_str_eq(log_msg_get_value(params->message, params->nv_handle, &value_len), "value",
                    "indirect self-reference value doesn't match");
 
@@ -431,6 +461,298 @@ Test(log_message, test_sdata_value_omits_unset_values)
   log_msg_unref(msg);
 }
 
+Test(log_message, test_value_retains_type_information)
+{
+  LogMessage *msg;
+  LogMessageValueType type;
+  const gchar *value;
+
+  msg = log_msg_new_empty();
+
+  /* unset */
+  value = log_msg_get_value_by_name_with_type(msg, "nvpair", NULL, &type);
+  cr_assert_str_empty(value);
+  cr_assert(type == LM_VT_NULL);
+
+  /* set with a specific type */
+  log_msg_set_value_by_name_with_type(msg, "nvpair", "value", -1, LM_VT_JSON);
+  value = log_msg_get_value_by_name_with_type(msg, "nvpair", NULL, &type);
+  cr_assert_str_eq(value, "value");
+  cr_assert(type == LM_VT_JSON);
+
+  /* changed with a specific type */
+  log_msg_set_value_by_name_with_type(msg, "nvpair", "123", -1, LM_VT_INT32);
+  value = log_msg_get_value_by_name_with_type(msg, "nvpair", NULL, &type);
+  cr_assert_str_eq(value, "123");
+  cr_assert(type == LM_VT_INT32);
+
+  /* unset becomes string again */
+  log_msg_unset_value_by_name(msg, "nvpair");
+  value = log_msg_get_value_by_name_with_type(msg, "nvpair", NULL, &type);
+  cr_assert_str_empty(value, "value");
+  cr_assert(type == LM_VT_NULL);
+
+  log_msg_unref(msg);
+}
+
+Test(log_message, test_macro_is_always_a_string)
+{
+  LogMessage *msg;
+  LogMessageValueType type;
+  const gchar *value;
+
+  msg = log_msg_new_empty();
+  value = log_msg_get_value_by_name_with_type(msg, "FACILITY", NULL, &type);
+  cr_assert_str_eq(value, "user");
+  cr_assert(type == LM_VT_STRING);
+
+  log_msg_unref(msg);
+}
+
+Test(log_message, test_macro_value_is_set_and_is_a_string)
+{
+  LogMessage *msg;
+  LogMessageValueType type;
+  const gchar *value;
+
+  msg = log_msg_new_empty();
+  value = log_msg_get_value_if_set_with_type(msg, log_msg_get_value_handle("FACILITY"), NULL, &type);
+  cr_assert_str_eq(value, "user");
+  cr_assert(type == LM_VT_STRING);
+
+  log_msg_unref(msg);
+}
+
+Test(log_message, test_set_match_returns_the_same_value_in_get)
+{
+  LogMessage *msg;
+
+  msg = log_msg_new_empty();
+  log_msg_set_match(msg, 0, "match0", -1);
+  assert_log_message_match_value(msg, 0, "match0");
+  log_msg_unref(msg);
+}
+
+Test(log_message, test_unset_match_returns_null)
+{
+  LogMessage *msg;
+
+  msg = log_msg_new_empty();
+
+  /* initially, it is unset */
+  const gchar *value = log_msg_get_match_if_set_with_type(msg, 0, NULL, NULL);
+  cr_assert(value == NULL);
+
+  /* after setting it, it is set */
+  log_msg_set_match(msg, 0, "match0", -1);
+  value = log_msg_get_match_if_set_with_type(msg, 0, NULL, NULL);
+  cr_assert_str_eq(value, "match0");
+
+  /* after unset()-ing, it is unset */
+  log_msg_unset_match(msg, 0);
+  value = log_msg_get_match_if_set_with_type(msg, 0, NULL, NULL);
+  cr_assert(value == NULL);
+
+  log_msg_unref(msg);
+}
+
+Test(log_message, test_match_alias_numbered_macros)
+{
+  LogMessage *msg;
+
+  msg = log_msg_new_empty();
+
+  /* set $0 */
+  log_msg_set_match(msg, 0, "match0", -1);
+
+  /* check both get_value and get_match returns the same */
+  assert_log_message_match_value(msg, 0, "match0");
+  assert_log_message_value_by_name(msg, "0", "match0");
+
+  /* set using set_match() */
+  log_msg_set_match(msg, 0, "match0-update1", -1);
+  assert_log_message_match_value(msg, 0, "match0-update1");
+  assert_log_message_value_by_name(msg, "0", "match0-update1");
+
+  /* set using set_value() */
+  log_msg_set_value_by_name(msg, "0", "match0-update2", -1);
+  assert_log_message_match_value(msg, 0, "match0-update2");
+  assert_log_message_value_by_name(msg, "0", "match0-update2");
+
+  /* unset using unset_match() */
+  log_msg_unset_match(msg, 0);
+  assert_log_message_value_unset_by_name(msg, "0");
+
+  /* unset using unset_value() */
+  log_msg_set_value_by_name(msg, "0", "match0-update3", -1);
+  assert_log_message_match_value(msg, 0, "match0-update3");
+  log_msg_unset_value_by_name(msg, "0");
+  assert_log_message_value_unset_by_name(msg, "0");
+
+  log_msg_set_match(msg, 128, "match128", -1);
+  assert_log_message_value_by_name(msg, "128", "match128");
+  log_msg_unref(msg);
+}
+
+Test(log_message, test_set_match_access_out_of_range_are_ignored)
+{
+  LogMessage *msg;
+
+  msg = log_msg_new_empty();
+  log_msg_set_value(msg, LM_V_MESSAGE, "dummy-value", -1);
+
+  /* set $0 */
+  log_msg_set_match(msg, 0, "match0", -1);
+  log_msg_set_match(msg, 1, "match1", -1);
+  log_msg_set_match(msg, 255, "match255", -1);
+  assert_log_message_match_value(msg, 0, "match0");
+  assert_log_message_match_value(msg, 1, "match1");
+  assert_log_message_match_value(msg, 255, "match255");
+
+  log_msg_set_match(msg, 256, "match256", -1);
+  assert_log_message_match_value(msg, 256, "");
+
+  log_msg_set_match_indirect(msg, 256, LM_V_MESSAGE, 0, 1);
+  assert_log_message_match_value(msg, 256, "");
+
+  log_msg_set_value_indirect(msg, log_msg_get_value_handle("256"), LM_V_MESSAGE, 0, 5);
+  assert_log_message_value_by_name(msg, "256", "dummy");
+
+  log_msg_unref(msg);
+}
+
+Test(log_message,
+     test_value_that_looks_like_out_of_range_match_behaves_like_a_regular_nv_pair_and_cannot_be_accessed_as_a_match)
+{
+  LogMessage *msg;
+
+  msg = log_msg_new_empty();
+  log_msg_set_value(msg, LM_V_MESSAGE, "dummy-value", -1);
+
+  log_msg_set_value_indirect(msg, log_msg_get_value_handle("256"), LM_V_MESSAGE, 0, 5);
+  assert_log_message_value_by_name(msg, "256", "dummy");
+  assert_log_message_match_value(msg, 256, "");
+
+  log_msg_unref(msg);
+}
+
+Test(log_message, test_log_message_updates_num_matches_according_to_matches_being_set)
+{
+  LogMessage *msg;
+
+  msg = log_msg_new_empty();
+  cr_assert(msg->num_matches == 0);
+  log_msg_set_match(msg, 1, "match1", -1);
+  cr_assert(msg->num_matches == 2);
+  log_msg_set_match(msg, 2, "match2", -1);
+  cr_assert(msg->num_matches == 3);
+  log_msg_set_match(msg, 3, "match3", -1);
+  cr_assert(msg->num_matches == 4);
+
+  log_msg_unref(msg);
+}
+
+Test(log_message, test_format_matches_produces_a_list_of_matches_even_if_populated_via_explicit_set)
+{
+  LogMessage *msg;
+  GString *result = g_string_new("");
+
+  msg = log_msg_new_empty();
+  log_msg_set_match(msg, 1, "match1", -1);
+  log_msg_set_match(msg, 2, "match2", -1);
+  log_msg_set_match(msg, 3, "match3", -1);
+
+  log_msg_format_matches(msg, result);
+  cr_assert_str_eq(result->str, "match1,match2,match3");
+
+  log_msg_set_match(msg, 4, "match4", -1);
+  g_string_truncate(result, 0);
+  log_msg_format_matches(msg, result);
+  cr_assert_str_eq(result->str, "match1,match2,match3,match4");
+
+  g_string_free(result, TRUE);
+  log_msg_unref(msg);
+}
+
+Test(log_message, test_format_matches_resets_match_values_if_an_out_of_range_element_is_set)
+{
+  LogMessage *msg;
+  GString *result = g_string_new("");
+
+  msg = log_msg_new_empty();
+  log_msg_set_match(msg, 1, "match1", -1);
+  log_msg_set_match(msg, 2, "match2", -1);
+  log_msg_set_match(msg, 3, "match3", -1);
+  log_msg_set_match(msg, 4, "match4", -1);
+  log_msg_truncate_matches(msg, 4);
+
+  log_msg_format_matches(msg, result);
+  /* $4 missing due to num_matches changed */
+  cr_assert_str_eq(result->str, "match1,match2,match3");
+
+  /* $4 was set but was not part of the array, setting $7  */
+  log_msg_set_match(msg, 7, "match7", -1);
+
+  g_string_truncate(result, 0);
+  log_msg_format_matches(msg, result);
+  /* match 4 is unset even though it did hold a value before, the other in-between elements are similarly empty */
+  cr_assert_str_eq(result->str, "match1,match2,match3,\"\",\"\",\"\",match7");
+
+  /* fill the whole */
+  log_msg_set_match(msg, 4, "updated-match4", -1);
+  g_string_truncate(result, 0);
+  log_msg_format_matches(msg, result);
+  /* match 5 still missing as the "whole" was just filled, but that does not include match 5 */
+  cr_assert_str_eq(result->str, "match1,match2,match3,updated-match4,\"\",\"\",match7");
+
+  g_string_free(result, TRUE);
+  log_msg_unref(msg);
+}
+
+Test(log_message, test_changing_num_matches_causes_numbered_matches_to_become_undefined)
+{
+  LogMessage *msg;
+  GString *result = g_string_new("");
+
+  msg = log_msg_new_empty();
+  log_msg_set_match(msg, 1, "match1", -1);
+  log_msg_set_match(msg, 2, "match2", -1);
+  log_msg_set_match(msg, 3, "match3", -1);
+
+  cr_assert_eq(msg->num_matches, 4);
+  assert_log_message_match_value(msg, 3, "match3");
+  log_msg_truncate_matches(msg, 3);
+  assert_log_message_match_value(msg, 3, "");
+
+  log_msg_format_matches(msg, result);
+  cr_assert_str_eq(result->str, "match1,match2");
+
+  g_string_free(result, TRUE);
+  log_msg_unref(msg);
+}
+
+Test(log_message, test_clear_matches_call_resets_all_matches_to_unset)
+{
+  LogMessage *msg;
+
+  msg = log_msg_new_empty();
+  log_msg_set_match(msg, 0, "match0", -1);
+  log_msg_set_match(msg, 1, "match1", -1);
+  log_msg_set_match(msg, 2, "match2", -1);
+  log_msg_set_match(msg, 3, "match3", -1);
+
+  cr_assert_eq(msg->num_matches, 4);
+  log_msg_clear_matches(msg);
+  cr_assert_eq(msg->num_matches, 0);
+
+  assert_log_message_match_value(msg, 0, "");
+  assert_log_message_match_value(msg, 1, "");
+  assert_log_message_match_value(msg, 2, "");
+  assert_log_message_match_value(msg, 3, "");
+
+  log_msg_unref(msg);
+}
+
 #define DEFUN_KEY_VALUE(name, key, value, size) \
   gchar name ## _key[size]; \
   gchar name ## _value[size]; \
@@ -474,7 +796,7 @@ test_with_sdata(LogMessage *msg, guint32 old_msg_size)
 
   for (char i = 0; i < iter_length; i++)
     {
-      g_sprintf(key, ".SDATA.%02d", i);
+      g_snprintf(key, sizeof(key), ".SDATA.%02d", i);
       sizes = add_key_value(msg, key, value);
 
       single_sdata_kv_size = NV_ENTRY_DIRECT_HDR + NV_TABLE_BOUND(strlen(key)+1 + strlen(value)+1);
@@ -507,7 +829,7 @@ Test(log_message, test_message_size)
   cr_assert_eq(msg_size, log_msg_get_size(msg)); // Tag is not increased until tag id 65
 
   char *tag_name = strdup("00tagname");
-  // (*8 to convert ot bits) + no need plus 1 bcause we already added one tag: test_tag_storage
+  // (*8 to convert to bits) + no need plus 1 bcause we already added one tag: test_tag_storage
   for (int i = 0; i < GLIB_SIZEOF_LONG*8; i++)
     {
       sprintf(tag_name, "%dtagname", i);
@@ -533,8 +855,78 @@ Test(log_message, when_get_indirect_value_with_null_value_len_abort_instead_of_s
   LogMessageTestParams *params = log_message_test_params_new();
 
   NVHandle indirect = log_msg_get_value_handle("INDIRECT");
-  log_msg_set_value_indirect(params->message, indirect, params->nv_handle, 0, 0, 5);
+  log_msg_set_value_indirect(params->message, indirect, params->nv_handle, 0, 5);
   log_msg_get_value(params->message, indirect, NULL);
 
   log_message_test_params_free(params);
+}
+
+Test(log_message, test_cow_writing_cloned_message)
+{
+  LogMessage *msg = _construct_log_message();
+  log_msg_set_value_by_name(msg, "orig_name", "orig_value", -1);
+
+  LogPathOptions path_options = LOG_PATH_OPTIONS_INIT;
+  LogMessage *cloned = log_msg_clone_cow(msg, &path_options);
+
+  log_msg_set_value_by_name(cloned, "cloned_name", "cloned_value", -1);
+  log_msg_set_value_by_name(cloned, "orig_name", "modified_value", -1);
+
+  cr_assert_str_eq(log_msg_get_value_by_name(msg, "orig_name", NULL), "orig_value",
+                   "Modifications on a COW-cloned message should not leak into the original message; actual: %s, expected: %s",
+                   log_msg_get_value_by_name(msg, "orig_name", NULL), "orig_value");
+
+  NVHandle cloned_name = log_msg_get_value_handle("cloned_name");
+  gssize value_length;
+  cr_assert_null(log_msg_get_value_if_set(msg, cloned_name, &value_length),
+                 "Modifications on a COW-cloned message should not leak into the original message");
+
+  log_msg_unref(cloned);
+  log_msg_unref(msg);
+}
+
+
+Test(log_message, test_cow_make_writable)
+{
+  LogMessage *msg = _construct_log_message();
+  log_msg_set_value_by_name(msg, "orig_name", "orig_value", -1);
+
+  log_msg_write_protect(msg);
+  cr_assert(log_msg_is_write_protected(msg));
+
+  LogMessage *orig_msg = log_msg_ref(msg);
+
+  LogPathOptions path_options = LOG_PATH_OPTIONS_INIT;
+  log_msg_make_writable(&msg, &path_options);
+
+  log_msg_set_value_by_name(msg, "orig_name2", "orig_value2", -1);
+
+  NVHandle orig_name2 = log_msg_get_value_handle("orig_name2");
+  gssize value_length;
+  cr_assert_null(log_msg_get_value_if_set(orig_msg, orig_name2, &value_length),
+                 "Modifications on a COW-cloned message should not leak into the original message");
+
+  log_msg_unref(orig_msg);
+  log_msg_unref(msg);
+}
+
+Test(log_message, test_cow_unset_value)
+{
+  LogMessage *msg = _construct_log_message();
+  log_msg_set_value_by_name(msg, "orig_name", "orig_value", -1);
+  log_msg_write_protect(msg);
+
+  LogMessage *orig_msg = log_msg_ref(msg);
+
+  LogPathOptions path_options = LOG_PATH_OPTIONS_INIT;
+  log_msg_make_writable(&msg, &path_options);
+
+  log_msg_unset_value_by_name(msg, "orig_name");
+
+  cr_assert_str_eq(log_msg_get_value_by_name(orig_msg, "orig_name", NULL), "orig_value",
+                   "Unsetting a value in a COW-cloned message should not unset the value in the original message; actual: %s, expected: %s",
+                   log_msg_get_value_by_name(orig_msg, "orig_name", NULL), "orig_value");
+
+  log_msg_unref(orig_msg);
+  log_msg_unref(msg);
 }

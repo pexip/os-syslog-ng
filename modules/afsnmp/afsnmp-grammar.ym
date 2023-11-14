@@ -30,18 +30,17 @@
 
 #include <strings.h>
 #include "cfg-parser.h"
-#include "cfg-grammar.h"
+#include "cfg-grammar-internal.h"
 #include "syslog-names.h"
 
 #include "messages.h"
 #include "plugin.h"
-#include "afsnmp-grammar.h"
 #include "afsnmpdest.h"
 #include "snmptrapd-parser.h"
 
 }
 
-%name-prefix "afsnmp_"
+%define api.prefix {afsnmp_}
 %lex-param {CfgLexer *lexer}
 %parse-param {CfgLexer *lexer}
 %parse-param {void **instance}
@@ -79,7 +78,7 @@ start
         ;
 
 dest_snmpdest
-	: KW_SNMPDEST '(' dest_snmpdest_params ')'
+	: KW_SNMPDEST '(' _inner_dest_context_push dest_snmpdest_params _inner_dest_context_pop ')'
 	;
 
 dest_snmpdest_params

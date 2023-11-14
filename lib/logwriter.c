@@ -25,6 +25,9 @@
 #include "logwriter.h"
 #include "messages.h"
 #include "stats/stats-registry.h"
+#include "stats/aggregator/stats-aggregator-registry.h"
+#include "stats/stats-cluster-single.h"
+#include "stats/aggregator/stats-aggregator.h"
 #include "hostname.h"
 #include "host-resolve.h"
 #include "seqnum.h"
@@ -39,7 +42,6 @@
 #include "timeutils/format.h"
 #include "timeutils/misc.h"
 
-#include <unistd.h>
 #include <assert.h>
 #include <string.h>
 #include <stdlib.h>
@@ -70,6 +72,14 @@ struct _LogWriter
   StatsCounterItem *suppressed_messages;
   StatsCounterItem *processed_messages;
   StatsCounterItem *written_messages;
+  StatsAggregator *max_message_size;
+  StatsAggregator *average_messages_size;
+  StatsAggregator *CPS;
+  struct
+  {
+    StatsCounterItem *count;
+    StatsCounterItem *bytes;
+  } truncated;
   LogPipe *control;
   LogWriterOptions *options;
   LogMessage *last_msg;
@@ -84,7 +94,7 @@ struct _LogWriter
   struct iv_task immed_io_task;
   struct iv_event queue_filled;
   MainLoopIOWorkerJob io_job;
-  GStaticMutex suppress_lock;
+  GMutex suppress_lock;
   MlBatchedTimer suppress_timer;
   MlBatchedTimer mark_timer;
   struct iv_timer reopen_timer;
@@ -94,8 +104,8 @@ struct _LogWriter
   LogProtoClient *proto, *pending_proto;
   gboolean watches_running:1, suspended:1, waiting_for_throttle:1;
   gboolean pending_proto_present;
-  GCond *pending_proto_cond;
-  GStaticMutex pending_proto_lock;
+  GCond pending_proto_cond;
+  GMutex pending_proto_lock;
 };
 
 /**
@@ -115,7 +125,7 @@ struct _LogWriter
  * success. This is more complex when disk buffering is used, in which case
  * messages are put to the "disk buffer" first and acknowledged immediately.
  * (this way the reader never stops when the disk buffer area is not yet
- * full). When disk buffer reaches its limit, messages are added to the the
+ * full). When disk buffer reaches its limit, messages are added to the
  * usual GQueue and messages get acknowledged when they are moved to the
  * disk buffer.
  *
@@ -214,14 +224,14 @@ log_writer_work_finished(gpointer s)
        * log_writer_reopen() call, quite possibly coming from a
        * non-main thread. */
 
-      g_static_mutex_lock(&self->pending_proto_lock);
+      g_mutex_lock(&self->pending_proto_lock);
       log_writer_free_proto(self);
 
       log_writer_set_proto(self, self->pending_proto);
       log_writer_set_pending_proto(self, NULL, FALSE);
 
-      g_cond_signal(self->pending_proto_cond);
-      g_static_mutex_unlock(&self->pending_proto_lock);
+      g_cond_signal(&self->pending_proto_cond);
+      g_mutex_unlock(&self->pending_proto_lock);
     }
 
   if (!self->work_result)
@@ -269,8 +279,10 @@ log_writer_io_handler(gpointer s, GIOCondition cond)
 
       if (!main_loop_worker_job_quit())
         {
+          log_pipe_ref(&self->super);
           log_writer_work_perform(s, cond);
           log_writer_work_finished(s);
+          log_pipe_unref(&self->super);
         }
     }
 }
@@ -633,14 +645,14 @@ log_writer_suppress_timeout(gpointer pt)
   /* NOTE: this will probably do nothing as we are the timer callback, but
    * we may not do it with the suppress_lock held */
   ml_batched_timer_cancel(&self->suppress_timer);
-  g_static_mutex_lock(&self->suppress_lock);
+  g_mutex_lock(&self->suppress_lock);
 
   /* NOTE: we may be waken up an extra time if the suppress_timer setup race
    * is lost, see the comment at log_writer_is_msg_suppressed() for an
    * explanation */
   if (self->last_msg_count > 0)
     log_writer_emit_suppress_summary(self);
-  g_static_mutex_unlock(&self->suppress_lock);
+  g_mutex_unlock(&self->suppress_lock);
 
   return FALSE;
 }
@@ -729,7 +741,7 @@ log_writer_is_msg_suppressed(LogWriter *self, LogMessage *lm)
   if (self->options->suppress <= 0)
     return FALSE;
 
-  g_static_mutex_lock(&self->suppress_lock);
+  g_mutex_lock(&self->suppress_lock);
   if (self->last_msg)
     {
       if (_is_time_within_the_suppress_timeout(self, lm) &&
@@ -742,7 +754,7 @@ log_writer_is_msg_suppressed(LogWriter *self, LogMessage *lm)
 
           /* we only create the timer if this is the first suppressed message, otherwise it is already running. */
           need_to_arm_suppress_timer = self->last_msg_count == 1;
-          g_static_mutex_unlock(&self->suppress_lock);
+          g_mutex_unlock(&self->suppress_lock);
 
           /* this has to be outside of suppress_lock */
           if (need_to_arm_suppress_timer)
@@ -764,7 +776,7 @@ log_writer_is_msg_suppressed(LogWriter *self, LogMessage *lm)
     }
 
   log_writer_record_last_message(self, lm);
-  g_static_mutex_unlock(&self->suppress_lock);
+  g_mutex_unlock(&self->suppress_lock);
   if (need_to_cancel_suppress_timer)
     ml_batched_timer_cancel(&self->suppress_timer);
   return FALSE;
@@ -970,10 +982,15 @@ log_writer_format_log(LogWriter *self, LogMessage *lm, GString *result)
           g_string_append_c(result, ' ');
           if (lm->flags & LF_UTF8)
             g_string_append_len(result, "\xEF\xBB\xBF", 3);
+          LogTemplateEvalOptions options =
+          {
+            &self->options->template_options,
+            LTZ_SEND,
+            seq_num, NULL, LM_VT_STRING
+          };
+
           log_template_append_format(self->options->template, lm,
-                                     &self->options->template_options,
-                                     LTZ_SEND,
-                                     seq_num, NULL,
+                                     &options,
                                      result);
         }
       else
@@ -1011,11 +1028,14 @@ log_writer_format_log(LogWriter *self, LogMessage *lm, GString *result)
 
       if (template)
         {
-          log_template_format(template, lm,
-                              &self->options->template_options,
-                              LTZ_SEND,
-                              seq_num, NULL,
-                              result);
+          LogTemplateEvalOptions options =
+          {
+            &self->options->template_options,
+            LTZ_SEND,
+            seq_num, NULL, LM_VT_STRING
+          };
+
+          log_template_format(template, lm, &options, result);
 
         }
       else
@@ -1079,12 +1099,22 @@ log_writer_format_log(LogWriter *self, LogMessage *lm, GString *result)
 
       p = result->str;
       /* NOTE: the size is calculated to leave trailing new line */
-      while ((p = find_cr_or_lf(p, result->str + result->len - p - 1)))
+      while ((p = find_cr_or_lf_or_nul(p, result->str + result->len - p - 1)))
         {
           *p = ' ';
           p++;
         }
 
+    }
+
+  if (self->options->truncate_size != -1 && result->len > self->options->truncate_size)
+    {
+      const gint truncated_bytes = result->len - self->options->truncate_size;
+
+      g_string_truncate(result, self->options->truncate_size);
+
+      stats_counter_inc(self->truncated.count);
+      stats_counter_add(self->truncated.bytes, truncated_bytes);
     }
 }
 
@@ -1127,6 +1157,13 @@ log_writer_flush_finalize(LogWriter *self)
   return FALSE;
 }
 
+static void
+_log_writer_insert_msg_length_stats(LogWriter *self, gsize msg_len)
+{
+  stats_aggregator_insert_data(self->max_message_size, msg_len);
+  stats_aggregator_insert_data(self->average_messages_size, msg_len);
+}
+
 static gboolean
 log_writer_write_message(LogWriter *self, LogMessage *msg, LogPathOptions *path_options, gboolean *write_error)
 {
@@ -1145,8 +1182,10 @@ log_writer_write_message(LogWriter *self, LogMessage *msg, LogPathOptions *path_
                 evt_tag_printf("message", "%s", self->line_buffer->str));
     }
 
+  gsize msg_len = 0;
   if (self->line_buffer->len)
     {
+      msg_len = self->line_buffer->len;
       LogProtoStatus status = log_proto_client_post(self->proto, msg, (guchar *)self->line_buffer->str,
                                                     self->line_buffer->len,
                                                     &consumed);
@@ -1188,6 +1227,7 @@ log_writer_write_message(LogWriter *self, LogMessage *msg, LogPathOptions *path_
       log_msg_unref(msg);
       msg_set_context(NULL);
       log_msg_refcache_stop();
+      _log_writer_insert_msg_length_stats(self, msg_len);
 
       return TRUE;
     }
@@ -1315,8 +1355,8 @@ log_writer_idle_timeout(void *cookie)
   LogWriter *self = (LogWriter *) cookie;
 
   g_assert(!self->io_job.working);
-  msg_notice("Destination timeout has elapsed, closing connection",
-             evt_tag_int("fd", log_proto_client_get_fd(self->proto)));
+  msg_verbose("Destination timeout has elapsed, closing connection",
+              evt_tag_int("fd", log_proto_client_get_fd(self->proto)));
 
   log_pipe_notify(self->control, NC_CLOSE, self);
 }
@@ -1367,22 +1407,67 @@ log_writer_init_watches(LogWriter *self)
 }
 
 static void
+_register_aggregated_stats(LogWriter *self, StatsClusterKey *sc_key_input, gint stats_type)
+{
+  stats_aggregator_lock();
+  StatsClusterKey sc_key;
+
+  stats_cluster_single_key_set_with_name(&sc_key, self->options->stats_source | SCS_DESTINATION, self->stats_id,
+                                         self->stats_instance, "msg_size_max");
+  stats_register_aggregator_maximum(self->options->stats_level, &sc_key, &self->max_message_size);
+
+  stats_cluster_single_key_set_with_name(&sc_key, self->options->stats_source | SCS_DESTINATION, self->stats_id,
+                                         self->stats_instance, "msg_size_avg");
+  stats_register_aggregator_average(self->options->stats_level, &sc_key, &self->average_messages_size);
+
+  stats_cluster_single_key_set_with_name(&sc_key, self->options->stats_source | SCS_DESTINATION, self->stats_id,
+                                         self->stats_instance, "eps");
+  stats_register_aggregator_cps(self->options->stats_level, &sc_key, sc_key_input, stats_type, &self->CPS);
+
+  stats_aggregator_unlock();
+}
+
+static void
+_unregister_aggregated_stats(LogWriter *self)
+{
+  stats_aggregator_lock();
+
+  stats_unregister_aggregator_maximum(&self->max_message_size);
+  stats_unregister_aggregator_average(&self->average_messages_size);
+  stats_unregister_aggregator_cps(&self->CPS);
+
+  stats_aggregator_unlock();
+}
+
+static void
 _register_counters(LogWriter *self)
 {
   stats_lock();
-  {
-    StatsClusterKey sc_key;
-    stats_cluster_logpipe_key_set(&sc_key, self->options->stats_source | SCS_DESTINATION, self->stats_id,
-                                  self->stats_instance);
+  StatsClusterKey sc_key;
+  stats_cluster_logpipe_key_set(&sc_key, self->options->stats_source | SCS_DESTINATION, self->stats_id,
+                                self->stats_instance);
 
-    if (self->options->suppress > 0)
-      stats_register_counter(self->options->stats_level, &sc_key, SC_TYPE_SUPPRESSED, &self->suppressed_messages);
-    stats_register_counter(self->options->stats_level, &sc_key, SC_TYPE_DROPPED, &self->dropped_messages);
-    stats_register_counter(self->options->stats_level, &sc_key, SC_TYPE_PROCESSED, &self->processed_messages);
-    stats_register_counter(self->options->stats_level, &sc_key, SC_TYPE_WRITTEN, &self->written_messages);
-    log_queue_register_stats_counters(self->queue, self->options->stats_level, &sc_key);
-  }
+  if (self->options->suppress > 0)
+    stats_register_counter(self->options->stats_level, &sc_key, SC_TYPE_SUPPRESSED, &self->suppressed_messages);
+  stats_register_counter(self->options->stats_level, &sc_key, SC_TYPE_DROPPED, &self->dropped_messages);
+  stats_register_counter(self->options->stats_level, &sc_key, SC_TYPE_PROCESSED, &self->processed_messages);
+  stats_register_counter(self->options->stats_level, &sc_key, SC_TYPE_WRITTEN, &self->written_messages);
+  log_queue_register_stats_counters(self->queue, self->options->stats_level, &sc_key);
+
+  StatsClusterKey sc_key_truncated_count;
+  stats_cluster_single_key_set_with_name(&sc_key_truncated_count, self->options->stats_source | SCS_DESTINATION,
+                                         self->stats_id, self->stats_instance, "truncated_count");
+  stats_register_counter(self->options->stats_level, &sc_key_truncated_count, SC_TYPE_SINGLE_VALUE,
+                         &self->truncated.count);
+
+  StatsClusterKey sc_key_truncated_bytes;
+  stats_cluster_single_key_set_with_name(&sc_key_truncated_bytes, self->options->stats_source | SCS_DESTINATION,
+                                         self->stats_id, self->stats_instance, "truncated_bytes");
+  stats_register_counter(self->options->stats_level, &sc_key_truncated_bytes, SC_TYPE_SINGLE_VALUE,
+                         &self->truncated.bytes);
+
   stats_unlock();
+  _register_aggregated_stats(self, &sc_key, SC_TYPE_WRITTEN);
 }
 
 static gboolean
@@ -1416,8 +1501,6 @@ log_writer_init(LogPipe *s)
       log_writer_postpone_mark_timer(self);
     }
 
-  log_pipe_add_info(s, "writer");
-
   return TRUE;
 }
 
@@ -1434,9 +1517,22 @@ _unregister_counters(LogWriter *self)
     stats_unregister_counter(&sc_key, SC_TYPE_SUPPRESSED, &self->suppressed_messages);
     stats_unregister_counter(&sc_key, SC_TYPE_PROCESSED, &self->processed_messages);
     stats_unregister_counter(&sc_key, SC_TYPE_WRITTEN, &self->written_messages);
+
+    StatsClusterKey sc_key_truncated_count;
+    stats_cluster_single_key_set_with_name(&sc_key_truncated_count, self->options->stats_source | SCS_DESTINATION,
+                                           self->stats_id, self->stats_instance, "truncated_count");
+    stats_unregister_counter(&sc_key_truncated_count, SC_TYPE_SINGLE_VALUE, &self->truncated.count);
+
+    StatsClusterKey sc_key_truncated_bytes;
+    stats_cluster_single_key_set_with_name(&sc_key_truncated_bytes, self->options->stats_source | SCS_DESTINATION,
+                                           self->stats_id, self->stats_instance, "truncated_bytes");
+    stats_unregister_counter(&sc_key_truncated_bytes, SC_TYPE_SINGLE_VALUE, &self->truncated.bytes);
+
     log_queue_unregister_stats_counters(self->queue, &sc_key);
+
   }
   stats_unlock();
+  _unregister_aggregated_stats(self);
 
 }
 
@@ -1485,9 +1581,9 @@ log_writer_free(LogPipe *s)
   g_free(self->stats_instance);
   ml_batched_timer_free(&self->mark_timer);
   ml_batched_timer_free(&self->suppress_timer);
-  g_static_mutex_free(&self->suppress_lock);
-  g_static_mutex_free(&self->pending_proto_lock);
-  g_cond_free(self->pending_proto_cond);
+  g_mutex_clear(&self->suppress_lock);
+  g_mutex_clear(&self->pending_proto_lock);
+  g_cond_clear(&self->pending_proto_cond);
 
   log_pipe_free_method(s);
 }
@@ -1621,12 +1717,12 @@ log_writer_reopen(LogWriter *s, LogProtoClient *proto)
 
   if (!main_loop_is_main_thread())
     {
-      g_static_mutex_lock(&self->pending_proto_lock);
+      g_mutex_lock(&self->pending_proto_lock);
       while (self->pending_proto_present)
         {
-          g_cond_wait(self->pending_proto_cond, g_static_mutex_get_mutex(&self->pending_proto_lock));
+          g_cond_wait(&self->pending_proto_cond, &self->pending_proto_lock);
         }
-      g_static_mutex_unlock(&self->pending_proto_lock);
+      g_mutex_unlock(&self->pending_proto_lock);
     }
 }
 
@@ -1665,9 +1761,11 @@ log_writer_new(guint32 flags, GlobalConfig *cfg)
   init_sequence_number(&self->seq_num);
 
   log_writer_init_watches(self);
-  g_static_mutex_init(&self->suppress_lock);
-  g_static_mutex_init(&self->pending_proto_lock);
-  self->pending_proto_cond = g_cond_new();
+  g_mutex_init(&self->suppress_lock);
+  g_mutex_init(&self->pending_proto_lock);
+  g_cond_init(&self->pending_proto_cond);
+
+  log_pipe_add_info(&self->super, "writer");
 
   return self;
 }
@@ -1683,6 +1781,7 @@ log_writer_options_defaults(LogWriterOptions *options)
   options->padding = 0;
   options->mark_mode = MM_GLOBAL;
   options->mark_freq = -1;
+  options->truncate_size = -1;
   host_resolve_options_defaults(&options->host_resolve_options);
 }
 

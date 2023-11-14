@@ -28,9 +28,10 @@
 #include "syslog-ng.h"
 #include "driver.h"
 #include "stats/stats-registry.h"
+#include "stats/aggregator/stats-aggregator.h"
 #include "logqueue.h"
-#include "mainloop-worker.h"
 #include "seqnum.h"
+#include "mainloop-threaded-worker.h"
 
 #include <iv.h>
 #include <iv_event.h>
@@ -64,6 +65,7 @@ typedef struct _LogThreadedDestWorker LogThreadedDestWorker;
 
 struct _LogThreadedDestWorker
 {
+  MainLoopThreadedWorker thread;
   LogQueue *queue;
   struct iv_task  do_work;
   struct iv_event wake_up_event;
@@ -84,13 +86,10 @@ struct _LogThreadedDestWorker
   struct timespec last_flush_time;
   gboolean enable_batching;
   gboolean suspended;
-  gboolean startup_finished;
-  gboolean startup_failure;
-  GCond *started_up;
   time_t time_reopen;
 
-  gboolean (*thread_init)(LogThreadedDestWorker *s);
-  void (*thread_deinit)(LogThreadedDestWorker *s);
+  gboolean (*init)(LogThreadedDestWorker *s);
+  void (*deinit)(LogThreadedDestWorker *s);
   gboolean (*connect)(LogThreadedDestWorker *s);
   void (*disconnect)(LogThreadedDestWorker *s);
   LogThreadedResult (*insert)(LogThreadedDestWorker *s, LogMessage *msg);
@@ -103,11 +102,16 @@ const gchar *log_threaded_result_to_str(LogThreadedResult self);
 struct _LogThreadedDestDriver
 {
   LogDestDriver super;
-  GMutex *lock;
+  GMutex lock;
 
   StatsCounterItem *dropped_messages;
   StatsCounterItem *processed_messages;
   StatsCounterItem *written_messages;
+  StatsAggregator *max_message_size;
+  StatsAggregator *average_messages_size;
+  StatsAggregator *max_batch_size;
+  StatsAggregator *average_batch_size;
+  StatsAggregator *CPS;
 
   gint batch_lines;
   gint batch_timeout;
@@ -135,7 +139,7 @@ struct _LogThreadedDestDriver
 
   LogThreadedDestWorker **workers;
   gint num_workers;
-  gint workers_started;
+  gint created_workers;
   guint last_worker;
 
   gint stats_source;
@@ -147,23 +151,22 @@ struct _LogThreadedDestDriver
 
   gint32 shared_seq_num;
 
-  WorkerOptions worker_options;
   const gchar *(*format_stats_instance)(LogThreadedDestDriver *s);
 };
 
 static inline gboolean
-log_threaded_dest_worker_thread_init(LogThreadedDestWorker *self)
+log_threaded_dest_worker_init(LogThreadedDestWorker *self)
 {
-  if (self->thread_init)
-    return self->thread_init(self);
+  if (self->init)
+    return self->init(self);
   return TRUE;
 }
 
 static inline void
-log_threaded_dest_worker_thread_deinit(LogThreadedDestWorker *self)
+log_threaded_dest_worker_deinit(LogThreadedDestWorker *self)
 {
-  if (self->thread_deinit)
-    self->thread_deinit(self);
+  if (self->deinit)
+    self->deinit(self);
 }
 
 static inline gboolean
@@ -188,10 +191,15 @@ log_threaded_dest_worker_disconnect(LogThreadedDestWorker *self)
 static inline LogThreadedResult
 log_threaded_dest_worker_insert(LogThreadedDestWorker *self, LogMessage *msg)
 {
-  if (self->owner->num_workers > 1)
-    self->seq_num = step_sequence_number_atomic(&self->owner->shared_seq_num);
+  if (msg->flags & LF_LOCAL)
+    {
+      if (self->owner->num_workers > 1)
+        self->seq_num = step_sequence_number_atomic(&self->owner->shared_seq_num);
+      else
+        self->seq_num = step_sequence_number(&self->owner->shared_seq_num);
+    }
   else
-    self->seq_num = step_sequence_number(&self->owner->shared_seq_num);
+    self->seq_num = 0;
   return self->insert(self, msg);
 }
 
@@ -226,9 +234,14 @@ void log_threaded_dest_worker_init_instance(LogThreadedDestWorker *self,
 void log_threaded_dest_worker_free_method(LogThreadedDestWorker *self);
 void log_threaded_dest_worker_free(LogThreadedDestWorker *self);
 
+void log_threaded_dest_driver_insert_msg_length_stats(LogThreadedDestDriver *self, gsize len);
+void log_threaded_dest_driver_insert_batch_length_stats(LogThreadedDestDriver *self, gsize len);
+void log_threaded_dest_driver_register_aggregated_stats(LogThreadedDestDriver *self);
+void log_threaded_dest_driver_unregister_aggregated_stats(LogThreadedDestDriver *self);
+
 gboolean log_threaded_dest_driver_deinit_method(LogPipe *s);
 gboolean log_threaded_dest_driver_init_method(LogPipe *s);
-gboolean log_threaded_dest_driver_start_workers(LogThreadedDestDriver *self);
+gboolean log_threaded_dest_driver_start_workers(LogPipe *s);
 
 void log_threaded_dest_driver_init_instance(LogThreadedDestDriver *self, GlobalConfig *cfg);
 void log_threaded_dest_driver_free(LogPipe *s);
@@ -237,5 +250,6 @@ void log_threaded_dest_driver_set_max_retries_on_error(LogDriver *s, gint max_re
 void log_threaded_dest_driver_set_num_workers(LogDriver *s, gint num_workers);
 void log_threaded_dest_driver_set_batch_lines(LogDriver *s, gint batch_lines);
 void log_threaded_dest_driver_set_batch_timeout(LogDriver *s, gint batch_timeout);
+void log_threaded_dest_driver_set_time_reopen(LogDriver *s, time_t time_reopen);
 
 #endif

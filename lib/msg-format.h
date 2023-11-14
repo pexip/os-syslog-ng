@@ -57,6 +57,8 @@ enum
   LP_NO_PARSE_DATE = 0x0400,
   LP_STORE_RAW_MESSAGE = 0x0800,
   LP_GUESS_TIMEZONE = 0x1000,
+  LP_NO_HEADER = 0x2000,
+  LP_NO_RFC3164_FALLBACK = 0x4000,
 };
 
 typedef struct _MsgFormatHandler MsgFormatHandler;
@@ -82,10 +84,19 @@ struct _MsgFormatHandler
    */
   LogProtoServer *(*construct_proto)(const MsgFormatOptions *options, LogTransport *transport,
                                      const LogProtoServerOptions *proto_options);
-  void (*parse)(const MsgFormatOptions *options, const guchar *data, gsize length, LogMessage *msg);
+  gboolean (*parse)(const MsgFormatOptions *options, LogMessage *msg,
+                    const guchar *data, gsize length,
+                    gsize *problem_position);
 };
 
-void msg_format_parse(MsgFormatOptions *options, const guchar *data, gsize length, LogMessage *msg);
+gboolean msg_format_try_parse_into(MsgFormatOptions *options, LogMessage *msg,
+                                   const guchar *data, gsize length,
+                                   gsize *problem_position);
+void msg_format_parse_into(MsgFormatOptions *options, LogMessage *msg,
+                           const guchar *data, gsize length);
+
+LogMessage *msg_format_construct_message(MsgFormatOptions *options, const guchar *data, gsize length);
+LogMessage *msg_format_parse(MsgFormatOptions *options, const guchar *data, gsize length);
 
 void msg_format_options_defaults(MsgFormatOptions *options);
 void msg_format_options_init(MsgFormatOptions *parse_options, GlobalConfig *cfg);
@@ -93,7 +104,5 @@ void msg_format_options_destroy(MsgFormatOptions *parse_options);
 void msg_format_options_copy(MsgFormatOptions *options, const MsgFormatOptions *source);
 
 gboolean msg_format_options_process_flag(MsgFormatOptions *options, const gchar *flag);
-
-void msg_format_inject_parse_error(LogMessage *msg, const guchar *data, gsize length, gint problem_position);
 
 #endif

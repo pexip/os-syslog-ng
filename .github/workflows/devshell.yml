@@ -1,33 +1,59 @@
 name: CI @ devshell
 
-on: [pull_request, push]
+on:
+  pull_request:
+  push:
+  schedule:
+    - cron: '00 21 * * *'
 
 jobs:
   general:
     runs-on: ubuntu-18.04
     container:
-      image: balabit/syslog-ng-devshell:latest
-      env:
-        PYTHONUSERBASE: /github/home/python_packages
-        PATH: /github/home/python_packages/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-        CONFIGURE_FLAGS:
-          --prefix=/github/home/install/syslog-ng
-          --enable-all-modules
-          --with-python=${{ matrix.python }}
-        CMAKE_FLAGS:
-          -DCMAKE_C_FLAGS=-Werror
-          -DCMAKE_INSTALL_PREFIX=/github/home/install/syslog-ng
-          -DPYTHON_VERSION=${{ matrix.python }}
+      image: ghcr.io/syslog-ng/dbld-devshell:latest
+      options: --privileged --ulimit core=-1
 
     strategy:
       matrix:
-        python: [2, 3]
         build-tool: [autotools, cmake]
+        cc: [gcc, clang]
       fail-fast: false
 
     steps:
       - name: Checkout syslog-ng source
         uses: actions/checkout@v2
+
+      - name: Setup environment
+        run: |
+          . .github/workflows/gh-tools.sh
+
+          # Setup corefiles
+          ulimit -c unlimited
+          COREFILES_DIR=/tmp/corefiles
+          mkdir ${COREFILES_DIR}
+          echo "${COREFILES_DIR}/core.%h.%e.%t" > /proc/sys/kernel/core_pattern
+
+          # Setup build time environment variables
+          PYTHONUSERBASE="${HOME}/python_packages"
+          CC="${{ matrix.cc }}"
+          SYSLOG_NG_INSTALL_DIR=${HOME}/install/syslog-ng
+          CONFIGURE_FLAGS="
+            --prefix=${SYSLOG_NG_INSTALL_DIR}
+            --enable-debug
+            --enable-all-modules
+            --disable-java
+            --disable-java-modules
+            --with-python=3
+            `[ $CC = clang ] && echo '--enable-force-gnu99' || true`
+          "
+          CMAKE_FLAGS="
+            -DCMAKE_BUILD_TYPE=Debug
+            -DCMAKE_C_FLAGS=-Werror
+            -DCMAKE_INSTALL_PREFIX=${HOME}/install/syslog-ng
+            -DPYTHON_VERSION=3
+          "
+          gh_export COREFILES_DIR PYTHONUSERBASE CC SYSLOG_NG_INSTALL_DIR CONFIGURE_FLAGS CMAKE_FLAGS
+          gh_path "${PYTHONUSERBASE}"
 
       - name: autogen.sh
         if: matrix.build-tool == 'autotools'
@@ -38,75 +64,120 @@ jobs:
         run: |
           mkdir build
           cd build
-          ../configure $CONFIGURE_FLAGS
+          ../configure ${CONFIGURE_FLAGS}
 
       - name: cmake
         if: matrix.build-tool == 'cmake'
         run: |
           mkdir build
           cd build
-          cmake $CMAKE_FLAGS ..
+          cmake ${CMAKE_FLAGS} ..
 
       - name: make
         working-directory: ./build
         run: make V=1 -j $(nproc)
 
       - name: make check
+        id: make_check
         working-directory: ./build
-        run: make V=1 check
+        run: make V=1 check || (mkdir -p ${COREFILES_DIR} && find . -executable -a -type f | tar -cf ${COREFILES_DIR}/test-binaries.tar  --files-from=- && cat test-suite.log && false)
 
       - name: make install
         working-directory: ./build
         run: make install
 
+      - name: Light
+        id: light
+        working-directory: ./build
+        run: |
+          make light-self-check
+          make light-check
+
       - name: make func-test
         working-directory: ./build
         run: make VERBOSE=1 func-test
 
-      - name: pylib linters
-        working-directory: ./build
-        continue-on-error: true # Fix errors from pylint
-        run: |
-          make python-pep8
-          make python-pylint
+      - name: "Artifact: test-suite.log"
+        uses: actions/upload-artifact@v2
+        if: always() && steps.make_check.outcome == 'failure'
+        with:
+          name: test-suite-${{ matrix.build-tool }}-${{ matrix.cc }}
+          path: ${{ github.workspace }}/build/test-suite.log
 
-      - name: Light
-        working-directory: ./build
+      - name: "Prepare artifact: light-reports"
+        id: prepare-light-reports
+        if: always() && steps.light.outcome == 'failure'
         run: |
-          make pytest-self-check
-          make pytest-linters
-          make pytest-check
+          if [ ${{ matrix.build-tool }} = 'autotools' ]
+          then
+            REPORTS_DIR=build/reports
+          elif [ ${{ matrix.build-tool }} = 'cmake' ]
+          then
+            REPORTS_DIR=build/tests/light/reports
+          else
+            echo Unrecognized build tool: ${{ matrix.build-tool }}.
+            exit 1
+          fi
+
+          cp -r ${REPORTS_DIR} /tmp/light-reports
+          rm -f `find /tmp/light-reports -type p,s`
+
+      - name: "Artifact: light-reports"
+        uses: actions/upload-artifact@v2
+        if: always() && steps.prepare-light-reports.outcome == 'success'
+        with:
+          name: light-reports-${{ matrix.build-tool }}-${{ matrix.cc }}
+          path: /tmp/light-reports
+
+      - name: Dump corefile backtrace
+        working-directory: ${{ env.COREFILES_DIR }}
+        if: failure()
+        run: |
+          find -name "core.*syslog-ng*" -exec \
+            gdb --ex="thread apply all bt full" --ex="quit" ${SYSLOG_NG_INSTALL_DIR}/sbin/syslog-ng --core {} \;
+
+      - name: "Artifact: corefiles"
+        uses: actions/upload-artifact@v2
+        if: failure()
+        with:
+          name: corefiles-${{ matrix.build-tool }}-${{ matrix.cc }}
+          path: ${{ env.COREFILES_DIR }}
 
   distcheck:
     runs-on: ubuntu-18.04
     container:
-      image: balabit/syslog-ng-devshell:latest
-      env:
-        DISTCHECK_CONFIGURE_FLAGS:
-          CFLAGS=-Werror
-          --prefix=/github/home/install/syslog-ng
-          --with-ivykis=internal
-          --with-jsonc=system
-          --enable-tcp-wrapper
-          --enable-linux-caps
-          --enable-manpages
-          --enable-all-modules
-          --with-python=${{ matrix.python }}
-
-    strategy:
-      matrix:
-        python: [2, 3]
-      fail-fast: false
+      image: ghcr.io/syslog-ng/dbld-devshell:latest
+      options: --security-opt seccomp=unconfined --ulimit core=-1
 
     steps:
       - name: Checkout syslog-ng source
         uses: actions/checkout@v2
 
+      - name: Set ENV variables
+        run: |
+          . .github/workflows/gh-tools.sh
+
+          DISTCHECK_CONFIGURE_FLAGS="
+            CFLAGS=-Werror
+            --prefix=${HOME}/install/syslog-ng
+            --with-ivykis=internal
+            --with-jsonc=system
+            --enable-tcp-wrapper
+            --enable-linux-caps
+            --enable-manpages
+            --enable-all-modules
+            --disable-java
+            --disable-java-modules
+            --with-python=3
+          "
+
+          gh_export DISTCHECK_CONFIGURE_FLAGS
+
       - name: autogen.sh
         run: ./autogen.sh
 
       - name: configure
-        run: ./configure $DISTCHECK_CONFIGURE_FLAGS
+        run: ./configure --disable-all-modules --enable-manpages
 
       - name: distcheck
         run: |
@@ -116,28 +187,63 @@ jobs:
   style-check:
     runs-on: ubuntu-18.04
     container:
-      image: balabit/syslog-ng-devshell:latest
+      image: ghcr.io/syslog-ng/dbld-devshell:latest
 
     steps:
       - name: Checkout syslog-ng source
         uses: actions/checkout@v2
 
-      - name: Style check
+      - name: Prepare
+        run: |
+          ./autogen.sh
+          mkdir build && cd build
+          ../configure
+
+      - name: Style check (C)
+        id: c-style-check
         run: |
           scripts/style-checker.sh format
-          git diff --exit-code > style-problems.diff || (cat style-problems.diff && exit 1)
+          git diff --exit-code > c-style-problems.diff || \
+            (cat c-style-problems.diff && git reset --hard HEAD && exit 1)
 
-      - name: "Artifact: style-problems.diff"
-        uses: actions/upload-artifact@v1
-        if: failure()
+      - name: Style check (pylib)
+        if: always()
+        working-directory: ./build
+        continue-on-error: true # Fix errors from pylint
+        run: |
+          make python-pep8 && make python-pylint || (git reset --hard HEAD && exit 1)
+
+      - name: Style check (Light)
+        id: light-style-check
+        if: always()
+        working-directory: ./build
+        shell: bash
+        run: |
+          python3.11 -m venv venv
+          source venv/bin/activate
+          python -m pip install -r "${GITHUB_WORKSPACE}/requirements.txt"
+          make light-linters || \
+            (git diff > ../light-style-problems.diff ; git reset --hard HEAD && exit 1)
+          deactivate
+
+      - name: "Artifact: c-style-problems"
+        uses: actions/upload-artifact@v2
+        if: always() && steps.c-style-check.outcome == 'failure'
         with:
-          name: style-problems.diff
-          path: style-problems.diff
+          name: c-style-problems
+          path: c-style-problems.diff
+
+      - name: "Artifact: light-style-problems"
+        uses: actions/upload-artifact@v2
+        if: always() && steps.light-style-check.outcome == 'failure'
+        with:
+          name: light-style-problems
+          path: light-style-problems.diff
 
   copyright-check:
     runs-on: ubuntu-18.04
     container:
-      image: balabit/syslog-ng-devshell:latest
+      image: ghcr.io/syslog-ng/dbld-devshell:latest
       env:
         COPYRIGHTVERBOSITY: 1
 
@@ -158,15 +264,17 @@ jobs:
   commits-check:
     runs-on: ubuntu-18.04
     container:
-      image: balabit/syslog-ng-devshell:latest
+      image: ghcr.io/syslog-ng/dbld-devshell:latest
 
     steps:
       - name: Checkout syslog-ng source
         uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
 
       - name: Commits check (Pull request)
         if: github.event_name == 'pull_request'
-        run: tests/commits/check.sh ${{ github.base_ref }}..${{ github.head_ref }}
+        run: tests/commits/check.sh origin/${{ github.base_ref }}..HEAD
 
       - name: Commits check (Push)
         if: github.event_name == 'push'

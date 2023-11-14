@@ -39,7 +39,7 @@ static LogTag *log_tags_list = NULL;
 static GHashTable *log_tags_hash = NULL;
 static guint32 log_tags_num = 0;
 static guint32 log_tags_list_size = 4;
-static GStaticMutex log_tags_lock = G_STATIC_MUTEX_INIT;
+static GMutex log_tags_lock;
 
 
 /*
@@ -63,13 +63,14 @@ log_tags_get_by_name(const gchar *name)
 
      In both cases the return value is 0.
    */
-  guint id;
 
   g_assert(log_tags_hash != NULL);
 
-  g_static_mutex_lock(&log_tags_lock);
+  g_mutex_lock(&log_tags_lock);
 
-  id = GPOINTER_TO_UINT(g_hash_table_lookup(log_tags_hash, name)) - 1;
+  gpointer key = g_hash_table_lookup(log_tags_hash, name);
+  guint id = GPOINTER_TO_UINT(key) - 1;
+
   if (id == 0xffffffff)
     {
       if (log_tags_num < LOG_TAGS_MAX - 1)
@@ -100,7 +101,7 @@ log_tags_get_by_name(const gchar *name)
         id = 0;
     }
 
-  g_static_mutex_unlock(&log_tags_lock);
+  g_mutex_unlock(&log_tags_lock);
 
   return id;
 }
@@ -122,12 +123,12 @@ log_tags_get_by_id(LogTagId id)
 {
   gchar *name = NULL;
 
-  g_static_mutex_lock(&log_tags_lock);
+  g_mutex_lock(&log_tags_lock);
 
   if (id < log_tags_num)
     name = log_tags_list[id].name;
 
-  g_static_mutex_unlock(&log_tags_lock);
+  g_mutex_unlock(&log_tags_lock);
 
   return name;
 }
@@ -135,24 +136,24 @@ log_tags_get_by_id(LogTagId id)
 void
 log_tags_inc_counter(LogTagId id)
 {
-  g_static_mutex_lock(&log_tags_lock);
+  g_mutex_lock(&log_tags_lock);
 
   if (id < log_tags_num)
     stats_counter_inc(log_tags_list[id].counter);
 
-  g_static_mutex_unlock(&log_tags_lock);
+  g_mutex_unlock(&log_tags_lock);
 }
 
 void
 log_tags_dec_counter(LogTagId id)
 {
   /* Reader lock because the log_tag_list is not written */
-  g_static_mutex_lock(&log_tags_lock);
+  g_mutex_lock(&log_tags_lock);
 
   if (id < log_tags_num)
     stats_counter_dec(log_tags_list[id].counter);
 
-  g_static_mutex_unlock(&log_tags_lock);
+  g_mutex_unlock(&log_tags_lock);
 }
 
 /*
@@ -170,6 +171,7 @@ log_tags_reinit_stats(void)
 {
   gint id;
 
+  g_mutex_lock(&log_tags_lock);
   stats_lock();
 
   for (id = 0; id < log_tags_num; id++)
@@ -185,13 +187,14 @@ log_tags_reinit_stats(void)
     }
 
   stats_unlock();
+  g_mutex_unlock(&log_tags_lock);
 }
 
 void
 log_tags_global_init(void)
 {
   /* Necessary only in case of reinitialized tags */
-  g_static_mutex_lock(&log_tags_lock);
+  g_mutex_lock(&log_tags_lock);
 
   log_tags_hash = g_hash_table_new(g_str_hash, g_str_equal);
 
@@ -200,8 +203,8 @@ log_tags_global_init(void)
 
   log_tags_list = g_new0(LogTag, log_tags_list_size);
 
-  g_static_mutex_unlock(&log_tags_lock);
-  register_application_hook(AH_CONFIG_CHANGED, (ApplicationHookFunc) log_tags_reinit_stats, NULL);
+  g_mutex_unlock(&log_tags_lock);
+  register_application_hook(AH_CONFIG_CHANGED, (ApplicationHookFunc) log_tags_reinit_stats, NULL, AHM_RUN_REPEAT);
 }
 
 void
@@ -209,7 +212,7 @@ log_tags_global_deinit(void)
 {
   gint i;
 
-  g_static_mutex_lock(&log_tags_lock);
+  g_mutex_lock(&log_tags_lock);
 
   g_hash_table_destroy(log_tags_hash);
 
@@ -228,5 +231,5 @@ log_tags_global_deinit(void)
   log_tags_list = NULL;
   log_tags_hash = NULL;
 
-  g_static_mutex_unlock(&log_tags_lock);
+  g_mutex_unlock(&log_tags_lock);
 }

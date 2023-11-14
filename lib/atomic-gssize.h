@@ -112,16 +112,22 @@ atomic_gssize_and(atomic_gssize *a, gsize value)
   return g_atomic_pointer_and(&a->value, value);
 }
 
-static inline gsize
-atomic_gssize_set_and_get(atomic_gssize *a, gsize value)
+static inline gboolean
+atomic_gssize_compare_and_exchange(atomic_gssize *a, gssize oldval, gssize newval)
 {
-  gsize oldval = atomic_gssize_get_unsigned(a);
+  return g_atomic_pointer_compare_and_exchange(&a->value, oldval, newval);
+}
 
-  while (!g_atomic_pointer_compare_and_exchange(&a->value,
-                                                oldval,
-                                                value))
+static inline gssize
+atomic_gssize_set_and_get(atomic_gssize *a, gssize value)
+{
+  gssize oldval = atomic_gssize_get(a);
+
+  while (!atomic_gssize_compare_and_exchange(a,
+                                             oldval,
+                                             value))
     {
-      oldval = atomic_gssize_get_unsigned(a);
+      oldval = atomic_gssize_get(a);
     }
 
   return oldval;

@@ -29,11 +29,11 @@
 
 %code {
 
-#include "cfg-grammar.h"
+#include "cfg-grammar-internal.h"
 #include "plugin.h"
 }
 
-%name-prefix "redis_"
+%define api.prefix {redis_}
 %lex-param {CfgLexer *lexer}
 %parse-param {CfgLexer *lexer}
 %parse-param {LogDriver **instance}
@@ -53,7 +53,7 @@ start
           {
             last_driver = *instance = redis_dd_new(configuration);
           }
-          '(' redis_options ')' { YYACCEPT; }
+          '(' _inner_dest_context_push redis_options _inner_dest_context_pop ')' { YYACCEPT; }
 ;
 
 redis_options
@@ -85,7 +85,9 @@ redis_option
           {
             redis_dd_set_timeout(last_driver, $3);
           }
-        | threaded_dest_driver_option
+        | threaded_dest_driver_general_option
+        | threaded_dest_driver_workers_option
+        | threaded_dest_driver_batch_option
         | { last_template_options = redis_dd_get_template_options(last_driver); } template_option
         ;
 

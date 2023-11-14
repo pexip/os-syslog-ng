@@ -22,71 +22,24 @@
  *
  */
 
+#include <criterion/criterion.h>
+#include <criterion/parameterized.h>
+#include "libtest/msg_parse_lib.h"
+#include "libtest/cr_template.h"
+#include "libtest/stopwatch.h"
+
 #include "logmsg/logmsg.h"
 #include "msg-format.h"
-#include "stopwatch.h"
 #include "apphook.h"
 #include "cfg.h"
 #include "plugin.h"
 #include "logmsg/logmsg-serialize.h"
-#include <criterion/criterion.h>
-
-GlobalConfig *cfg;
 
 #define RAW_MSG "<132>1 2006-10-29T01:59:59.156+01:00 mymachine evntslog - - [exampleSDID@0 iut=\"3\" eventSource=\"Application\"] An application event log entry..."
 
 #define ERROR_MSG "Failed at %s(%d)", __FILE__, __LINE__
 
 MsgFormatOptions parse_options;
-
-unsigned char _serialized_pe_msg[] =
-{
-  0x1a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x45, 0x43, 0xfd,
-  0x0f, 0x00, 0x02, 0x61, 0x60, 0x00, 0x00, 0x0e, 0x10, 0x00, 0x00, 0x00,
-  0x00, 0x56, 0xa2, 0x1e, 0xb7, 0x00, 0x0e, 0x89, 0x04, 0x00, 0x00, 0x0e,
-  0x10, 0x00, 0x00, 0x00, 0x00, 0x56, 0xa2, 0x1e, 0xb7, 0x00, 0x0e, 0x89,
-  0x04, 0x00, 0x00, 0x0e, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x04, 0x08, 0x00, 0x00, 0x01, 0x94, 0x00, 0x00, 0x01,
-  0x95, 0x00, 0x00, 0x01, 0x96, 0x00, 0x00, 0x01, 0x97, 0x32, 0x54, 0x56,
-  0x4e, 0x00, 0x00, 0x00, 0x01, 0xd4, 0x00, 0x00, 0x01, 0x4c, 0x00, 0x05,
-  0x09, 0x00, 0x00, 0x00, 0x74, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
-  0x30, 0x00, 0x00, 0x00, 0x94, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x01, 0x93, 0x00, 0x00, 0x01, 0x4c, 0x00, 0x00, 0x01,
-  0x94, 0x00, 0x00, 0x00, 0x2c, 0x00, 0x00, 0x01, 0x95, 0x00, 0x00, 0x00,
-  0x58, 0x00, 0x00, 0x01, 0x96, 0x00, 0x00, 0x00, 0xbc, 0x00, 0x00, 0x01,
-  0x97, 0x00, 0x00, 0x00, 0xf8, 0xFC, 0x03, 0x00, 0x00, 0x1c, 0x00, 0x00,
-  0x00, 0x0a, 0x00, 0x00, 0x00, 0x61, 0x61, 0x61, 0x00, 0x74, 0x65, 0x73,
-  0x74, 0x5f, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x38, 0x00, 0x00, 0x00, 0x21, 0x00, 0x00, 0x00, 0x00, 0x41, 0x6e,
-  0x20, 0x61, 0x70, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x69, 0x6f, 0x6e,
-  0x20, 0x65, 0x76, 0x65, 0x6e, 0x74, 0x20, 0x6c, 0x6f, 0x67, 0x20, 0x65,
-  0x6e, 0x74, 0x72, 0x79, 0x2e, 0x2e, 0x2e, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x3c, 0x00, 0x00,
-  0x00, 0x0b, 0x00, 0x00, 0x00, 0x2e, 0x53, 0x44, 0x41, 0x54, 0x41, 0x2e,
-  0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x53, 0x44, 0x49, 0x44, 0x40,
-  0x30, 0x2e, 0x65, 0x76, 0x65, 0x6e, 0x74, 0x53, 0x6f, 0x75, 0x72, 0x63,
-  0x65, 0x00, 0x41, 0x70, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x69, 0x6f,
-  0x6e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x28, 0x00, 0x00,
-  0x00, 0x01, 0x00, 0x00, 0x00, 0x2e, 0x53, 0x44, 0x41, 0x54, 0x41, 0x2e,
-  0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x53, 0x44, 0x49, 0x44, 0x40,
-  0x30, 0x2e, 0x69, 0x75, 0x74, 0x00, 0x33, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x20, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x65, 0x76,
-  0x6e, 0x74, 0x73, 0x6c, 0x6f, 0x67, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1c, 0x00, 0x00,
-  0x00, 0x09, 0x00, 0x00, 0x00, 0x00, 0x6d, 0x79, 0x6d, 0x61, 0x63, 0x68,
-  0x69, 0x6e, 0x65, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1a, 0x00,
-  0x00, 0x2c, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x2e, 0x53, 0x44,
-  0x41, 0x54, 0x41, 0x2e, 0x74, 0x69, 0x6d, 0x65, 0x51, 0x75, 0x61, 0x6c,
-  0x69, 0x74, 0x79, 0x2e, 0x74, 0x7a, 0x4b, 0x6e, 0x6f, 0x77, 0x6e, 0x00,
-  0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1b, 0x00, 0x00, 0x2c, 0x00, 0x00,
-  0x00, 0x01, 0x00, 0x00, 0x00, 0x2e, 0x53, 0x44, 0x41, 0x54, 0x41, 0x2e,
-  0x74, 0x69, 0x6d, 0x65, 0x51, 0x75, 0x61, 0x6c, 0x69, 0x74, 0x79, 0x2e,
-  0x69, 0x73, 0x53, 0x79, 0x6e, 0x63, 0x65, 0x64, 0x00, 0x30, 0x00, 0x00,
-  0x00
-};
-unsigned int _serialized_pe_msg_len = sizeof(_serialized_pe_msg);
 
 static void
 _alloc_dummy_values_to_change_handle_values_across_restarts(void)
@@ -112,24 +65,30 @@ _reset_log_msg_registry(void)
 }
 
 static void
-_check_deserialized_message(LogMessage *msg, SerializeArchive *sa)
+_check_deserialized_message_original_fields(LogMessage *msg)
 {
-  GString *output = g_string_new("");
-  LogTemplate *template = log_template_new(cfg, NULL);
-  log_template_compile(template, "${ISODATE}", NULL);
+  assert_template_format_msg("${ISODATE}", "2006-10-29T01:59:59.156+01:00", msg);
 
-  cfg->template_options.frac_digits = 3;
-  log_template_append_format(template, msg, &cfg->template_options, LTZ_SEND, 0, NULL, output);
-  cr_assert_str_eq(output->str, "2006-10-29T01:59:59.156+01:00", ERROR_MSG);
+  assert_log_message_value_and_type(msg, LM_V_HOST, "mymachine", LM_VT_STRING);
+  assert_log_message_value_and_type(msg, LM_V_PROGRAM, "evntslog", LM_VT_STRING);
+  assert_log_message_value_and_type(msg, LM_V_MESSAGE, "An application event log entry...", LM_VT_STRING);
+  assert_log_message_value_unset(msg, log_msg_get_value_handle("unset_value"));
 
-  cr_assert_str_eq(log_msg_get_value(msg, LM_V_HOST, NULL), "mymachine", ERROR_MSG);
-  cr_assert_str_eq(log_msg_get_value(msg, LM_V_PROGRAM, NULL), "evntslog", ERROR_MSG);
-  cr_assert_str_eq(log_msg_get_value(msg, LM_V_MESSAGE, NULL), "An application event log entry...", ERROR_MSG);
-  cr_assert_null(log_msg_get_value_if_set(msg, log_msg_get_value_handle("unset_value"), NULL), ERROR_MSG);
-  cr_assert_str_eq(log_msg_get_value_by_name(msg, ".SDATA.exampleSDID@0.eventSource", NULL), "Application", ERROR_MSG);
+  assert_log_message_value_and_type(msg,
+                                    log_msg_get_value_handle(".SDATA.exampleSDID@0.eventSource"),
+                                    "Application",
+                                    LM_VT_STRING);
   cr_assert_eq(msg->pri, 132, ERROR_MSG);
-  log_template_unref(template);
-  g_string_free(output, TRUE);
+
+}
+
+static void
+_check_deserialized_message_all_fields(LogMessage *msg)
+{
+  _check_deserialized_message_original_fields(msg);
+  assert_log_message_value(msg, log_msg_get_value_handle("indirect_1"), "val");
+  assert_log_message_value_and_type(msg, log_msg_get_value_handle("indirect_2"), "53", LM_VT_INT64);
+
 }
 
 static LogMessage *
@@ -138,11 +97,13 @@ _create_message_to_be_serialized(const gchar *raw_msg, const int raw_msg_len)
   parse_options.flags |= LP_SYSLOG_PROTOCOL;
   NVHandle test_handle = log_msg_get_value_handle("aaa");
 
-  LogMessage *msg = log_msg_new(raw_msg, raw_msg_len, &parse_options);
-  log_msg_set_value(msg, test_handle, "test_value", -1);
+  LogMessage *msg = msg_format_parse(&parse_options, (const guchar *) raw_msg, raw_msg_len);
+  log_msg_set_value(msg, test_handle, "test_value53", -1);
 
   NVHandle indirect_handle = log_msg_get_value_handle("indirect_1");
-  log_msg_set_value_indirect(msg, indirect_handle, test_handle, 0, 5, 3);
+  log_msg_set_value_indirect(msg, indirect_handle, test_handle, 5, 3);
+  NVHandle indirect_with_type_handle = log_msg_get_value_handle("indirect_2");
+  log_msg_set_value_indirect_with_type(msg, indirect_with_type_handle, test_handle, 10, 2, LM_VT_INT64);
 
   log_msg_set_value_by_name(msg, "unset_value", "foobar", -1);
   log_msg_unset_value_by_name(msg, "unset_value");
@@ -172,10 +133,26 @@ _serialize_message_for_test(GString *stream, const gchar *raw_msg)
   return sa;
 }
 
+static LogMessage *
+_deserialize_message_from_string(const guint8 *serialized, gsize serialized_len)
+{
+  GString s = {0};
+
+  s.allocated_len = 0;
+  s.len = serialized_len;
+  s.str = (gchar *) serialized;
+  LogMessage *msg = log_msg_new_empty();
+
+  SerializeArchive *sa = serialize_string_archive_new(&s);
+  _reset_log_msg_registry();
+
+  cr_assert(log_msg_deserialize(msg, sa), ERROR_MSG);
+  serialize_archive_free(sa);
+  return msg;
+}
+
 Test(logmsg_serialize, serialize)
 {
-  NVHandle indirect_handle = 0;
-  gssize length = 0;
   GString *stream = g_string_new("");
 
   SerializeArchive *sa = _serialize_message_for_test(stream, RAW_MSG);
@@ -192,11 +169,7 @@ Test(logmsg_serialize, serialize)
   cr_assert(log_msg_is_handle_sdata(sdata_handle),
             "deserialized SDATA name-value pairs have to marked as such");
 
-  _check_deserialized_message(msg, sa);
-
-  indirect_handle = log_msg_get_value_handle("indirect_1");
-  const gchar *indirect_value = log_msg_get_value(msg, indirect_handle, &length);
-  cr_assert(0==strncmp(indirect_value, "value", length), ERROR_MSG);
+  _check_deserialized_message_all_fields(msg);
 
   log_msg_unref(msg);
   serialize_archive_free(sa);
@@ -338,23 +311,48 @@ Test(logmsg_serialize, existing_and_given_ts_processed)
   g_string_free(stream, TRUE);
 }
 
-Test(logmsg_serialize, pe_serialized_message)
+#include "messages/syslog-ng-pe-6.0-msg.h"
+#include "messages/syslog-ng-3.17.1-msg.h"
+#include "messages/syslog-ng-3.18.1-msg.h"
+#include "messages/syslog-ng-3.21.1-msg.h"
+#include "messages/syslog-ng-3.25.1-msg.h"
+#include "messages/syslog-ng-3.26.1-msg.h"
+#include "messages/syslog-ng-3.28.1-msg.h"
+#include "messages/syslog-ng-3.29.1-msg.h"
+#include "messages/syslog-ng-3.30.1-msg.h"
+
+
+ParameterizedTestParameters(logmsg_serialize, test_deserialization_of_legacy_messages)
 {
-  GString serialized = {0};
-  serialized.allocated_len = 0;
-  serialized.len = _serialized_pe_msg_len;
-  serialized.str = (gchar *)_serialized_pe_msg;
-  LogMessage *msg = log_msg_new_empty();
+  static struct iovec messages[] =
+  {
+    { serialized_message_3_17_1, sizeof(serialized_message_3_17_1) },
+    { serialized_message_3_18_1, sizeof(serialized_message_3_18_1) },
+    { serialized_message_3_21_1, sizeof(serialized_message_3_21_1) },
+    { serialized_message_3_25_1, sizeof(serialized_message_3_25_1) },
+    { serialized_message_3_26_1, sizeof(serialized_message_3_26_1) },
+    { serialized_message_3_28_1, sizeof(serialized_message_3_28_1) },
+    { serialized_message_3_29_1, sizeof(serialized_message_3_29_1) },
+    { serialized_message_3_30_1, sizeof(serialized_message_3_30_1) },
+  };
 
-  SerializeArchive *sa = serialize_string_archive_new(&serialized);
-  _reset_log_msg_registry();
+  return cr_make_param_array(struct iovec, messages, G_N_ELEMENTS(messages));
+}
 
-  cr_assert(log_msg_deserialize(msg, sa), ERROR_MSG);
 
-  _check_deserialized_message(msg, sa);
+Test(logmsg_serialize, test_deserialization_of_pe_message)
+{
+  LogMessage *msg = _deserialize_message_from_string(serialized_pe_msg, sizeof(serialized_pe_msg));
+  _check_deserialized_message_original_fields(msg);
+  log_msg_unref(msg);
+}
+
+ParameterizedTest(struct iovec *param, logmsg_serialize, test_deserialization_of_legacy_messages)
+{
+  LogMessage *msg = _deserialize_message_from_string(param->iov_base, param->iov_len);
+  _check_deserialized_message_all_fields(msg);
 
   log_msg_unref(msg);
-  serialize_archive_free(sa);
 }
 
 Test(logmsg_serialize, serialization_performance)
@@ -419,16 +417,19 @@ static void
 setup(void)
 {
   app_startup();
-  cfg = cfg_new_snippet();
-  cfg_load_module(cfg, "syslogformat");
+
+  init_template_tests();
+  configuration->template_options.frac_digits = 3;
+
   msg_format_options_defaults(&parse_options);
-  msg_format_options_init(&parse_options, cfg);
+  msg_format_options_init(&parse_options, configuration);
+
 }
 
 static void
 teardown(void)
 {
-  cfg_free(cfg);
+  deinit_template_tests();
   app_shutdown();
 }
 

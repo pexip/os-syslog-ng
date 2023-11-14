@@ -30,7 +30,7 @@
 
 
 static GHashTable *counter_index;
-static GStaticMutex stats_query_mutex = G_STATIC_MUTEX_INIT;
+static GMutex stats_query_mutex;
 static GHashTable *stats_views;
 
 typedef struct _ViewRecord
@@ -128,11 +128,11 @@ _update_indexes_of_cluster_if_needed(StatsCluster *sc, gpointer user_data)
 static void
 _update_index(void)
 {
-  g_static_mutex_lock(&stats_query_mutex);
+  g_mutex_lock(&stats_query_mutex);
   stats_lock();
-  stats_foreach_cluster(_update_indexes_of_cluster_if_needed, NULL);
+  stats_foreach_cluster(_update_indexes_of_cluster_if_needed, NULL, NULL);
   stats_unlock();
-  g_static_mutex_unlock(&stats_query_mutex);
+  g_mutex_unlock(&stats_query_mutex);
 }
 
 static gboolean
@@ -160,23 +160,23 @@ _query_counter_hash(const gchar *key_str)
   _update_index();
   single_match = _is_single_match(key_str);
 
-  g_static_mutex_lock(&stats_query_mutex);
+  g_mutex_lock(&stats_query_mutex);
   g_hash_table_iter_init(&iter, counter_index);
   while (g_hash_table_iter_next(&iter, &key, &value))
     {
       if (_is_pattern_matches_key(pattern, key))
         {
           StatsCounterItem *counter = (StatsCounterItem *) value;
-          counters = g_list_append(counters, counter);
+          counters = g_list_prepend(counters, counter);
 
           if (single_match)
             break;
         }
     }
-  g_static_mutex_unlock(&stats_query_mutex);
+  g_mutex_unlock(&stats_query_mutex);
 
   g_pattern_spec_free(pattern);
-  return counters;
+  return g_list_reverse(counters);
 }
 
 static GList *
@@ -210,10 +210,10 @@ _get_aggregated_counters_from_views(GList *views)
         continue;
 
       view->aggregate(counters, &view->counter);
-      aggregated_counters = g_list_append(aggregated_counters, view->counter);
+      aggregated_counters = g_list_prepend(aggregated_counters, view->counter);
       g_list_free(counters);
     }
-  return aggregated_counters;
+  return g_list_reverse(aggregated_counters);
 }
 
 static GList *
@@ -227,23 +227,23 @@ _get_views(const gchar *filter)
 
   single_match = _is_single_match(filter);
 
-  g_static_mutex_lock(&stats_query_mutex);
+  g_mutex_lock(&stats_query_mutex);
   g_hash_table_iter_init(&iter, stats_views);
   while (g_hash_table_iter_next(&iter, &key, &value))
     {
       if (_is_pattern_matches_key(pattern, key))
         {
           ViewRecord *view = (ViewRecord *) value;
-          views = g_list_append(views, view);
+          views = g_list_prepend(views, view);
 
           if (single_match)
             break;
         }
     }
-  g_static_mutex_unlock(&stats_query_mutex);
+  g_mutex_unlock(&stats_query_mutex);
 
   g_pattern_spec_free(pattern);
-  return views;
+  return g_list_reverse(views);
 }
 
 static GList *

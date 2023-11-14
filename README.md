@@ -1,5 +1,7 @@
 [![Gitter](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/syslog-ng/syslog-ng?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=body_badge)
-[![Build Status](https://travis-ci.org/syslog-ng/syslog-ng.svg?branch=master)](https://travis-ci.org/syslog-ng/syslog-ng)
+[![Build Status](https://github.com/syslog-ng/syslog-ng/actions/workflows/devshell.yml/badge.svg)](https://github.com/syslog-ng/syslog-ng/actions/workflows/devshell.yml)
+[![Binary packages](https://github.com/syslog-ng/syslog-ng/actions/workflows/packages.yml/badge.svg)](https://github.com/syslog-ng/syslog-ng/actions/workflows/packages.yml)
+[![Compile dbld-images](https://github.com/syslog-ng/syslog-ng/actions/workflows/dbld-images.yml/badge.svg)](https://github.com/syslog-ng/syslog-ng/actions/workflows/dbld-images.yml)
 
 syslog-ng
 =========
@@ -15,7 +17,7 @@ applications or forwarded by systemd) and writes everything to a single
 file:
 
 ```
-@version: 3.28
+@version: 3.38
 @include "scl.conf"
 
 log {
@@ -27,7 +29,7 @@ log {
 This one additionally processes logs from the network (TCP/514 by default):
 
 ```
-@version: 3.28
+@version: 3.38
 @include "scl.conf"
 
 log {
@@ -41,7 +43,7 @@ log {
 This config is designed for structured/application logging, using local submission via JSON, and outputting in key=value format:
 
 ```
-@version: 3.28
+@version: 3.38
 @include "scl.conf"
 
 log {
@@ -124,10 +126,17 @@ Releases and precompiled tarballs are available on [GitHub][github-repo].
 
  [github-repo]: https://github.com/syslog-ng/syslog-ng/releases
 
-To compile from source, the usual drill applies (assuming you have
-the required dependencies):
+To compile from source, the easiest is to use `dbld`, a docker based,
+self-hosted compile/build/release infrastructure within the source tree. See
+`dbld/README.md` for more information.
+
+For the brave souls who want to compile syslog-ng from scratch, the usual
+drill applies:
 
     $ ./configure && make && make install
+
+The extra effort in contrast with the dbld based build is the need to fetch
+and install all build dependencies of syslog-ng (of which there are a few).
 
 If you don't have a configure script (because of cloning from git, for example),
 run `./autogen.sh` to generate it.
@@ -148,22 +157,63 @@ various OSes.
 
 Simply invoke the following command as root:
 
-    # apt-get install syslog-ng
+    # apt install syslog-ng
 
 The latest versions of syslog-ng are available for a wide range of Debian
-and Ubuntu releases and architectures from an
-[unofficial repository](https://build.opensuse.org/project/show/home:laszlo_budai:syslog-ng).
+and Ubuntu releases from our APT repository.
 
- [madhouse-repo]: http://asylum.madhouse-project.org/projects/debian/
+The packages and the APT repository are provided "as is" without warranty of any kind, on a best-effort level.
 
-For instructions on how to install syslog-ng on Debian/Ubuntu distributions, see the blog post [Installing the latest syslog-ng on Ubuntu and other DEB distributions](https://syslog-ng.com/blog/installing-the-latest-syslog-ng-on-ubuntu-and-other-deb-distributions/).
+#### Supported distributions
+
+syslog-ng packages are released for the following distribution versions (x86-64):
+
+| Distro version | sources.list component name |
+|---|---|
+| Ubuntu 22.04 | ubuntu-jammy |
+| Ubuntu 20.04 | ubuntu-focal |
+| Ubuntu 18.04 | ubuntu-bionic |
+| Ubuntu 16.04 | ubuntu-xenial |
+| Debian 11 | debian-bullseye |
+| Debian 10 | debian-buster |
+| Debian 9 | debian-stretch |
+| Debian Unstable | debian-sid |
+| Debian Testing | debian-testing |
+
+#### Adding the APT repository
+
+1. Download and install the release signing key:
+
+    ```
+    wget -qO - https://ose-repo.syslog-ng.com/apt/syslog-ng-ose-pub.asc | sudo apt-key add -
+    ```
+
+2. Add the repository containing the latest build of syslog-ng to the APT sources. For example, stable releases on Ubuntu 20.04:
+
+    ```
+    echo "deb https://ose-repo.syslog-ng.com/apt/ stable ubuntu-focal" | sudo tee -a /etc/apt/sources.list.d/syslog-ng-ose.list
+    ```
+
+3. Run `apt update`
+
+#### Nightly builds
+
+Nightly packages are built and released from the git `master` branch everyday.
+
+Use `nightly` instead of `stable` in step 2 to use the nightly APT repository. E.g.:
+
+```
+echo "deb https://ose-repo.syslog-ng.com/apt/ nightly ubuntu-jammy" | sudo tee -a /etc/apt/sources.list.d/syslog-ng-ose.list
+```
+
+Nightly builds can be used for testing purposes (obtaining new features and bugfixes) at the risk of breakage.
 
 ### Fedora
 
 syslog-ng is available as a Fedora package that you can install using
-yum:
+dnf:
 
-    # yum install syslog-ng
+    # dnf install syslog-ng
 
 You can download packages for the latest versions from [here](https://copr.fedoraproject.org/coprs/czanik/).
 

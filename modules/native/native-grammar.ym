@@ -32,17 +32,16 @@
 
 #include "cfg-parser.h"
 #include "parser.h"
-#include "native-grammar.h"
 #include "syslog-names.h"
 #include "messages.h"
 #include "plugin.h"
-#include "cfg-grammar.h"
+#include "cfg-grammar-internal.h"
 
 #include <string.h>
 
 }
 
-%name-prefix "native_"
+%define api.prefix {native_}
 
 /* this parameter is needed in order to instruct bison to use a complete
  * argument list for yylex/yyerror */
@@ -64,7 +63,7 @@ start
   : native
     {
       *instance = $1;
-      if (yychar != YYEMPTY)
+      if (yychar != NATIVE_EMPTY)
         cfg_lexer_unput_token(lexer, &yylval);
       YYACCEPT;
     }

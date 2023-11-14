@@ -6,13 +6,13 @@ XSBC-Pexip-Original-Maintainer: syslog-ng maintainers <syslog-ng-maintainers@ali
 XSBC-Pexip-Original-Uploaders: Laszlo Boszormenyi (GCS) <gcs@debian.org>,
            SZALAY Attila <sasa@debian.org>
 Build-Depends: debhelper (>= 10~),
-               automake (>= 1:1.11.1),
+               automake,
                autoconf-archive,
                tzdata,
-               pkg-config, flex, bison (>= 3.4.2),
+               pkg-config, flex, bison,
                xsltproc, docbook-xsl,
                libesmtp-dev,
-               libivykis-dev (>= 0.36.1~),
+               libivykis-dev,
                libnet1-dev,
                libglib2.0-dev,
                libdbi-dev | libdbi0-dev,
@@ -23,19 +23,20 @@ Build-Depends: debhelper (>= 10~),
                libwrap0-dev,
                libpcre3-dev,
                libcap-dev [linux-any],
-               libsystemd-dev (>= 209) [linux-any],
+               libsystemd-dev [linux-any],
                libhiredis-dev,
-               libriemann-client-dev (>= 1.6.0~),
+               libriemann-client-dev,
 #               librabbitmq-dev,
                python3, python3-dev, dh-python,
-               dh-exec (>= 0.13~),
-               python3-nose, python3-ply,
+               dh-exec,
+               python3-ply,
                libxml2-utils, geoip-database,
                libmaxminddb-dev,
                libcurl4-openssl-dev,
                libsnappy-dev,
 #               libsnmp-dev [linux-any hurd-i386],
-#               librdkafka-dev (>= 1.0.0)
+#               librdkafka-dev (>= 1.0.0),
+               pylint (>= 2.4.0) | pylint3,
 Build-Conflicts: autoconf2.13
 Standards-Version: 4.5.0
 Homepage: https://www.syslog-ng.com/
@@ -46,7 +47,7 @@ XS-Pexip-Upstream: http://deb.debian.org/debian/ bookworm
 Package: syslog-ng
 Architecture: all
 Multi-Arch: foreign
-Depends: ${misc:Depends}, syslog-ng-core (>= ${source:Upstream-Version}), ${sng:CoreModules}
+Depends: ${misc:Depends}, syslog-ng-core (>= ${source:Upstream-Version}), syslog-ng-scl, ${sng:CoreModules}
 Recommends: ${sng:Modules}
 Description: Enhanced system logging daemon (metapackage)
  syslog-ng is an enhanced log daemon, supporting a wide range of input
@@ -98,7 +99,7 @@ Architecture: any
 Depends: syslog-ng-core (= ${binary:Version}),
  ${misc:Depends}, ${perl:Depends},
  pkg-config, perl, flex, bison, python3,
- libglib2.0-dev, libivykis-dev (>= 0.30)
+ libglib2.0-dev, libivykis-dev
 Description: Enhanced system logging daemon (development files)
  syslog-ng is an enhanced log daemon, supporting a wide range of input
  and output methods: syslog, unstructured text, message queues,
@@ -122,13 +123,13 @@ Description: Enhanced system logging daemon (development files)
 Package: syslog-ng-core
 Architecture: any
 Multi-Arch: foreign
-Depends: ${shlibs:Depends}, ${misc:Depends}, util-linux (>= 2.12-10), lsb-base (>= 3.0-6)
+Depends: ${shlibs:Depends}, ${misc:Depends}, sysvinit-utils (>= 3.05-4~) | lsb-base
 Recommends: logrotate
 Suggests: ${sng:CoreModules}, ${sng:Modules}
-Provides: system-log-daemon, linux-kernel-log-daemon, libsyslog-ng-dev, syslog-ng-mod-journal, syslog-ng-mod-pacctformat [linux-any], syslog-ng-mod-tag-parser
+Provides: system-log-daemon, linux-kernel-log-daemon, syslog-ng-mod-json, syslog-ng-mod-journal, syslog-ng-mod-pacctformat [linux-any], syslog-ng-mod-tag-parser, syslog-ng-mod-getent, syslog-ng-mod-map-value-pairs
 Conflicts: system-log-daemon, linux-kernel-log-daemon
-Replaces: syslog-ng (<< 3.3.0~), libsyslog-ng-dev, syslog-ng-mod-json (<< 3.19.1~), syslog-ng-mod-journal (<< 3.25.1~), syslog-ng-mod-pacctformat (<< 3.26.1~), syslog-ng-mod-tag-parser (<< 3.26.1~)
-Breaks: syslog-ng (<< 3.3.0~), libsyslog-ng-dev, syslog-ng-mod-json (<< 3.19.1~), syslog-ng-mod-journal (<< 3.25.1~), syslog-ng-mod-pacctformat (<< 3.26.1~), syslog-ng-mod-tag-parser (<< 3.26.1~), pexip-common-overrides (<< 1.77~)
+Replaces: syslog-ng-mod-json (<< 3.19.1~), syslog-ng-mod-journal (<< 3.25.1~), syslog-ng-mod-pacctformat (<< 3.26.1~), syslog-ng-mod-tag-parser (<< 3.26.1~), syslog-ng-mod-getent (<< 3.38.1~), syslog-ng-mod-map-value-pairs (<< 3.38.1~)
+Breaks: syslog-ng-mod-json (<< 3.19.1~), syslog-ng-mod-journal (<< 3.25.1~), syslog-ng-mod-pacctformat (<< 3.26.1~), syslog-ng-mod-tag-parser (<< 3.26.1~), syslog-ng-mod-getent (<< 3.38.1~), syslog-ng-mod-map-value-pairs (<< 3.38.1~)
 Description: Enhanced system logging daemon (core)
  syslog-ng is an enhanced log daemon, supporting a wide range of input
  and output methods: syslog, unstructured text, message queues,
@@ -152,7 +153,6 @@ Package: syslog-ng-mod-sql
 Architecture: any
 Multi-Arch: foreign
 Depends: ${shlibs:Depends}, ${misc:Depends}, syslog-ng-core (>= ${source:Version}), syslog-ng-core (<< ${source:Version}.1~)
-Pre-Depends: dpkg (>= 1.15.7.2)
 Suggests: libdbd-mysql, libdbd-pgsql, libdbd-sqlite3
 Description: Enhanced system logging daemon (SQL plugin)
  syslog-ng is an enhanced log daemon, supporting a wide range of input
@@ -196,30 +196,6 @@ Description: Enhanced system logging daemon (SMTP plugin)
  .
  This package provides the SMTP destination plugin, which allows one
  to send email messages from within syslog-ng itself.
-
-#Package: syslog-ng-mod-amqp
-#Architecture: any
-#Multi-Arch: foreign
-#Depends: ${shlibs:Depends}, ${misc:Depends}, syslog-ng-core (>= ${source:Version}), syslog-ng-core (<< ${source:Version}.1~)
-#Suggests: rabbitmq-server
-#Description: Enhanced system logging daemon (AMQP plugin)
-# syslog-ng is an enhanced log daemon, supporting a wide range of input
-# and output methods: syslog, unstructured text, message queues,
-# databases (SQL and NoSQL alike) and more.
-# .
-# Key features:
-# .
-#  * receive and send RFC3164 and RFC5424 style syslog messages
-#  * work with any kind of unstructured data
-#  * receive and send JSON formatted messages
-#  * classify and structure logs with builtin parsers (csv-parser(),
-#    db-parser(), etc.)
-#  * normalize, crunch and process logs as they flow through the system
-#  * hand on messages for further processing using message queues (like
-#    AMQP), files or databases (like PostgreSQL or MongoDB).
-# .
-# This package provides the AMQP destination plugin, which allows one
-# to publish log messages through the AMQP protocol.
 
 Package: syslog-ng-mod-geoip2
 Architecture: any
@@ -395,31 +371,6 @@ Description: Enhanced system logging daemon (add-contextual-data plugin)
  where the selector is `$HOST`, but the user can define
  the selector, and also the database contents.
 
-Package: syslog-ng-mod-getent
-Architecture: any
-Multi-Arch: foreign
-Depends: ${shlibs:Depends}, ${misc:Depends}, syslog-ng-core (>= ${source:Version}), syslog-ng-core (<< ${source:Version}.1~)
-Conflicts: syslog-ng-mod-basicfuncs-plus ( << 0.6.0)
-Description: Enhanced system logging daemon (getent plugin)
- syslog-ng is an enhanced log daemon, supporting a wide range of input
- and output methods: syslog, unstructured text, message queues,
- databases (SQL and NoSQL alike) and more.
- .
- Key features:
- .
-  * receive and send RFC3164 and RFC5424 style syslog messages
-  * work with any kind of unstructured data
-  * receive and send JSON formatted messages
-  * classify and structure logs with builtin parsers (csv-parser(),
-    db-parser(), etc.)
-  * normalize, crunch and process logs as they flow through the system
-  * hand on messages for further processing using message queues (like
-    AMQP), files or databases (like PostgreSQL or MongoDB).
- .
- This package provides getent module which allows querying the Name Service
- Switch library to convert UIDs to names, protocol names to port number and
- much more.
-
 Package: syslog-ng-mod-stardate
 Architecture: any
 Multi-Arch: foreign
@@ -443,54 +394,6 @@ Description: Enhanced system logging daemon (stardate plugin)
  This package provides a stardate-like date formatting module which formats
  the date with months and days as fragments of the year.  For example, it
  formats 2017.06.15 as something like 2017.500.
-
-Package: syslog-ng-mod-map-value-pairs
-Architecture: any
-Multi-Arch: foreign
-Depends: ${shlibs:Depends}, ${misc:Depends}, syslog-ng-core (>= ${source:Version}), syslog-ng-core (<< ${source:Version}.1~)
-Description: Enhanced system logging daemon (map-value-pairs plugin)
- syslog-ng is an enhanced log daemon, supporting a wide range of input
- and output methods: syslog, unstructured text, message queues,
- databases (SQL and NoSQL alike) and more.
- .
- Key features:
- .
-  * receive and send RFC3164 and RFC5424 style syslog messages
-  * work with any kind of unstructured data
-  * receive and send JSON formatted messages
-  * classify and structure logs with builtin parsers (csv-parser(),
-    db-parser(), etc.)
-  * normalize, crunch and process logs as they flow through the system
-  * hand on messages for further processing using message queues (like
-    AMQP), files or databases (like PostgreSQL or MongoDB).
- .
- With this package, it is possible to copy key-value pairs and do some other
- conversion and alteration in key-value pairs.
-
-#Package: syslog-ng-mod-snmp
-#Architecture: linux-any hurd-i386
-#Multi-Arch: foreign
-#Depends: ${shlibs:Depends}, ${misc:Depends}, syslog-ng-core (>= ${source:Version}), syslog-ng-core (<< ${source:Version}.1~)
-#Replaces: syslog-ng-mod-snmptrapd-parser (<< 3.27.1~)
-#Breaks: syslog-ng-mod-snmptrapd-parser (<< 3.27.1~)
-#Description: Enhanced system logging daemon (SNMP plugin)
-# syslog-ng is an enhanced log daemon, supporting a wide range of input
-# and output methods: syslog, unstructured text, message queues,
-# databases (SQL and NoSQL alike) and more.
-# .
-# Key features:
-# .
-#  * receive and send RFC3164 and RFC5424 style syslog messages
-#  * work with any kind of unstructured data
-#  * receive and send JSON formatted messages
-#  * classify and structure logs with builtin parsers (csv-parser(),
-#    db-parser(), etc.)
-#  * normalize, crunch and process logs as they flow through the system
-#  * hand on messages for further processing using message queues (like
-#    AMQP), files or databases (like PostgreSQL or MongoDB).
-# .
-# This package provides the SNMP source/destination plugins, which allows one
-# to send/receive SNMP traps.
 
 Package: syslog-ng-mod-xml-parser
 Architecture: any
@@ -540,34 +443,22 @@ Description: Enhanced system logging daemon (HTTP destination)
  This package provides an HTTP destination, allowing one to send syslog
  messages as HTTP PUT messages to an http server.
 
-#Package: syslog-ng-mod-rdkafka
-#Architecture: any
-#Multi-Arch: foreign
-#Depends: ${shlibs:Depends}, ${misc:Depends}, syslog-ng-core (>= ${source:Version}), syslog-ng-core (<< ${source:Version}.1~)
-#Description: Enhanced system logging daemon (Kafka destination, based on librdkafka)
-# syslog-ng is an enhanced log daemon, supporting a wide range of input
-# and output methods: syslog, unstructured text, message queues,
-# databases (SQL and NoSQL alike) and more.
-# .
-# Key features:
-# .
-#  * receive and send RFC3164 and RFC5424 style syslog messages
-#  * work with any kind of unstructured data
-#  * receive and send JSON formatted messages
-#  * classify and structure logs with builtin parsers (csv-parser(),
-#    db-parser(), etc.)
-#  * normalize, crunch and process logs as they flow through the system
-#  * hand on messages for further processing using message queues (like
-#    AMQP), files or databases (like PostgreSQL or MongoDB).
-# .
-# This package provides a native Kafka destination, written entirely in the
-# C programming language, based on the librdkafka client library.
-
 Package: syslog-ng-mod-extra
+Depends: syslog-ng-scl, ${misc:Depends}
+Architecture: all
+Priority: optional
+Section: oldlibs
+Description: transitional package
+ This is a transitional package. It can safely be removed.
+
+Package: syslog-ng-scl
 Architecture: all
 Multi-Arch: foreign
-Depends: ${shlibs:Depends}, ${misc:Depends}, syslog-ng-core (>= ${source:Version}), syslog-ng-core (<< ${source:Version}.1~)
-Description: Enhanced system logging daemon (extra plugins)
+Depends: ${misc:Depends}, syslog-ng-core (>= ${source:Version}), syslog-ng-core (<< ${source:Version}.1~)
+Provides: syslog-ng-mod-extra
+Replaces: syslog-ng-mod-extra (<< 3.38.1~), syslog-ng-core (<< 3.38.1~), syslog-ng-mod-graphite (<< 3.38.1~), syslog-ng-mod-rdkafka (<< 3.38.1~), syslog-ng-mod-snmp (<< 3.38.1~)
+Breaks: syslog-ng-mod-extra (<< 3.38.1~), syslog-ng-core (<< 3.38.1~), syslog-ng-mod-graphite (<< 3.38.1~), syslog-ng-mod-rdkafka (<< 3.38.1~), syslog-ng-mod-snmp (<< 3.38.1~)
+Description: Enhanced system logging daemon (scl files)
  syslog-ng is an enhanced log daemon, supporting a wide range of input
  and output methods: syslog, unstructured text, message queues,
  databases (SQL and NoSQL alike) and more.
@@ -583,16 +474,8 @@ Description: Enhanced system logging daemon (extra plugins)
   * hand on messages for further processing using message queues (like
     AMQP), files or databases (like PostgreSQL or MongoDB).
  .
- This package collects all the small plugins, which does not worth to have
- a whole package. This package contains:
- .
-  * windows event log parser
-  * tag parser
-  * Graylog2 destination
-  * default Network source driver
-  * Load balancer destination
-  * osquery destination
-  * ewmm (Enterprise wide messaging model) destination and parser
+ This package collects scl files, scripts and config sniplets focusing on
+ specific areas, providing help creating more readable configurations.
 
 Package: syslog-ng-mod-examples
 Architecture: any

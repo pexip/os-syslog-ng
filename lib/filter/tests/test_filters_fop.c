@@ -21,16 +21,16 @@
  * COPYING for details.
  *
  */
+#include <criterion/criterion.h>
+#include <criterion/parameterized.h>
+#include "test_filters_common.h"
+
 #include "filter/filter-op.h"
 #include "filter/filter-expr.h"
 #include "filter/filter-pri.h"
 #include "filter/filter-expr-parser.h"
-#include "test_filters_common.h"
 #include "cfg-lexer.h"
 #include "apphook.h"
-
-#include <criterion/criterion.h>
-#include <criterion/parameterized.h>
 
 static FilterExprNode *
 _compile_standalone_filter(gchar *config_snippet)
@@ -92,6 +92,16 @@ ParameterizedTest(FilterParams *params, filter_op, test_or_evaluation)
   const gchar *msg = "<16> openvpn[2499]: PTHREAD support initialized";
   FilterExprNode *filter = _compile_standalone_filter(params->config_snippet);
   testcase(msg, filter, params->expected_result);
+}
+
+Test(filter_op, cloned_filter_with_negation_should_behave_the_same)
+{
+  const gchar *msg = "<16> openvpn[2499]: PTHREAD support initialized";
+  FilterExprNode *filter = _compile_standalone_filter("not (program('noprog') and message('nomsg'))");
+  FilterExprNode *cloned_filter = filter_expr_clone(filter);
+
+  testcase(msg, filter, TRUE);
+  testcase(msg, cloned_filter, TRUE);
 }
 
 TestSuite(filter_op, .init = setup, .fini = teardown);

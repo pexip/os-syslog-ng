@@ -24,13 +24,16 @@
 #define SYSLOG_PARSER_H_INCLUDED
 
 #include "parser/parser-expr.h"
+#include "msg-format.h"
 
 typedef struct _SyslogParser
 {
   LogParser super;
   MsgFormatOptions parse_options;
+  gboolean drop_invalid;
 } SyslogParser;
 
+void syslog_parser_set_drop_invalid(LogParser *s, gboolean drop_invalid);
 LogParser *syslog_parser_new(GlobalConfig *cfg);
 
 #endif

@@ -22,11 +22,12 @@
  *
  */
 
-#include "proto_lib.h"
-#include "cfg.h"
-
-#include <string.h>
 #include <criterion/criterion.h>
+#include "proto_lib.h"
+#include "grab-logging.h"
+
+#include "cfg.h"
+#include <string.h>
 
 LogProtoServerOptions proto_server_options;
 
@@ -50,6 +51,8 @@ proto_server_fetch(LogProtoServer *proto, const guchar **msg, gsize *msg_len)
     {
       log_transport_aux_data_init(&aux);
       status = log_proto_server_fetch(proto, msg, msg_len, &may_read, &aux, &bookmark);
+      if (status == LPS_AGAIN)
+        status = LPS_SUCCESS;
     }
   while (status == LPS_SUCCESS && *msg == NULL && may_read);
 
@@ -91,7 +94,8 @@ assert_proto_server_fetch(LogProtoServer *proto, const gchar *expected_msg, gssi
   if (expected_msg_len < 0)
     expected_msg_len = strlen(expected_msg);
 
-  cr_assert_eq(msg_len, expected_msg_len, "LogProtoServer expected message mismatch (length)");
+  cr_assert_eq(msg_len, expected_msg_len, "LogProtoServer expected message mismatch (length) "
+               "actual: %" G_GSIZE_FORMAT " expected: %" G_GSIZE_FORMAT, msg_len, expected_msg_len);
   cr_assert_arr_eq((const gchar *) msg, expected_msg, expected_msg_len,
                    "LogProtoServer expected message mismatch");
 }
@@ -139,7 +143,7 @@ assert_proto_server_fetch_failure(LogProtoServer *proto, LogProtoStatus expected
 
   assert_proto_server_status(proto, status, expected_status);
   if (error_message)
-    assert_grabbed_messages_contain(error_message, "expected error message didn't show up");
+    assert_grabbed_log_contains(error_message);
 }
 
 void
@@ -155,6 +159,8 @@ assert_proto_server_fetch_ignored_eof(LogProtoServer *proto)
   start_grabbing_messages();
   log_transport_aux_data_init(&aux);
   status = log_proto_server_fetch(proto, &msg, &msg_len, &may_read, &aux, &bookmark);
+  if (status == LPS_AGAIN)
+    status = LPS_SUCCESS;
   assert_proto_server_status(proto, status, LPS_SUCCESS);
   cr_assert_null(msg, "when an EOF is ignored msg must be NULL");
   cr_assert_null(aux.peer_addr, "returned saddr must be NULL on success");

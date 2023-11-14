@@ -1,8 +1,10 @@
 #!/bin/sh
 
+
 echo "First reboot the host to activate SystemV init system"
 if [ -z "$ADT_REBOOT_MARK" ]
 then
+    apt install --assume-yes sysvinit-core
     cp /usr/share/sysvinit/inittab /etc/inittab
     sed -i "/ttyS0/ s/^#//" /etc/inittab
     /tmp/autopkgtest-reboot "fixinit"
@@ -31,17 +33,23 @@ exit_with_comment()
 
 set -e
 echo "Checking if syslog-ng was able to start"
-is_syslogng_run || exit_with_comment "Syslog-ng not runnin, cannot tested" 0
+is_syslogng_run || exit_with_comment "Syslog-ng is not running, cannot test" 0
 
 echo "Testing stop parameter"
 /etc/init.d/syslog-ng stop
 
 is_syslogng_run && exit_with_comment "Syslog-ng cannot be stopped" 1
 
+echo "Testing status when syslog-ng is not running"
+/etc/init.d/syslog-ng status && exit_with_comment "Syslog-ng status returned with error"
+
 echo "Testing start parameter"
 /etc/init.d/syslog-ng start
 
 is_syslogng_run || exit_with_comment "Syslog-ng cannot be started" 1
+
+echo "Testing status when syslog-ng is running"
+/etc/init.d/syslog-ng status || exit_with_comment "Syslog-ng status returned with error"
 
 echo "Testing restart parameter"
 PIDFILE1=$(cat /var/run/syslog-ng.pid)

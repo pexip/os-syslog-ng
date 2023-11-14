@@ -25,9 +25,9 @@
 #include "value-pairs/internals.h"
 #include "value-pairs/value-pairs.h"
 #include "logmsg/logmsg.h"
+#include "logmsg/type-hinting.h"
 #include "template/templates.h"
 #include "template/macros.h"
-#include "type-hinting.h"
 #include "cfg-parser.h"
 #include "string-list.h"
 #include "scratch-buffers.h"
@@ -54,7 +54,7 @@ typedef struct
 
   GString *name;
   GString *value;
-  TypeHint type_hint;
+  LogMessageValueType type_hint;
 } VPResultValue;
 
 typedef struct
@@ -181,7 +181,7 @@ vp_pair_conf_free(VPPairConf *vpc)
 }
 
 static void
-vp_result_value_init(VPResultValue *rv, GString *name, TypeHint type_hint, GString *value)
+vp_result_value_init(VPResultValue *rv, GString *name, LogMessageValueType type_hint, GString *value)
 {
   rv->type_hint = type_hint;
   rv->name = name;
@@ -204,7 +204,7 @@ vp_results_deinit(VPResults *results)
 }
 
 static void
-vp_results_insert(VPResults *results, GString *name, TypeHint type_hint, GString *value)
+vp_results_insert(VPResults *results, GString *name, LogMessageValueType type_hint, GString *value)
 {
   VPResultValue *rv;
   gint ndx = results->values->len;
@@ -243,27 +243,26 @@ vp_pairs_foreach(gpointer data, gpointer user_data)
 {
   ValuePairs *vp = ((gpointer *)user_data)[0];
   LogMessage *msg = ((gpointer *)user_data)[2];
-  gint32 seq_num = GPOINTER_TO_INT (((gpointer *)user_data)[3]);
+  LogTemplateEvalOptions *options = ((gpointer *)user_data)[3];
   VPResults *results = ((gpointer *)user_data)[5];
-  const LogTemplateOptions *template_options = ((gpointer *)user_data)[6];
   GString *sb = scratch_buffers_alloc();
   VPPairConf *vpc = (VPPairConf *)data;
-  gint time_zone_mode = GPOINTER_TO_INT (((gpointer *)user_data)[7]);
+  LogMessageValueType type;
 
-  log_template_append_format((LogTemplate *)vpc->template, msg,
-                             template_options,
-                             time_zone_mode, seq_num, NULL, sb);
+  log_template_append_format_value_and_type((LogTemplate *)vpc->template, msg, options, sb, &type);
 
   if (vp->omit_empty_values && sb->len == 0)
     return;
-  vp_results_insert(results, vp_transform_apply(vp, vpc->name), vpc->template->type_hint, sb);
+  if (vp->cast_to_strings && vpc->template->explicit_type_hint == LM_VT_NONE)
+    type = LM_VT_STRING;
+  vp_results_insert(results, vp_transform_apply(vp, vpc->name), type, sb);
 }
 
 /* runs over the LogMessage nv-pairs, and inserts them unless excluded */
 static gboolean
-vp_msg_nvpairs_foreach(NVHandle handle, gchar *name,
+vp_msg_nvpairs_foreach(NVHandle handle, const gchar *name,
                        const gchar *value, gssize value_len,
-                       gpointer user_data)
+                       LogMessageValueType type, gpointer user_data)
 {
   ValuePairs *vp = ((gpointer *)user_data)[0];
   VPResults *results = ((gpointer *)user_data)[5];
@@ -291,7 +290,11 @@ vp_msg_nvpairs_foreach(NVHandle handle, gchar *name,
   sb = scratch_buffers_alloc();
 
   g_string_append_len(sb, value, value_len);
-  vp_results_insert(results, vp_transform_apply(vp, name), TYPE_HINT_STRING, sb);
+
+  if (vp->cast_to_strings)
+    type = LM_VT_STRING;
+
+  vp_results_insert(results, vp_transform_apply(vp, name), type, sb);
 
   return FALSE;
 }
@@ -364,8 +367,7 @@ vp_update_builtin_list_of_values(ValuePairs *vp)
 }
 
 static void
-vp_merge_builtins(ValuePairs *vp, VPResults *results, LogMessage *msg, gint32 seq_num, gint time_zone_mode,
-                  const LogTemplateOptions *template_options)
+vp_merge_builtins(ValuePairs *vp, VPResults *results, LogMessage *msg, LogTemplateEvalOptions *options)
 {
   gint i;
   GString *sb;
@@ -373,21 +375,21 @@ vp_merge_builtins(ValuePairs *vp, VPResults *results, LogMessage *msg, gint32 se
   for (i = 0; i < vp->builtins->len; i++)
     {
       ValuePairSpec *spec = (ValuePairSpec *) g_ptr_array_index(vp->builtins, i);
+      LogMessageValueType type;
 
       sb = scratch_buffers_alloc();
 
       switch (spec->type)
         {
         case VPT_MACRO:
-          log_macro_expand(sb, spec->id, FALSE,
-                           template_options, time_zone_mode, seq_num, NULL, msg);
+          log_macro_expand(spec->id, FALSE, options, msg, sb, &type);
           break;
         case VPT_NVPAIR:
         {
           const gchar *nv;
           gssize len;
 
-          nv = log_msg_get_value(msg, (NVHandle) spec->id, &len);
+          nv = log_msg_get_value_with_type(msg, (NVHandle) spec->id, &len, &type);
           g_string_append_len(sb, nv, len);
           break;
         }
@@ -400,7 +402,10 @@ vp_merge_builtins(ValuePairs *vp, VPResults *results, LogMessage *msg, gint32 se
           continue;
         }
 
-      vp_results_insert(results, vp_transform_apply(vp, spec->name), TYPE_HINT_STRING, sb);
+      if (vp->cast_to_strings)
+        type = LM_VT_STRING;
+
+      vp_results_insert(results, vp_transform_apply(vp, spec->name), type, sb);
     }
 }
 
@@ -424,14 +429,10 @@ vp_foreach_helper(const gchar *name, gpointer ndx_as_pointer, gpointer data)
 gboolean
 value_pairs_foreach_sorted (ValuePairs *vp, VPForeachFunc func,
                             GCompareFunc compare_func,
-                            LogMessage *msg, gint32 seq_num, gint time_zone_mode,
-                            const LogTemplateOptions *template_options,
+                            LogMessage *msg, LogTemplateEvalOptions *options,
                             gpointer user_data)
 {
-  gpointer args[] = { vp, func, msg, GINT_TO_POINTER (seq_num), user_data, NULL,
-                      /* remove constness, we are not using that pointer non-const anyway */
-                      (LogTemplateOptions *) template_options, GINT_TO_POINTER(time_zone_mode)
-                    };
+  gpointer args[] = { vp, func, msg, options, user_data, NULL};
   gboolean result = TRUE;
   VPResults results;
   gpointer helper_args[] = { &results, func, user_data, &result };
@@ -446,10 +447,9 @@ value_pairs_foreach_sorted (ValuePairs *vp, VPForeachFunc func,
    */
   if (vp->scopes & (VPS_NV_PAIRS + VPS_DOT_NV_PAIRS + VPS_SDATA + VPS_RFC5424) ||
       vp->patterns->len > 0)
-    nv_table_foreach(msg->payload, logmsg_registry,
-                     (NVTableForeachFunc) vp_msg_nvpairs_foreach, args);
+    log_msg_values_foreach(msg, vp_msg_nvpairs_foreach, args);
 
-  vp_merge_builtins(vp, &results, msg, seq_num, time_zone_mode, template_options);
+  vp_merge_builtins(vp, &results, msg, options);
 
   /* Merge the explicit key-value pairs too */
   g_ptr_array_foreach(vp->vpairs, (GFunc)vp_pairs_foreach, args);
@@ -464,12 +464,11 @@ value_pairs_foreach_sorted (ValuePairs *vp, VPForeachFunc func,
 
 gboolean
 value_pairs_foreach(ValuePairs *vp, VPForeachFunc func,
-                    LogMessage *msg, gint32 seq_num, gint time_zone_mode,
-                    const LogTemplateOptions *template_options,
+                    LogMessage *msg, LogTemplateEvalOptions *options,
                     gpointer user_data)
 {
   return value_pairs_foreach_sorted(vp, func, (GCompareFunc) strcmp,
-                                    msg, seq_num, time_zone_mode, template_options, user_data);
+                                    msg, options, user_data);
 }
 
 /*******************************************************************************
@@ -553,6 +552,10 @@ typedef struct
 
   gpointer user_data;
   vp_stack_t stack;
+  gchar key_delimiter;
+
+  /* tokenizer state */
+  GPtrArray *tokens;
 } vp_walk_state_t;
 
 static vp_walk_stack_data_t *
@@ -643,47 +646,119 @@ vp_walker_skip_sdata_enterprise_id(const gchar *name)
   return name;
 }
 
-static GPtrArray *
-vp_walker_split_name_to_tokens(vp_walk_state_t *state, const gchar *name)
+static void
+_extract_token(vp_walk_state_t *state, const gchar *token_start, gsize token_len)
+{
+  g_ptr_array_add(state->tokens, g_strndup(token_start, token_len));
+}
+
+static void
+_start_new_token(vp_walk_state_t *state, const gchar **token_start, const gchar **token_end)
+{
+  ++(*token_end);
+  *token_start = *token_end;
+}
+
+static void
+_extract_and_find_next_token(vp_walk_state_t *state, const gchar **token_start_p, const gchar **token_end_p)
+{
+  const gchar *token_start = *token_start_p;
+  const gchar *token_end = *token_end_p;
+
+  switch (*token_end)
+    {
+    case '@':
+      token_end = vp_walker_skip_sdata_enterprise_id(token_end);
+      break;
+    case '.':
+      if (token_start != token_end)
+        {
+          _extract_token(state, token_start, token_end - token_start);
+          _start_new_token(state, &token_start, &token_end);
+          break;
+        }
+    /* fall through, zero length token is not considered a separate token */
+    default:
+      token_end++;
+      token_end += strcspn(token_end, "@.");
+      break;
+    }
+  *token_start_p = token_start;
+  *token_end_p = token_end;
+}
+
+static void
+_extract_and_find_next_token_with_custom_delimiter(vp_walk_state_t *state, const gchar **token_start_p,
+                                                   const gchar **token_end_p)
+{
+  const gchar *token_start = *token_start_p;
+  const gchar *token_end = *token_end_p;
+
+  if (*token_end == state->key_delimiter && token_start != token_end)
+    {
+      _extract_token(state, token_start, token_end - token_start);
+      _start_new_token(state, &token_start, &token_end);
+    }
+  else
+    {
+      const gchar *sep = strchr(token_end + 1, state->key_delimiter);
+
+      /* position to end of the string if sep is unset */
+      if (sep)
+        token_end = sep;
+      else
+        token_end += strlen(token_end);
+    }
+
+  *token_start_p = token_start;
+  *token_end_p = token_end;
+}
+
+static void
+_extract_tokens_with_default_delimiter(vp_walk_state_t *state, const gchar *name)
 {
   const gchar *token_start = name;
   const gchar *token_end = name;
 
-  GPtrArray *array = g_ptr_array_sized_new(VP_STACK_INITIAL_SIZE);
+  while (*token_end)
+    _extract_and_find_next_token(state, &token_start, &token_end);
+
+  /* extract last token at the end */
+  if (token_start != token_end)
+    _extract_token(state, token_start, token_end - token_start);
+}
+
+static void
+_extract_tokens_with_custom_delimiter(vp_walk_state_t *state, const gchar *name)
+{
+  const gchar *token_start = name;
+  const gchar *token_end = name;
 
   while (*token_end)
-    {
-      switch (*token_end)
-        {
-        case '@':
-          token_end = vp_walker_skip_sdata_enterprise_id(token_end);
-          break;
-        case '.':
-          if (token_start != token_end)
-            {
-              g_ptr_array_add(array, g_strndup(token_start, token_end - token_start));
-              ++token_end;
-              token_start = token_end;
-              break;
-            }
-        /* fall through, zero length token is not considered a separate token */
-        default:
-          ++token_end;
-          token_end += strcspn(token_end, "@.");
-          break;
-        }
-    }
+    _extract_and_find_next_token_with_custom_delimiter(state, &token_start, &token_end);
 
+  /* extract last token at the end */
   if (token_start != token_end)
-    g_ptr_array_add(array, g_strndup(token_start, token_end - token_start));
+    _extract_token(state, token_start, token_end - token_start);
+}
 
-  if (array->len == 0)
+static GPtrArray *
+vp_walker_split_name_to_tokens(vp_walk_state_t *state, const gchar *name)
+{
+  state->tokens = g_ptr_array_sized_new(VP_STACK_INITIAL_SIZE);
+
+  if (state->key_delimiter == '.')
+    _extract_tokens_with_default_delimiter(state, name);
+  else
+    _extract_tokens_with_custom_delimiter(state, name);
+
+  if (state->tokens->len == 0)
     {
-      g_ptr_array_free(array, TRUE);
+      g_ptr_array_free(state->tokens, TRUE);
       return NULL;
     }
 
-  return array;
+  return state->tokens;
 }
 
 static gchar *
@@ -745,7 +820,7 @@ vp_walker_start_containers_for_name(vp_walk_state_t *state,
 }
 
 static gboolean
-value_pairs_walker(const gchar *name, TypeHint type, const gchar *value, gsize value_len,
+value_pairs_walker(const gchar *name, LogMessageValueType type, const gchar *value, gsize value_len,
                    gpointer user_data)
 {
   vp_walk_state_t *state = (vp_walk_state_t *)user_data;
@@ -788,9 +863,8 @@ value_pairs_walk(ValuePairs *vp,
                  VPWalkCallbackFunc obj_start_func,
                  VPWalkValueCallbackFunc process_value_func,
                  VPWalkCallbackFunc obj_end_func,
-                 LogMessage *msg, gint32 seq_num, gint time_zone_mode,
-                 const LogTemplateOptions *template_options,
-                 gpointer user_data)
+                 LogMessage *msg, LogTemplateEvalOptions *options,
+                 gchar key_delimiter, gpointer user_data)
 {
   vp_walk_state_t state;
   gboolean result;
@@ -799,12 +873,13 @@ value_pairs_walk(ValuePairs *vp,
   state.obj_start = obj_start_func;
   state.obj_end = obj_end_func;
   state.process_value = process_value_func;
+  state.key_delimiter = key_delimiter ? : '.';
   vp_stack_init(&state.stack);
 
   state.obj_start(NULL, NULL, NULL, NULL, NULL, user_data);
   result = value_pairs_foreach_sorted(vp, value_pairs_walker,
                                       (GCompareFunc)vp_walk_cmp, msg,
-                                      seq_num, time_zone_mode, template_options, &state);
+                                      options, &state);
   vp_walker_stack_unwind_all_containers(&state);
   state.obj_end(NULL, NULL, NULL, NULL, NULL, user_data);
   vp_stack_destroy(&state.stack);
@@ -867,8 +942,29 @@ value_pairs_add_transforms(ValuePairs *vp, ValuePairsTransformSet *vpts)
   vp_update_builtin_list_of_values(vp);
 }
 
+void
+value_pairs_set_cast_to_strings(ValuePairs *vp, gboolean enable)
+{
+  vp->cast_to_strings = enable;
+  vp->explicit_cast_to_strings = TRUE;
+}
+
+void
+value_pairs_set_auto_cast(ValuePairs *vp)
+{
+  /* cast is based on @version, in 3.x mode we use strings, in 4.x we use
+   * types but we won't get the warning */
+  vp->explicit_cast_to_strings = TRUE;
+}
+
+gboolean
+value_pairs_is_cast_to_strings_explicit(ValuePairs *vp)
+{
+  return vp->explicit_cast_to_strings;
+}
+
 ValuePairs *
-value_pairs_new(void)
+value_pairs_new(GlobalConfig *cfg)
 {
   ValuePairs *vp;
 
@@ -878,6 +974,17 @@ value_pairs_new(void)
   vp->vpairs = g_ptr_array_new();
   vp->patterns = g_ptr_array_new();
   vp->transforms = g_ptr_array_new();
+  vp->cfg = cfg;
+
+  if (cfg_is_config_version_older(cfg, VERSION_VALUE_4_0))
+    {
+      /* we don't have an upgrade warning here, as it could only be a very
+       * generic message, not helping our users too much.  I've added this
+       * kind of warning to affected modules instead, like $(format-json)
+       * and mongo-db() */
+
+      vp->cast_to_strings = TRUE;
+    }
 
   return vp;
 }
@@ -885,7 +992,7 @@ value_pairs_new(void)
 ValuePairs *
 value_pairs_new_default(GlobalConfig *cfg)
 {
-  ValuePairs *vp = value_pairs_new();
+  ValuePairs *vp = value_pairs_new(cfg);
 
   value_pairs_add_scope(vp, "selected-macros");
   value_pairs_add_scope(vp, "nv-pairs");

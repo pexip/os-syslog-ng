@@ -40,11 +40,11 @@ m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 dnl ***************************************************************************
 dnl dependencies
 
-GLIB_MIN_VERSION="2.28"
+GLIB_MIN_VERSION="2.32"
 OPENSSL_MIN_VERSION="0.9.8"
 LIBDBI_MIN_VERSION="0.9.0"
 LIBRABBITMQ_MIN_VERSION="0.5.3"
-LIBRDKAFKA_MIN_VERSION="1.0.0"
+LIBRDKAFKA_MIN_VERSION="1.1.0"
 IVYKIS_MIN_VERSION="0.36.1"
 IVYKIS_UPDATED_VERSION="0.39"
 JSON_C_MIN_VERSION="0.9"
@@ -54,8 +54,9 @@ LRMQ_MIN_VERSION="0.0.1"
 LRC_MIN_VERSION="1.6.0"
 JOURNALD_MIN_VERSION="195"
 LIBSYSTEMD_MIN_VERSION="209"
-JAVA_MIN_VERSION="1.7"
-GRADLE_MIN_VERSION="2.2"
+LIBSYSTEMD_WITH_JOURNAL_NAMESPACES_MIN_VERSION="245"
+JAVA_MIN_VERSION="1.8"
+GRADLE_MIN_VERSION="3.4"
 HIREDIS_MIN_VERSION="0.11.0"
 CRITERION_MIN_VERSION="2.2.1"
 
@@ -205,6 +206,11 @@ AC_ARG_ENABLE(gprof,
 AC_ARG_ENABLE(memtrace,
               [  --enable-memtrace   Enable alternative leak debugging code.])
 
+AC_ARG_WITH(sanitizer,
+              [  --with-sanitizer=[address/undefined/etc...]
+                                         Enables compiler sanitizer supports (default: no)]
+              ,,with_sanitizer="no")
+
 AC_ARG_ENABLE(dynamic-linking,
               [  --enable-dynamic-linking        Link everything dynamically.],,enable_dynamic_linking="auto")
 
@@ -250,9 +256,9 @@ AC_ARG_ENABLE(mongodb,
               ,,enable_mongodb="auto")
 
 AC_ARG_WITH(jsonc,
-              [  --with-jsonc=[system/internal/auto/no]
-                                         Link against the system supplied or the built-in jsonc library or explicitly disable it. (default:auto)]
-              ,,with_jsonc="internal")
+              [  --with-jsonc=[yes/no]
+                                         Link against the system supplied jsonc library or explicitly disable it. (default: yes)]
+              ,,with_jsonc="yes")
 
 AC_ARG_ENABLE(json,
              [ --enable-json=[yes/no]            Enable JSON support (default: yes)]
@@ -278,6 +284,15 @@ AC_ARG_ENABLE(smtp,
 AC_ARG_WITH(libesmtp,
              AC_HELP_STRING([--with-libesmtp=DIR],
                             [use libesmtp library from (prefix) directory DIR]),,)
+
+AC_ARG_ENABLE(mqtt,
+              [  --disable-mqtt          Disable MQTT support (default: auto)]
+              ,,enable_mqtt="auto")
+
+AC_ARG_WITH(libpaho-mqtt,
+             AC_HELP_STRING([--with-libpaho-mqtt=DIR],
+                            [use libpaho-mqtt library from (prefix) directory DIR]),,)
+
 
 AC_ARG_ENABLE(http,
               [  --disable-http          Disable http support (default: auto)]
@@ -336,9 +351,6 @@ AC_ARG_WITH(python2-home,
               [  --with-python2-home=path Use path as a hard-coded Python home directory that can not be overwritten by the PYTHONHOME environment variable],
               python2_home_dir=$with_python2_home)
 
-AC_ARG_WITH(nosetests,
-              [  --with-nosetests=ABSOLUTE_PATH    Specify nosetests location])
-
 AC_ARG_WITH(pylint,
               [  --with-pylint=ABSOLUTE_PATH    Specify pylint location])
 
@@ -347,6 +359,7 @@ AC_ARG_WITH(docbook,
             ,,with_docbook="auto")
 
 AC_ARG_ENABLE(manpages, AC_HELP_STRING([ --enable-manpages], [ Enable generation of manpages (default: no)]), , [enable_manpages="no"; XSL_STYLESHEET=""])
+AC_ARG_ENABLE(manpages-install, AC_HELP_STRING([ --enable-manpages-install], [ Enable installation of manpages (default: auto)]), , [enable_manpages_install="auto"])
 
 AC_ARG_ENABLE(java, [ --enable-java  Enable java destination (default: auto)],, enable_java="auto")
 
@@ -367,7 +380,7 @@ if test "x$enable_all_modules" != "xauto"; then
 
    MODULES="spoof_source sun_streams sql pacct mongodb json amqp stomp \
             redis systemd geoip2 riemann ipv6 smtp native python java java_modules \
-            http afsnmp kafka"
+            http afsnmp kafka mqtt"
    for mod in ${MODULES}; do
        modstate=$(eval echo \$enable_${mod})
        if test "x$modstate" = "xauto"; then
@@ -428,19 +441,22 @@ if echo "$YACC" | grep -q bison; then
 	bison_version=`$YACC --version | head -n 1 | sed 's/@<:@^0-9.@:>@*//'`
 	bison_version_major=`echo $bison_version | cut -d. -f1`
 	bison_version_minor=`echo $bison_version | cut -d. -f2`
-	if test "$bison_version_major" -ge 2 -a "$bison_version_minor" -ge 4; then
+	bison_version_patch=`echo $bison_version | cut -d. -f3`
+	if ([[ "$bison_version_major" -gt 3 ]]) ||
+	   ([[ "$bison_version_major" -eq 3 ]] && [[ "$bison_version_minor" -gt 7 ]]) ||
+	   ([[ "$bison_version_major" -eq 3 ]] && [[ "$bison_version_minor" -eq 7 ]] && [[ "$bison_version_patch" -ge 6 ]]); then
 		yacc_ok=1
-	fi
-	if test "$bison_version_major" -gt 2; then
-		yacc_ok=1
+	else
+		AC_MSG_WARN([bison is found, but your bison version $bison_version is not recent enough, at least 3.7.6 is required])
 	fi
 fi
 
 if test $yacc_ok = 0; then
 	if test -f $srcdir/lib/cfg-grammar.c || test -f lib/cfg-grammar.c; then
 		AC_MSG_WARN([No proper bison found, you'll not be able to change lib/cfg-grammar.y])
+		YACC="echo Required bison not found && false"
 	else
-		AC_MSG_ERROR([syslog-ng requires bison 2.4 or later (traditional yacc is not enough). Your source tree seems to be from git, which doesn't have lib/cfg-grammar.c. Please install bison or use a distribution tarball.])
+		AC_MSG_ERROR([syslog-ng requires bison 3.7.6 or later. Your source tree seems to be from git, which doesn't have the bison generated files (like cfg-grammar.c). Please install/upgrade bison or use a distribution tarball.])
 	fi
 fi
 
@@ -456,6 +472,7 @@ fi
 if test $lex_ok = 0 ; then
 	if test -f $srcdir/lib/cfg-lex.c || test -f lib/cfg-lex.c; then
 		AC_MSG_WARN([No flex found, you'll not be able to change lib/cfg-lex.l])
+		LEX="echo Required flex version not found && false"
 	else
 		AC_MSG_ERROR([syslog-ng requires flex in order to generate its config lexer. Your source tree seems to be from git, which doesn't have lib/cfg-lex.c. Please install flex or use a distribution tarball.])
 	fi
@@ -767,6 +784,7 @@ fi
 
 dnl ***************************************************************************
 dnl Checks for libraries
+AC_CHECK_LIB(m, round, BASE_LIBS="$BASE_LIBS -lm")
 AC_CHECK_LIB(door, door_create, BASE_LIBS="$BASE_LIBS -ldoor")
 AC_CHECK_LIB(socket, socket, BASE_LIBS="$BASE_LIBS -lsocket")
 AC_CHECK_LIB(rt, nanosleep, BASE_LIBS="$BASE_LIBS -lrt")
@@ -915,7 +933,7 @@ if test "$linking_mode" != "dynamic"; then
 	LIBS=$old_LIBS
 fi
 
-GLIB_CFLAGS="${GLIB_CFLAGS} -DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_28 -DGLIB_VERSION_MAX_ALLOWED=0x023C00"
+GLIB_CFLAGS="${GLIB_CFLAGS} -DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_32"
 
 old_CPPFLAGS=$CPPFLAGS
 CPPFLAGS="$GLIB_CFLAGS"
@@ -925,11 +943,8 @@ LDFLAGS="$LDFLAGS $GLIB_LIBS"
 old_LIBS=$LIBS
 LIBS="$LIBS $GLIB_LIBS"
 AC_CHECK_FUNCS(g_list_copy_deep \
-  g_queue_free_full \
-  g_list_free_full \
   g_ptr_array_find_with_equal_func \
-  g_canonicalize_filename \
-  g_hash_table_contains)
+  g_canonicalize_filename)
 LIBS=$old_LIBS
 
 AC_CACHE_CHECK(sanity checking Glib headers,
@@ -1033,6 +1048,7 @@ CPPFLAGS_SAVE="$CPPFLAGS"
 CPPFLAGS="$CPPFLAGS $OPENSSL_CFLAGS"
 
 AC_CHECK_DECLS([SSL_CTX_get0_param],[], [], [[#include <openssl/ssl.h>]])
+AC_CHECK_DECLS([SSL_CTX_set_ciphersuites],[], [], [[#include <openssl/ssl.h>]])
 AC_CHECK_DECLS([X509_STORE_CTX_get0_cert],[], [], [[#include <openssl/ssl.h>]])
 AC_CHECK_DECLS([X509_get_extension_flags], [], [], [[#include <openssl/x509v3.h>]])
 AC_CHECK_DECLS([EVP_MD_CTX_reset], [], [], [[#include <openssl/evp.h>]])
@@ -1040,6 +1056,8 @@ AC_CHECK_DECLS([ASN1_STRING_get0_data], [], [], [[#include <openssl/asn1.h>]])
 AC_CHECK_DECLS([DH_set0_pqg], [], [], [[#include <openssl/dh.h>]])
 AC_CHECK_DECLS([BN_get_rfc3526_prime_2048], [], [], [[#include <openssl/bn.h>]])
 AC_CHECK_DECLS([SSL_CTX_set_num_tickets],[], [], [[#include <openssl/ssl.h>]])
+AC_CHECK_DECLS([SSL_CTX_set1_sigalgs_list],[], [], [[#include <openssl/ssl.h>]])
+AC_CHECK_DECLS([SSL_CTX_set1_client_sigalgs_list],[], [], [[#include <openssl/ssl.h>]])
 
 CPPFLAGS="$CPPFLAGS_SAVE"
 
@@ -1204,36 +1222,22 @@ dnl ***************************************************************************
 
 enable_json="no"
 
-JSON_INTERNAL_SOURCE_EXISTS="test -f $srcdir/lib/jsonc/json.h"
-
-if $JSON_INTERNAL_SOURCE_EXISTS; then
-  AC_CONFIG_SUBDIRS([lib/jsonc])
-  JSON_SUBDIRS="lib/jsonc"
+if test "x$with_jsonc" = "xinternal"; then
+   AC_MSG_ERROR([The internal (bundled) json-c library is no longer supported!])
 fi
 
-if test "x$with_jsonc" = "xsystem" -o "x$with_jsonc" = "xauto"; then
+if test "x$with_jsonc" = "xsystem"; then
+   with_jsonc="yes"
+fi
+
+if test "x$with_jsonc" = "xyes" -o "x$with_jsonc" = "xauto"; then
    enable_json="yes"
    PKG_CHECK_EXISTS(json-c, json_module_name="json-c",
    PKG_CHECK_EXISTS(json, json_module_name="json"))
-   PKG_CHECK_MODULES(JSON, $json_module_name >= $JSON_C_MIN_VERSION,[with_jsonc="system"], [JSON_LIBS=""; enable_json="no"])
-   if test "x$with_jsonc" = "xsystem" -a "x$enable_json" = "xno"; then
+   PKG_CHECK_MODULES(JSON, $json_module_name >= $JSON_C_MIN_VERSION,[with_jsonc="yes"], [JSON_LIBS=""; enable_json="no"])
+   if test "x$with_jsonc" = "xyes" -a "x$enable_json" = "xno"; then
      AC_MSG_ERROR([json-c library development files cannot be not found on system!])
    fi
-fi
-if test "x$with_jsonc" = "xinternal" -o "x$with_jsonc" = "xauto"; then
-  AC_MSG_CHECKING(for JSON)
-  if $JSON_INTERNAL_SOURCE_EXISTS; then
-      JSON_LIBS="\$(top_builddir)/lib/jsonc/libjson-c.la"
-      JSON_DEPENDENCY="$JSON_LIBS"
-      JSON_CFLAGS="-I\$(top_srcdir)/lib/jsonc -I\$(top_builddir)/lib/jsonc"
-      enable_json="yes"
-      with_jsonc="internal"
-  else
-      AC_MSG_WARN([Internal jsonc sources not found in lib/jsonc])
-      enable_json="no"
-      with_jsonc="no"
-  fi
-  AC_MSG_RESULT($enable_json)
 fi
 
 dnl ***************************************************************************
@@ -1244,6 +1248,16 @@ PKG_CHECK_MODULES(LIBMONGO, libmongoc-1.0 >= $LMC_MIN_VERSION, with_mongoc="yes"
 
 if test "x$with_mongoc" = "xno" && test "x$enable_mongodb" = "xyes"; then
    AC_MSG_ERROR([Could not find mongo-c-driver, and MongoDB support was explicitly enabled.])
+fi
+
+if test "x$with_mongoc" = "xyes"; then
+CPPFLAGS_SAVE="$CPPFLAGS"
+CPPFLAGS="$CPPFLAGS $LIBMONGO_CFLAGS"
+
+AC_CHECK_DECLS([mongoc_uri_set_option_as_int32], [], [], [[#include <mongoc.h>]])
+AC_CHECK_DECLS([MONGOC_URI_SERVERSELECTIONTIMEOUTMS], [], [], [[#include <mongoc.h>]])
+
+CPPFLAGS="$CPPFLAGS_SAVE"
 fi
 
 dnl ***************************************************************************
@@ -1261,20 +1275,68 @@ if test "x$enable_smtp" != "xno" && test "x$with_libesmtp" != "xno"; then
 		CPPFLAGS="$CPPFLAGS_SAVE"
 		LDFLAGS="$LDFLAGS_SAVE"
 	else
-		AC_MSG_CHECKING(for libESMTP)
-		if libesmtp-config --version >/dev/null 2>&1; then
-			AC_MSG_RESULT(yes)
-			LIBESMTP_CFLAGS="`libesmtp-config --cflags`"
-			LIBESMTP_LIBS="`libesmtp-config --libs`"
-		else
-			AC_MSG_RESULT(no)
-			libesmtp=no
-		fi
+		PKG_CHECK_MODULES(LIBESMTP, libesmtp-1.0, libesmtp="yes", libesmtp="no")
+		if test "x$libesmtp" = "xno"; then
+			AC_MSG_CHECKING(for libESMTP with libesmtp-config)
+			if libesmtp-config --version >/dev/null 2>&1; then
+				AC_MSG_RESULT(yes)
+				LIBESMTP_CFLAGS="`libesmtp-config --cflags`"
+				LIBESMTP_LIBS="`libesmtp-config --libs`"
+				libesmtp="yes"
+			else
+				AC_MSG_RESULT(no)
+				libesmtp=no
+			fi
+                fi
 	fi
 	if test "x$enable_smtp" = "xyes" && test "x$libesmtp" = "xno"; then
 		AC_MSG_ERROR(libESMTP not found)
 	fi
 	enable_smtp=$libesmtp
+fi
+
+
+dnl ***************************************************************************
+dnl libmqtt headers/libraries
+dnl ***************************************************************************
+
+if test "x$enable_mqtt" = "xyes" || test "x$enable_mqtt" = "xauto"; then
+	if test "x$with_libpaho_mqtt" != "x"; then
+		CPPFLAGS_SAVE="$CPPFLAGS"
+		LDFLAGS_SAVE="$LDFLAGS"
+		CPPFLAGS="$CPPFLAGS -I$with_libpaho_mqtt/include"
+		LDFLAGS="$LDFLAGS -L$with_libpaho_mqtt -lpaho-mqtt3cs"
+		AC_CHECK_HEADER(MQTTClient.h, [LIBPAHO_MQTT_CFLAGS="-I$with_libpaho_mqtt/include"
+						LIBPAHO_MQTT_LIBS="-L$with_libpaho_mqtt/lib -lpaho-mqtt3cs"
+						libpaho_mqtt="yes"], [libpaho_mqtt=no])
+
+		CPPFLAGS="$CPPFLAGS_SAVE"
+		LDFLAGS="$LDFLAGS_SAVE"
+	else
+		AC_CHECK_LIB(paho-mqtt3cs, MQTTClient_create, LIBPAHO_MQTT_LIBS="-lpaho-mqtt3cs"; libpaho_mqtt="yes", libpaho_mqtt="no")
+	fi
+	if test "x$enable_mqtt" = "xyes" && test "x$libpaho_mqtt" = "xno"; then
+		AC_MSG_ERROR(libPAHO_MQTT not found)
+	fi
+
+	if test "x$libpaho_mqtt" = "xyes"; then
+		CPPFLAGS_SAVE="$CPPFLAGS"
+		LDFLAGS_SAVE="$LDFLAGS"
+		CPPFLAGS="$CPPFLAGS $LIBPAHO_MQTT_CFLAGS"
+		LDFLAGS="$LDFLAGS $LIBPAHO_MQTT_LIBS"
+
+		AC_CHECK_MEMBER([MQTTClient_connectOptions.httpProxy],
+				[have_paho_http_proxy=1],
+				[have_paho_http_proxy=0],
+				[[#include "MQTTClient.h"]])
+
+		CPPFLAGS="$CPPFLAGS_SAVE"
+		LDFLAGS="$LDFLAGS_SAVE"
+
+		AC_DEFINE_UNQUOTED(HAVE_PAHO_HTTP_PROXY, $have_paho_http_proxy, [libpaho-mqtt supports MQTTClient_connectOptions::httpProxy])
+	fi
+
+	enable_mqtt=$libpaho_mqtt
 fi
 
 dnl ***************************************************************************
@@ -1310,7 +1372,7 @@ if test "x$enable_http" != "xno" && test "x$with_libcurl" != "xno"; then
         if test "$enable_http" = "yes"; then
            old_CFLAGS=$CFLAGS
            CFLAGS=$LIBCURL_CFLAGS
-           AC_CHECK_DECLS([CURL_SSLVERSION_TLSv1_0, CURL_SSLVERSION_TLSv1_1, CURL_SSLVERSION_TLSv1_2, CURL_SSLVERSION_TLSv1_3],
+           AC_CHECK_DECLS([CURL_SSLVERSION_TLSv1_0, CURL_SSLVERSION_TLSv1_1, CURL_SSLVERSION_TLSv1_2, CURL_SSLVERSION_TLSv1_3, CURLOPT_TLS13_CIPHERS],
                           [], [],
                           [[#include <curl/curl.h>]])
            CFLAGS=$old_CFLAGS
@@ -1372,6 +1434,18 @@ if test "$enable_kafka" = "yes" && test "$with_librdkafka" = "no"; then
        AC_MSG_ERROR([Could not find librdkafka, and Kafka support was explicitly enabled.])
 fi
 
+dnl
+dnl Check if librdkafka has transactional api
+dnl
+
+old_LIBS=$LIBS
+old_CFLAGS=$CFLAGS
+LIBS=$LIBRDKAFKA_LIBS
+CFLAGS=$LIBRDKAFKA_CFLAGS
+AC_CHECK_FUNCS(rd_kafka_init_transactions)
+LIBS=$old_LIBS
+CFLAGS=$old_CFLAGS
+
 
 if test "x$enable_native" = "xyes" -o "x$enable_native" = "xauto"; then
     AC_CONFIG_FILES([syslog-ng-native-connector.pc])
@@ -1409,6 +1483,9 @@ dnl ***************************************************************************
 PKG_CHECK_MODULES(libsystemd, libsystemd >= ${LIBSYSTEMD_MIN_VERSION},
                   have_libsystemd="yes", have_libsystemd="no")
 
+PKG_CHECK_MODULES(libsystemd_namespaces, libsystemd >= ${LIBSYSTEMD_WITH_JOURNAL_NAMESPACES_MIN_VERSION},
+                  journal_namespaces="yes", journal_namespaces="no")
+
 dnl ***************************************************************************
 dnl python checks
 dnl ***************************************************************************
@@ -1429,6 +1506,9 @@ if test "x$enable_python" != "xno"; then
           with_python="python${with_python}"
           ;;
       [[0-9]].[[0-9]])
+          with_python="python-${with_python}"
+          ;;
+      [[0-9]].[[0-9][0-9]])
           with_python="python-${with_python}"
           ;;
     esac
@@ -1460,23 +1540,8 @@ else
 fi
 
 dnl ***************************************************************************
-dnl nosetests, pylint
+dnl pylint
 dnl ***************************************************************************
-
-if test "x$with_nosetests" != "x"; then
-    NOSETESTS=$with_nosetests
-else
-    if test "$python_found" = "yes"; then
-      if test "$python_version" = "3"; then
-          AC_CHECK_PROG(NOSETESTS, nosetests3, nosetests3)
-          if test "x$NOSETESTS" == "x"; then
-            AC_CHECK_PROG(NOSETESTS, nosetests, nosetests)
-          fi
-      else
-          AC_CHECK_PROG(NOSETESTS, nosetests, nosetests)
-      fi
-    fi
-fi
 
 if test "x$with_pylint" != "x"; then
     PYLINT=$with_pylint
@@ -1484,7 +1549,7 @@ else
     if test "$python_found" = "yes"; then
       if test "$python_version" = "3"; then
           AC_CHECK_PROG(PYLINT, pylint3, pylint3)
-          if test "x$PYLINT" == "x"; then
+          if test "x$PYLINT" = "x"; then
             AC_CHECK_PROG(PYLINT, pylint, pylint)
           fi
       else
@@ -1505,6 +1570,15 @@ if test "x$enable_manpages" != "xno"; then
         fi
     else
         XSL_STYLESHEET=$with_docbook
+    fi
+fi
+
+if test "x$enable_manpages_install" = "xauto"; then
+    dnl do we have the generated manpages (part of the tarball but not in git)
+    if test -f doc/man/syslog-ng.8 -o "x$enable_manpages" = "xyes"; then
+        enable_manpages_install=yes
+    else
+        enable_manpages_install=no
     fi
 fi
 
@@ -1590,6 +1664,14 @@ if test "x$enable_ipv6" = "xauto"; then
         fi
 fi
 
+AC_CHECK_DECLS([TCP_KEEPIDLE, TCP_KEEPINTVL, TCP_KEEPCNT], [], [],
+                [[#include <sys/socket.h>
+                  #include <netinet/in.h>
+                  #include <netinet/tcp.h>]])
+
+if test "x$ac_cv_have_decl_TCP_KEEPIDLE" = "xyes" -a "x$ac_cv_have_decl_TCP_KEEPINTVL" = "xyes" -a "x$ac_cv_have_decl_TCP_KEEPCNT" = "xyes"; then
+        AC_DEFINE(HAVE_TCP_KEEPALIVE_TIMERS, 1, [TCP keepalive timers])
+fi
 
 if test "x$enable_linux_caps" = "xyes" -o "x$enable_linux_caps" = "xauto"; then
         PKG_CHECK_MODULES(LIBCAP, libcap, has_linux_caps="yes", has_linux_caps="no")
@@ -1700,6 +1782,14 @@ dnl ***************************************************************************
 dnl check fmemopen
 dnl ***************************************************************************
 AC_CHECK_FUNCS([fmemopen])
+
+dnl ***************************************************************************
+dnl sanitizer
+dnl ***************************************************************************
+
+if  test "x$with_sanitizer" != "xno"; then
+   CFLAGS="$CFLAGS -O1 -fsanitize=$with_sanitizer -fno-omit-frame-pointer"
+fi
 
 dnl ***************************************************************************
 dnl default modules to be loaded
@@ -1819,6 +1909,7 @@ journald_mode()
 AC_DEFINE_UNQUOTED(JOURNALD_OFF, 0, ["Disable systemd-journal source"])
 AC_DEFINE_UNQUOTED(JOURNALD_OPTIONAL, 1, ["Enable systemd-journal source if journald is available"])
 AC_DEFINE_UNQUOTED(JOURNALD_SYSTEM, 2, ["Force systemd-journal source to use system's journald"])
+AC_DEFINE_UNQUOTED(HAVE_JOURNAL_NAMESPACES, `(test "$journal_namespaces" = "yes" ) && echo 1 || echo 0`, [have journal namespaces])
 
 AC_DEFINE_UNQUOTED(VERSION, "$PACKAGE_VERSION", [version number])
 AC_DEFINE_UNQUOTED(SOURCE_REVISION, "$SOURCE_REVISION", [source revision])
@@ -1880,6 +1971,7 @@ AM_CONDITIONAL(ENABLE_OPENBSD_SYSTEM_SOURCE, [test "$enable_openbsd_system_sourc
 AM_CONDITIONAL(ENABLE_PACCT, [test "$enable_pacct" = "yes"])
 AM_CONDITIONAL(ENABLE_MONGODB, [test "$enable_mongodb" = "yes"])
 AM_CONDITIONAL(ENABLE_SMTP, [test "$enable_smtp" = "yes"])
+AM_CONDITIONAL(ENABLE_MQTT, [test "$enable_mqtt" = "yes"])
 AM_CONDITIONAL(ENABLE_HTTP, [test "$enable_http" = "yes"])
 AM_CONDITIONAL(ENABLE_AMQP, [test "$enable_amqp" = "yes"])
 AM_CONDITIONAL(ENABLE_STOMP, [test "$enable_stomp" = "yes"])
@@ -1888,7 +1980,6 @@ AM_CONDITIONAL(ENABLE_GEOIP2, [test "$enable_geoip2" = "yes"])
 AM_CONDITIONAL(ENABLE_REDIS, [test "$enable_redis" = "yes"])
 AM_CONDITIONAL(ENABLE_KAFKA, [test "$enable_kafka" = "yes"])
 AM_CONDITIONAL(IVYKIS_INTERNAL, [test "x$with_ivykis" = "xinternal"])
-AM_CONDITIONAL(JSON_INTERNAL, [test "x$with_jsonc" = "xinternal"])
 AM_CONDITIONAL(LIBMONGO_INTERNAL, [test "x$LIBMONGO_SUBDIRS" != "x"])
 AM_CONDITIONAL(LIBRABBITMQ_INTERNAL, [test "x$with_librabbitmq_client" = "xinternal"])
 AM_CONDITIONAL(ENABLE_RIEMANN, [test "$enable_riemann" != "no"])
@@ -1898,18 +1989,19 @@ AM_CONDITIONAL(ENABLE_JAVA, [test "$enable_java" = "yes"])
 AM_CONDITIONAL(ENABLE_JAVA_MODULES, [test "$enable_java_modules" = "yes"])
 AM_CONDITIONAL(ENABLE_AFSNMP, [test "$enable_afsnmp" = "yes"])
 AM_CONDITIONAL(ENABLE_MANPAGES, [test "$enable_manpages" != "no"])
+AM_CONDITIONAL(ENABLE_MANPAGES_INSTALL, [test "$enable_manpages_install" != "no"])
 AM_CONDITIONAL(ENABLE_NATIVE, [test "$enable_native" != "no"])
 AM_CONDITIONAL(ENABLE_EXTRA_WARNINGS, [test "$enable_extra_warnings" = "yes"])
 AM_CONDITIONAL(ENABLE_TESTING, [test "$enable_tests" != "no"])
+AM_CONDITIONAL(ENABLE_SANITIZER, [test "$with_sanitizer" != "no"])
+AM_CONDITIONAL(ENABLE_DEBUG, [test "$enable_debug" != "no"])
 AM_CONDITIONAL([HAVE_INOTIFY], [test x$ac_cv_func_inotify_init = xyes])
 AM_CONDITIONAL([HAVE_GETRANDOM], [test x$ac_cv_func_getrandom = xyes])
 AM_CONDITIONAL([HAVE_FMEMOPEN], [test x$ac_cv_func_fmemopen = xyes])
 AM_CONDITIONAL(ENABLE_IPV6, [test $enable_ipv6 = yes])
-AM_CONDITIONAL(NOSETESTS, [test "x$NOSETESTS" != "x"])
 AM_CONDITIONAL(PYLINT, [test "x$PYLINT" != "x"])
 
 
-AC_SUBST(NOSETESTS)
 AC_SUBST(PYLINT)
 AC_SUBST(timezonedir)
 AC_SUBST(pidfiledir)
@@ -1943,6 +2035,8 @@ AC_SUBST(LIBDBI_CFLAGS)
 AC_SUBST(LIBMONGO_LIBS)
 AC_SUBST(LIBMONGO_CFLAGS)
 AC_SUBST(LIBMONGO_SUBDIRS)
+AC_SUBST(LIBPAHO_MQTT_CFLAGS)
+AC_SUBST(LIBPAHO_MQTT_LIBS)
 AC_SUBST(LIBESMTP_CFLAGS)
 AC_SUBST(LIBESMTP_LIBS)
 AC_SUBST(LIBCURL_CFLAGS)
@@ -1952,7 +2046,6 @@ AC_SUBST(LIBRABBITMQ_CFLAGS)
 AC_SUBST(LIBRABBITMQ_SUBDIRS)
 AC_SUBST(JSON_LIBS)
 AC_SUBST(JSON_CFLAGS)
-AC_SUBST(JSON_SUBDIRS)
 AC_SUBST(JSON_DEPENDENCY)
 AC_SUBST(IVYKIS_SUBDIRS)
 AC_SUBST(RESOLV_LIBS)
@@ -1997,7 +2090,6 @@ echo "  Criterion                   : ${with_criterion:=no}"
 echo "  Unit tests                  : ${enable_tests:=no}"
 echo " Submodules:"
 echo "  ivykis                      : $with_ivykis"
-echo "  jsonc                       : $with_jsonc"
 echo " Features:"
 echo "  Forced server mode          : ${enable_forced_server_mode:=yes}"
 echo "  Debug symbols               : ${enable_debug:=no}"
@@ -2010,6 +2102,10 @@ echo "  Linux capability support    : ${has_linux_caps:=no}"
 echo "  Env wrapper support         : ${enable_env_wrapper:=no}"
 echo "  systemd support             : ${enable_systemd:=no} (unit dir: ${systemdsystemunitdir:=none})"
 echo "  systemd-journal support     : ${with_systemd_journal:=no}"
+echo "  JSON support                : $with_jsonc"
+echo " Build options:"
+echo "  Generate manual pages       : ${enable_manpages:=no}"
+echo "  Install manual pages        : ${enable_manpages_install:=no}"
 echo " Modules:"
 echo "  Module search path          : ${module_path}"
 echo "  Sun STREAMS support (module): ${enable_sun_streams:=no}"
@@ -2022,6 +2118,7 @@ echo "  SMTP support (module)       : ${enable_smtp:=no}"
 echo "  HTTP support (module)       : ${enable_http:=no}"
 echo "  AMQP destination (module)   : ${enable_amqp:=no}"
 echo "  STOMP destination (module)  : ${enable_stomp:=no}"
+echo "  MQTT (module)               : ${enable_mqtt:=no}"
 echo "  GEOIP2 support (module)     : ${enable_geoip2:=no}"
 echo "  Redis support (module)      : ${enable_redis:=no}"
 echo "  Kafka support (module)      : ${enable_kafka:=no}"

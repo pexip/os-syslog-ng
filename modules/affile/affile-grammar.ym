@@ -33,11 +33,10 @@
 #include "wildcard-source.h"
 #include "affile-dest.h"
 #include "cfg-parser.h"
-#include "affile-grammar.h"
 #include "syslog-names.h"
 #include "messages.h"
 #include "plugin.h"
-#include "cfg-grammar.h"
+#include "cfg-grammar-internal.h"
 #include "stdin.h"
 #include "named-pipe.h"
 
@@ -69,7 +68,7 @@ affile_grammar_set_wildcard_file_source_driver(WildcardSourceDriver *sd)
 
 }
 
-%name-prefix "affile_"
+%define api.prefix {affile_}
 
 /* this parameter is needed in order to instruct bison to use a complete
  * argument list for yylex/yyerror */
@@ -87,6 +86,7 @@ affile_grammar_set_wildcard_file_source_driver(WildcardSourceDriver *sd)
 %token KW_FSYNC
 %token KW_FOLLOW_FREQ
 %token KW_OVERWRITE_IF_OLDER
+%token KW_SYMLINK_AS
 %token KW_MULTI_LINE_MODE
 %token KW_MULTI_LINE_PREFIX
 %token KW_MULTI_LINE_GARBAGE
@@ -119,15 +119,15 @@ start
         ;
 
 source_affile
-	: KW_FILE '(' source_affile_params ')'	{ $$ = $3; }
-	| KW_PIPE '(' source_afpipe_params ')'	{ $$ = $3; }
-	| KW_STDIN '(' source_stdin_params ')'	{ $$ = $3; }
+	: KW_FILE '(' _inner_src_context_push source_affile_params _inner_src_context_pop ')'	{ $$ = $4; }
+	| KW_PIPE '(' _inner_src_context_push source_afpipe_params _inner_src_context_pop ')'	{ $$ = $4; }
+	| KW_STDIN '(' _inner_src_context_push source_stdin_params _inner_src_context_pop ')'	{ $$ = $4; }
 	| KW_WILDCARD_FILE
 	{
 	  WildcardSourceDriver *sd = (WildcardSourceDriver *) wildcard_sd_new(configuration);;
 	  *instance = &sd->super.super;
 	  affile_grammar_set_wildcard_file_source_driver(sd);
-	} '(' source_wildcard_params ')' { $$ = last_driver; }
+	} '(' _inner_src_context_push source_wildcard_params _inner_src_context_pop ')' { $$ = last_driver; }
 	;
 
 source_wildcard_params
@@ -269,18 +269,18 @@ multi_line_timeout
 	;
 
 dest_affile
-	: KW_FILE '(' dest_affile_params ')'	{ $$ = $3; }
-	| KW_PIPE '(' dest_afpipe_params ')'    { $$ = $3; }
+	: KW_FILE '(' _inner_dest_context_push dest_affile_params _inner_dest_context_pop ')'	{ $$ = $4; }
+	| KW_PIPE '(' _inner_dest_context_push dest_afpipe_params _inner_dest_context_pop ')'   { $$ = $4; }
 	;
 
 dest_affile_params
-	: string
+	: template_content
 	  {
 	    last_driver = *instance = affile_dd_new($1, configuration);
 	    last_writer_options = &((AFFileDestDriver *) last_driver)->writer_options;
 	    last_file_perm_options = &((AFFileDestDriver *) last_driver)->file_opener_options.file_perm_options;
 	  }
-	  dest_affile_options                           { $$ = last_driver; free($1); }
+	  dest_affile_options                           { $$ = last_driver; }
 	;
 
 dest_affile_options
@@ -294,18 +294,19 @@ dest_affile_option
         | file_perm_option
 	| KW_OPTIONAL '(' yesno ')'		{ last_driver->optional = $3; }
 	| KW_OVERWRITE_IF_OLDER '(' nonnegative_integer ')'	{ affile_dd_set_overwrite_if_older(last_driver, $3); }
+	| KW_SYMLINK_AS '(' string ')'		{ affile_dd_set_symlink_as(last_driver, $3); }
 	| KW_FSYNC '(' yesno ')'		{ affile_dd_set_fsync(last_driver, $3); }
         | dest_affile_common_option
 	;
 
 dest_afpipe_params
-	: string
+	: template_content
 	  {
 	    last_driver = *instance = pipe_dd_new($1, configuration);
 	    last_writer_options = &((AFFileDestDriver *) last_driver)->writer_options;
 	    last_file_perm_options = &((AFFileDestDriver *) last_driver)->file_opener_options.file_perm_options;
 	  }
-	  dest_afpipe_options                   { $$ = last_driver; free($1); }
+	  dest_afpipe_options                   { $$ = last_driver; }
 	;
 
 dest_afpipe_options

@@ -21,6 +21,8 @@
  *
  */
 
+#include <criterion/criterion.h>
+
 #include "filter/filter-expr.h"
 #include "filter/filter-expr-grammar.h"
 #include "filter/filter-netmask.h"
@@ -37,7 +39,7 @@
 #include "apphook.h"
 #include "plugin.h"
 #include "scratch-buffers.h"
-#include <criterion/criterion.h>
+#include "msg-format.h"
 
 #include <time.h>
 #include <string.h>
@@ -105,7 +107,7 @@ create_template(const gchar *template)
   LogTemplate *t;
 
   t = log_template_new(configuration, NULL);
-  log_template_compile(t, template, NULL);
+  cr_assert(log_template_compile(t, template, NULL));
   return t;
 }
 
@@ -143,13 +145,13 @@ testcase_with_socket(const gchar *msg, const gchar *sockaddr,
   res = filter_expr_init(f, configuration);
   cr_assert(res, "Filter init failed; msg='%s'\n", msg);
 
-  logmsg = log_msg_new(msg, strlen(msg), &parse_options);
+  logmsg = msg_format_parse(&parse_options, (const guchar *) msg, strlen(msg));
   log_msg_set_saddr_ref(logmsg, _get_sockaddr(sockaddr));
 
   res = filter_expr_eval(f, logmsg);
   cr_assert_eq(res, expected_result, "Filter test failed; msg='%s'\n", msg);
 
-  f->comp = 1;
+  f->comp = !f->comp;
   res = filter_expr_eval(f, logmsg);
   cr_assert_eq(res, !expected_result, "Filter test failed (negated); msg='%s'\n", msg);
 
@@ -182,7 +184,7 @@ testcase_with_backref_chk(const gchar *msg,
   gssize msglen;
   gchar buf[1024];
 
-  logmsg = log_msg_new(msg, strlen(msg), &parse_options);
+  logmsg = msg_format_parse(&parse_options, (const guchar *) msg, strlen(msg));
   log_msg_set_saddr_ref(logmsg, g_sockaddr_inet_new("10.10.0.1", 5000));
 
   /* NOTE: we test how our filters cope with non-zero terminated values. We don't change message_len, only the value */
@@ -190,7 +192,7 @@ testcase_with_backref_chk(const gchar *msg,
   log_msg_set_value_by_name(logmsg, "MESSAGE2", buf, -1);
 
   /* add a non-zero terminated indirect value which contains the whole message */
-  log_msg_set_value_indirect(logmsg, nonasciiz, log_msg_get_value_handle("MESSAGE2"), 0, 0, msglen);
+  log_msg_set_value_indirect(logmsg, nonasciiz, log_msg_get_value_handle("MESSAGE2"), 0, msglen);
 
   nv_table = nv_table_ref(logmsg->payload);
   res = filter_expr_eval(f, logmsg);
@@ -213,7 +215,9 @@ testcase_with_backref_chk(const gchar *msg,
     }
   else
     {
-      cr_assert_eq(strncmp(value_msg, value, length), 0,
+      const gint value_len = strlen(value);
+      cr_assert_eq(length, value_len);
+      cr_assert_eq(strncmp(value_msg, value, value_len), 0,
                    "Filter test failed (value chk); msg='%s', expected_value='%s', value_in_msg='%s'",
                    msg, value, value_msg);
     }
@@ -238,5 +242,3 @@ teardown(void)
   scratch_buffers_explicit_gc();
   app_shutdown();
 }
-
-

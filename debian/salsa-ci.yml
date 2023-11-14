@@ -1,9 +1,0 @@
----
-include:
-  - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/recipes/debian.yml
-
-variables:
-  RELEASE: 'bullseye'
-  SALSA_CI_DISABLE_REPROTEST: 1
-  SALSA_CI_DISABLE_LINTIAN: 1
-  SALSA_CI_DISABLE_BLHC: 1

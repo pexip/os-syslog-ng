@@ -269,9 +269,9 @@ _is_message_dest_an_ip_address(const LogMessage *msg)
 }
 
 static void
-log_macro_expand_date_time(GString *result, gint id, gboolean escape, const LogTemplateOptions *opts, gint tz,
-                           gint32 seq_num,
-                           const gchar *context_id, const LogMessage *msg)
+log_macro_expand_date_time(gint id, gboolean escape,
+                           LogTemplateEvalOptions *options, const LogMessage *msg,
+                           GString *result, LogMessageValueType *type)
 {
   /* year, month, day */
   const UnixTime *stamp;
@@ -323,7 +323,7 @@ log_macro_expand_date_time(GString *result, gint id, gboolean escape, const LogT
   WallClockTime wct;
 
   convert_unix_time_to_wall_clock_time_with_tz_override(stamp, &wct,
-                                                        time_zone_info_get_offset(opts->time_zone_info[tz], stamp->ut_sec));
+                                                        time_zone_info_get_offset(options->opts->time_zone_info[options->tz], stamp->ut_sec));
   switch (id)
     {
     case M_WEEK_DAY_ABBREV:
@@ -393,22 +393,23 @@ log_macro_expand_date_time(GString *result, gint id, gboolean escape, const LogT
       g_string_append(result, wct.wct_hour < 12 ? "AM" : "PM");
       break;
     case M_DATE:
-      append_format_wall_clock_time(&wct, result, TS_FMT_BSD, opts->frac_digits);
+      append_format_wall_clock_time(&wct, result, TS_FMT_BSD, options->opts->frac_digits);
       break;
     case M_STAMP:
-      if (opts->ts_format == TS_FMT_UNIX)
-        append_format_unix_time(stamp, result, TS_FMT_UNIX, wct.wct_gmtoff, opts->frac_digits);
+      if (options->opts->ts_format == TS_FMT_UNIX)
+        append_format_unix_time(stamp, result, TS_FMT_UNIX, wct.wct_gmtoff, options->opts->frac_digits);
       else
-        append_format_wall_clock_time(&wct, result, opts->ts_format, opts->frac_digits);
+        append_format_wall_clock_time(&wct, result, options->opts->ts_format, options->opts->frac_digits);
       break;
     case M_ISODATE:
-      append_format_wall_clock_time(&wct, result, TS_FMT_ISO, opts->frac_digits);
+      append_format_wall_clock_time(&wct, result, TS_FMT_ISO, options->opts->frac_digits);
       break;
     case M_FULLDATE:
-      append_format_wall_clock_time(&wct, result, TS_FMT_FULL, opts->frac_digits);
+      append_format_wall_clock_time(&wct, result, TS_FMT_FULL, options->opts->frac_digits);
       break;
     case M_UNIXTIME:
-      append_format_unix_time(stamp, result, TS_FMT_UNIX, wct.wct_gmtoff, opts->frac_digits);
+      *type = LM_VT_DATETIME;
+      append_format_unix_time(stamp, result, TS_FMT_UNIX, wct.wct_gmtoff, options->opts->frac_digits);
       break;
     case M_TZ:
     case M_TZOFFSET:
@@ -421,9 +422,11 @@ log_macro_expand_date_time(GString *result, gint id, gboolean escape, const LogT
 }
 
 gboolean
-log_macro_expand(GString *result, gint id, gboolean escape, const LogTemplateOptions *opts, gint tz, gint32 seq_num,
-                 const gchar *context_id, const LogMessage *msg)
+log_macro_expand(gint id, gboolean escape, LogTemplateEvalOptions *options, const LogMessage *msg,
+                 GString *result, LogMessageValueType *type)
 {
+  LogMessageValueType t = LM_VT_STRING;
+
   switch (id)
     {
     case M_FACILITY:
@@ -444,6 +447,7 @@ log_macro_expand(GString *result, gint id, gboolean escape, const LogTemplateOpt
     }
     case M_FACILITY_NUM:
     {
+      t = LM_VT_INT32;
       format_uint32_padded(result, 0, 0, 10, (msg->pri & LOG_FACMASK) >> 3);
       break;
     }
@@ -466,6 +470,7 @@ log_macro_expand(GString *result, gint id, gboolean escape, const LogTemplateOpt
     }
     case M_SEVERITY_NUM:
     {
+      t = LM_VT_INT32;
       format_uint32_padded(result, 0, 0, 10, msg->pri & LOG_PRIMASK);
       break;
     }
@@ -476,7 +481,14 @@ log_macro_expand(GString *result, gint id, gboolean escape, const LogTemplateOpt
     }
     case M_TAGS:
     {
-      log_msg_print_tags(msg, result);
+      t = LM_VT_LIST;
+      log_msg_format_tags(msg, result);
+      break;
+    }
+    case M__ASTERISK:
+    {
+      t = LM_VT_LIST;
+      log_msg_format_matches(msg, result);
       break;
     }
     case M_BSDTAG:
@@ -525,13 +537,13 @@ log_macro_expand(GString *result, gint id, gboolean escape, const LogTemplateOpt
         {
           GString *sdstr = g_string_sized_new(0);
 
-          log_msg_append_format_sdata(msg, sdstr, seq_num);
+          log_msg_append_format_sdata(msg, sdstr, options->seq_num);
           result_append(result, sdstr->str, sdstr->len, TRUE);
           g_string_free(sdstr, TRUE);
         }
       else
         {
-          log_msg_append_format_sdata(msg, result, seq_num);
+          log_msg_append_format_sdata(msg, result, options->seq_num);
         }
       break;
     }
@@ -613,27 +625,30 @@ log_macro_expand(GString *result, gint id, gboolean escape, const LogTemplateOpt
         {
           port = 0;
         }
+      t = LM_VT_INT32;
       format_uint32_padded(result, 0, 0, 10, port);
       break;
     }
     case M_PROTOCOL:
     {
+      t = LM_VT_INT32;
       format_uint32_padded(result, 0, 0, 10, msg->proto);
       break;
     }
     case M_SEQNUM:
     {
-      if (seq_num)
+      if (options->seq_num)
         {
-          format_uint32_padded(result, 0, 0, 10, seq_num);
+          format_uint32_padded(result, 0, 0, 10, options->seq_num);
         }
       break;
     }
     case M_CONTEXT_ID:
     {
-      if (context_id)
+      if (options->context_id)
         {
-          result_append(result, context_id, strlen(context_id), escape);
+          result_append(result, options->context_id, strlen(options->context_id), escape);
+          t = options->context_id_type;
         }
       break;
     }
@@ -670,7 +685,7 @@ log_macro_expand(GString *result, gint id, gboolean escape, const LogTemplateOpt
 
     case M_LOGHOST:
     {
-      const gchar *hname = opts->use_fqdn
+      const gchar *hname = options->opts->use_fqdn
                            ? get_local_hostname_fqdn()
                            : get_local_hostname_short();
 
@@ -688,18 +703,22 @@ log_macro_expand(GString *result, gint id, gboolean escape, const LogTemplateOpt
 
     default:
     {
-      log_macro_expand_date_time(result, id, escape, opts, tz, seq_num, context_id, msg);
+      log_macro_expand_date_time(id, escape, options, msg, result, &t);
       break;
     }
 
     }
+  if (type)
+    *type = escape ? LM_VT_STRING : t;
+
   return TRUE;
 }
 
 gboolean
-log_macro_expand_simple(GString *result, gint id, const LogMessage *msg)
+log_macro_expand_simple(gint id, const LogMessage *msg, GString *result, LogMessageValueType *type)
 {
-  return log_macro_expand(result, id, FALSE, &template_options_for_macro_expand, LTZ_LOCAL, 0, NULL, msg);
+  LogTemplateEvalOptions options = {&template_options_for_macro_expand, LTZ_LOCAL, 0, NULL, LM_VT_STRING};
+  return log_macro_expand(id, FALSE, &options, msg, result, type);
 }
 
 guint
@@ -710,7 +729,9 @@ log_macro_lookup(const gchar *macro, gint len)
 
   g_assert(macro_hash);
   g_strlcpy(buf, macro, MIN(sizeof(buf), len+1));
-  macro_id = GPOINTER_TO_INT(g_hash_table_lookup(macro_hash, buf));
+  gpointer hash_key = g_hash_table_lookup(macro_hash, buf);
+  macro_id = GPOINTER_TO_INT(hash_key);
+
   return macro_id;
 }
 

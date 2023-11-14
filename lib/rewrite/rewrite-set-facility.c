@@ -44,7 +44,7 @@ _convert_facility_as_number(const gchar *facility_text)
 {
   gint64 facility = 0;
 
-  if (!parse_dec_number(facility_text, &facility))
+  if (!parse_int64(facility_text, &facility))
     return -1;
 
   if (facility > 127)
@@ -88,7 +88,7 @@ log_rewrite_set_facility_process(LogRewrite *s, LogMessage **pmsg, const LogPath
 
   log_msg_make_writable(pmsg, path_options);
 
-  log_template_format(self->facility, *pmsg, NULL, LTZ_LOCAL, 0, NULL, result);
+  log_template_format(self->facility, *pmsg, &DEFAULT_TEMPLATE_EVAL_OPTIONS, result);
 
   const gint facility = _convert_facility(result->str);
   if (facility < 0)
@@ -102,7 +102,7 @@ log_rewrite_set_facility_process(LogRewrite *s, LogMessage **pmsg, const LogPath
   msg_trace("Setting syslog facility",
             evt_tag_int("old_facility", (*pmsg)->pri & LOG_FACMASK),
             evt_tag_int("new_facility", facility),
-            evt_tag_printf("msg", "%p", *pmsg));
+            evt_tag_msg_reference(*pmsg));
   _set_msg_facility(*pmsg, facility);
 
 error:
@@ -116,8 +116,7 @@ log_rewrite_set_facility_clone(LogPipe *s)
   LogRewriteSetFacility *cloned = (LogRewriteSetFacility *)log_rewrite_set_facility_new(log_template_ref(self->facility),
                                   s->cfg);
 
-  if (self->super.condition)
-    cloned->super.condition = filter_expr_ref(self->super.condition);
+  cloned->super.condition = filter_expr_clone(self->super.condition);
 
   return &cloned->super.super;
 }

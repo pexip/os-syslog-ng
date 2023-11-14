@@ -73,6 +73,7 @@ set (LIB_HEADERS
     cfg-args.h
     cfg-block.h
     cfg-block-generator.h
+    cfg-grammar-internal.h
     cfg-parser.h
     cfg-path.h
     cfg-tree.h
@@ -86,6 +87,7 @@ set (LIB_HEADERS
     fdhelpers.h
     file-perms.h
     find-crlf.h
+    generic-number.h
     gprocess.h
     gsockaddr.h
     gsocket.h
@@ -104,6 +106,7 @@ set (LIB_HEADERS
     mainloop-call.h
     mainloop-worker.h
     mainloop-io-worker.h
+    mainloop-threaded-worker.h
     module-config.h
     memtrace.h
     messages.h
@@ -137,7 +140,6 @@ set (LIB_HEADERS
     tls-support.h
     thread-utils.h
     tlscontext.h
-    type-hinting.h
     uuid.h
     userdb.h
     utf8utils.h
@@ -164,6 +166,7 @@ set(LIB_SOURCES
     cfg-block-generator.c
     cfg-lexer.c
     cfg-lexer-subst.c
+    cfg-grammar-internal.c
     cfg-parser.c
     cfg-path.c
     cfg-tree.c
@@ -177,6 +180,7 @@ set(LIB_SOURCES
     file-perms.c
     find-crlf.c
     globals.c
+    generic-number.c
     gprocess.c
     gsockaddr.c
     gsocket.c
@@ -195,6 +199,7 @@ set(LIB_SOURCES
     mainloop-call.c
     mainloop-worker.c
     mainloop-io-worker.c
+    mainloop-threaded-worker.c
     module-config.c
     memtrace.c
     messages.c
@@ -220,7 +225,6 @@ set(LIB_SOURCES
     str-utils.c
     syslog-names.c
     string-list.c
-    type-hinting.c
     ringbuffer.c
     crypto.c
     tlscontext.c
@@ -316,6 +320,7 @@ target_include_directories(syslog-ng
 target_link_libraries(
     syslog-ng
   PUBLIC
+    m
     eventlog
     GLib::GLib
     GLib::GThread

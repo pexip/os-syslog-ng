@@ -21,8 +21,9 @@
  * COPYING for details.
  */
 #include <criterion/criterion.h>
-#include "apphook.h"
+
 #include "transport/transport-aux-data.h"
+#include "apphook.h"
 
 LogTransportAuxData *aux = NULL;
 
@@ -65,7 +66,7 @@ _concat_nvpairs_helper(const gchar *name, const gchar *value, gsize value_len, g
 {
   GString *concatenated = (GString *) user_data;
 
-  g_string_sprintfa(concatenated, "%s=%s\n", name, value);
+  g_string_append_printf(concatenated, "%s=%s\n", name, value);
   cr_assert_eq(value_len, strlen(value), "foreach() length mismatch");
 }
 
@@ -128,6 +129,21 @@ Test(aux_data, test_aux_data_copy_separates_the_copies)
 Test(aux_data, test_add_nv_pair_to_a_NULL_aux_data_will_do_nothing)
 {
   log_transport_aux_data_add_nv_pair(NULL, "foo", "bar");
+  assert_concatenated_nvpairs(NULL, "");
+}
+
+Test(aux_data, test_aux_data_functions_with_NULL_instance_does_nothing)
+{
+  aux = NULL;
+
+  log_transport_aux_data_init(aux);
+  log_transport_aux_data_reinit(aux);
+  log_transport_aux_data_destroy(aux);
+
+  log_transport_aux_data_init(aux);
+  /* set peer_addr twice to validate that peer_addr is correctly reference counted */
+  log_transport_aux_data_set_peer_addr_ref(aux, g_sockaddr_inet_new("1.2.3.4", 5555));
+  log_transport_aux_data_set_peer_addr_ref(aux, g_sockaddr_inet_new("1.2.3.4", 5555));
 }
 
 static void

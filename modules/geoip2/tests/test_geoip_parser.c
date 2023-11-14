@@ -19,20 +19,22 @@
  * COPYING for details.
  */
 
+#include <criterion/criterion.h>
+#include "libtest/msg_parse_lib.h"
+
 #include "geoip-parser.h"
 #include "apphook.h"
-#include "msg_parse_lib.h"
 #include "scratch-buffers.h"
 
-#include <criterion/criterion.h>
-
+GlobalConfig *cfg;
 LogParser *geoip_parser;
 
 void
 setup(void)
 {
   app_startup();
-  geoip_parser = maxminddb_parser_new(configuration);
+  cfg = cfg_new_snippet();
+  geoip_parser = maxminddb_parser_new(cfg);
   /*
    * The origin of the database:
    * https://github.com/maxmind/MaxMind-DB/blob/ea7cd314bb55879b8cb1a059c425d53ff3b9b6cc/test-data/GeoIP2-Precision-Enterprise-Test.mmdb
@@ -48,6 +50,7 @@ teardown(void)
   log_pipe_deinit(&geoip_parser->super);
   log_pipe_unref(&geoip_parser->super);
   scratch_buffers_explicit_gc();
+  cfg_free(cfg);
   app_shutdown();
 }
 
@@ -62,7 +65,7 @@ parse_geoip_into_log_message_no_check(const gchar *template_format)
   cloned_parser = (LogParser *) log_pipe_clone(&geoip_parser->super);
 
   LogTemplate *template = log_template_new(NULL, NULL);
-  log_template_compile(template, template_format, NULL);
+  cr_assert(log_template_compile(template, template_format, NULL));
   log_parser_set_template(cloned_parser, template);
 
   log_pipe_init(&cloned_parser->super);

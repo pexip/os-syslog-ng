@@ -31,20 +31,35 @@
 #include "cfg.h"
 #include "logpipe.h"
 #include "logmsg/logmsg.h"
+#include "msg-format.h"
+#include "mainloop-threaded-worker.h"
 
 typedef struct _LogThreadedSourceDriver LogThreadedSourceDriver;
 typedef struct _LogThreadedSourceWorker LogThreadedSourceWorker;
-
-typedef void (*LogThreadedSourceWorkerRunFunc)(LogThreadedSourceDriver *);
-typedef void (*LogThreadedSourceWorkerRequestExitFunc)(LogThreadedSourceDriver *);
-typedef void (*LogThreadedSourceWorkerWakeupFunc)(LogThreadedSourceDriver *);
 
 typedef struct _LogThreadedSourceWorkerOptions
 {
   LogSourceOptions super;
   MsgFormatOptions parse_options;
-  gboolean position_tracked;
+  AckTrackerFactory *ack_tracker_factory;
 } LogThreadedSourceWorkerOptions;
+
+typedef struct _WakeupCondition
+{
+  GMutex lock;
+  GCond cond;
+  gboolean awoken;
+} WakeupCondition;
+
+struct _LogThreadedSourceWorker
+{
+  LogSource super;
+  MainLoopThreadedWorker thread;
+  LogThreadedSourceDriver *control;
+  WakeupCondition wakeup_cond;
+  gboolean under_termination;
+
+};
 
 struct _LogThreadedSourceDriver
 {
@@ -53,6 +68,11 @@ struct _LogThreadedSourceDriver
   LogThreadedSourceWorker *worker;
 
   const gchar *(*format_stats_instance)(LogThreadedSourceDriver *self);
+  gboolean (*thread_init)(LogThreadedSourceDriver *self);
+  void (*thread_deinit)(LogThreadedSourceDriver *self);
+  void (*run)(LogThreadedSourceDriver *self);
+  void (*request_exit)(LogThreadedSourceDriver *self);
+  void (*wakeup)(LogThreadedSourceDriver *self);
 };
 
 void log_threaded_source_worker_options_defaults(LogThreadedSourceWorkerOptions *options);
@@ -64,10 +84,6 @@ void log_threaded_source_driver_init_instance(LogThreadedSourceDriver *self, Glo
 gboolean log_threaded_source_driver_init_method(LogPipe *s);
 gboolean log_threaded_source_driver_deinit_method(LogPipe *s);
 void log_threaded_source_driver_free_method(LogPipe *s);
-
-void log_threaded_source_driver_set_worker_run_func(LogThreadedSourceDriver *self, LogThreadedSourceWorkerRunFunc run);
-void log_threaded_source_driver_set_worker_request_exit_func(LogThreadedSourceDriver *self,
-    LogThreadedSourceWorkerRequestExitFunc request_exit);
 
 static inline LogSourceOptions *
 log_threaded_source_driver_get_source_options(LogDriver *s)
@@ -89,7 +105,6 @@ log_threaded_source_driver_get_parse_options(LogDriver *s)
 void log_threaded_source_blocking_post(LogThreadedSourceDriver *self, LogMessage *msg);
 
 /* non-blocking API, use it wisely (thread boundaries) */
-void log_threaded_source_set_wakeup_func(LogThreadedSourceDriver *self, LogThreadedSourceWorkerWakeupFunc wakeup);
 void log_threaded_source_post(LogThreadedSourceDriver *self, LogMessage *msg);
 gboolean log_threaded_source_free_to_send(LogThreadedSourceDriver *self);
 

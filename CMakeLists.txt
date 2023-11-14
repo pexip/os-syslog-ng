@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.14)
 
 # use, i.e. don't skip the full RPATH for the build tree
 set(CMAKE_SKIP_BUILD_RPATH  FALSE)
@@ -24,11 +24,10 @@ include(CheckIncludeFiles)
 include(ExternalProject)
 include(external_or_find_package)
 include(add_module)
-include(add_tests)
 include(module_switch)
 
 set(MEMORYCHECK_SUPPRESSIONS_FILE "${PROJECT_SOURCE_DIR}/tests/valgrind/unit-test-leak.supp")
-set(MEMORYCHECK_COMMAND_OPTIONS "--num-callers=30 --sim-hints=no-nptl-pthread-stackcache --gen-suppressions=all --leak-check=full --freelist-vol=200000000 --freelist-big-blocks=10000000 --malloc-fill=55 --free-fill=AA")
+set(MEMORYCHECK_COMMAND_OPTIONS "--num-callers=30 --sim-hints=no-nptl-pthread-stackcache --gen-suppressions=all --leak-check=full --trace-children=yes --freelist-vol=200000000 --freelist-big-blocks=10000000 --malloc-fill=55 --free-fill=AA")
 
 execute_process(COMMAND ${PROJECT_SOURCE_DIR}/scripts/version.sh SET OUTPUT_VARIABLE SYSLOG_NG_VERSION)
 set(SYSLOG_NG_COMBINED_VERSION ${SYSLOG_NG_VERSION})
@@ -64,6 +63,7 @@ set (LOGGEN_PLUGIN_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/lib/syslog-ng/loggen")
 
 IF(CMAKE_BUILD_TYPE MATCHES Debug OR CMAKE_BUILD_TYPE MATCHES RelWithDebInfo)
   set(SYSLOG_NG_ENABLE_DEBUG 1)
+  add_definitions(-DYYDEBUG=1)
 ELSE()
   set(SYSLOG_NG_ENABLE_DEBUG 0)
 ENDIF()
@@ -77,6 +77,8 @@ include(CheckCSourceCompiles)
 
 add_definitions(-D_GNU_SOURCE=1)
 add_definitions(-D_LARGEFILE64_SOURCE=1)
+add_definitions(-D__APPLE_USE_RFC_3542)
+
 
 include(CheckSockaddrStorage)
 if (HAVE_STRUCT_SOCKADDR_STORAGE)
@@ -94,6 +96,13 @@ include(CheckIPv6)
 module_switch(ENABLE_IPV6 "Enable IPv6")
 if (ENABLE_IPV6)
     set(SYSLOG_NG_ENABLE_IPV6 ${HAVE_IPV6})
+endif()
+
+check_symbol_exists(TCP_KEEPIDLE  "sys/socket.h;netinet/in.h;netinet/tcp.h" HAVE_TCP_KEEPIDLE)
+check_symbol_exists(TCP_KEEPINTVL "sys/socket.h;netinet/in.h;netinet/tcp.h" HAVE_TCP_KEEPINTVL)
+check_symbol_exists(TCP_KEEPCNT   "sys/socket.h;netinet/in.h;netinet/tcp.h" HAVE_TCP_KEEPCNT)
+if (HAVE_TCP_KEEPIDLE AND HAVE_TCP_KEEPINTVL AND HAVE_TCP_KEEPCNT)
+  set(SYSLOG_NG_HAVE_TCP_KEEPALIVE_TIMERS 1)
 endif()
 
 if (NOT APPLE)
@@ -165,27 +174,27 @@ set(WITH_GETTEXT "" CACHE STRING "Set the prefix where gettext is installed (e.g
 
 set(CMAKE_C_STANDARD 99)
 
-find_package(BISON 2.4 REQUIRED)
+find_package(BISON 3.7.6 REQUIRED)
+
+string(REGEX MATCH "^([0-9]+)\\.([0-9]+)\\..*$" _dummy "${BISON_VERSION}")
 
 set(GLIB_COMPILE_DEFINITIONS
-  GLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_28
-  GLIB_VERSION_MAX_ALLOWED=0x023C00
+  GLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_32
 )
-find_package(GLIB COMPONENTS gmodule gthread 2.28.1 REQUIRED)
+find_package(GLIB 2.32.0 REQUIRED COMPONENTS gmodule gthread)
 
 set(CMAKE_REQUIRED_INCLUDES ${GLIB_INCLUDE_DIRS})
 set(CMAKE_REQUIRED_LIBRARIES ${GLIB_LIBRARIES})
 check_symbol_exists(g_list_copy_deep "glib.h" SYSLOG_NG_HAVE_G_LIST_COPY_DEEP)
-check_symbol_exists(g_queue_free_full "glib.h" SYSLOG_NG_HAVE_G_QUEUE_FREE_FULL)
-check_symbol_exists(g_list_free_full "glib.h" SYSLOG_NG_HAVE_G_LIST_FREE_FULL)
 check_symbol_exists(g_ptr_array_find_with_equal_func "glib.h" SYSLOG_NG_HAVE_G_PTR_ARRAY_FIND_WITH_EQUAL_FUNC)
 check_symbol_exists(g_canonicalize_filename "glib.h" SYSLOG_NG_HAVE_G_CANONICALIZE_FILENAME)
-check_symbol_exists(g_hash_table_contains "glib.h" SYSLOG_NG_HAVE_G_HASH_TABLE_CONTAINS)
 
 find_package(RabbitMQ)
-set(CMAKE_REQUIRED_INCLUDES ${RabbitMQ_INCLUDE_DIR})
-set(CMAKE_REQUIRED_LIBRARIES ${RabbitMQ_LIBRARY})
-check_symbol_exists(amqp_ssl_socket_set_verify_peer "amqp.h;amqp_ssl_socket.h" SYSLOG_NG_HAVE_AMQP_SSL_SOCKET_SET_VERIFY_PEER)
+if (RabbitMQ_FOUND)
+  set(CMAKE_REQUIRED_INCLUDES ${RabbitMQ_INCLUDE_DIR})
+  set(CMAKE_REQUIRED_LIBRARIES ${RabbitMQ_LIBRARY})
+  check_symbol_exists(amqp_ssl_socket_set_verify_peer "amqp.h;amqp_ssl_socket.h" SYSLOG_NG_HAVE_AMQP_SSL_SOCKET_SET_VERIFY_PEER)
+endif()
 
 
 set (SYSLOG_NG_USE_CONST_IVYKIS_MOCK 1)
@@ -196,14 +205,17 @@ endif()
 
 find_package(OpenSSL REQUIRED)
 find_package(FLEX REQUIRED)
-find_package(LibNet REQUIRED)
+find_package(LIBNET REQUIRED)
 find_package(Resolv REQUIRED)
-find_package(Wrap)
+find_package(WRAP)
 find_package(criterion)
 find_package(Inotify)
 find_package(LIBCAP)
 
 find_package(systemd)
+pkg_search_module(SYSTEMD_WITH_NAMESPACE libsystemd>=245)
+message(STATUS "Found lib${SYSTEMD_WITH_NAMESPACE_LIBRARIES} version ${SYSTEMD_WITH_NAMESPACE_VERSION}")
+
 module_switch(ENABLE_JOURNALD "Enable systemd-journal" Libsystemd_FOUND)
 set(WITH_SYSTEMD_JOURNAL "system" CACHE STRING "Link against the system supplied or the wrapper library")
 set_property(CACHE WITH_SYSTEMD_JOURNAL PROPERTY STRINGS system wrapper)
@@ -215,6 +227,12 @@ if (ENABLE_JOURNALD)
 
   set(SYSLOG_NG_ENABLE_SYSTEMD 1)
   if (WITH_SYSTEMD_JOURNAL STREQUAL "system")
+    if (SYSTEMD_WITH_NAMESPACE_LIBRARIES STREQUAL "systemd")
+       set(SYSLOG_NG_HAVE_JOURNAL_NAMESPACES 1)
+       message(STATUS "Have journal namespaces")
+    else()
+       set(SYSLOG_NG_HAVE_JOURNAL_NAMESPACES 0)
+    endif()
     set(SYSLOG_NG_SYSTEMD_JOURNAL_MODE SYSLOG_NG_JOURNALD_SYSTEM)
   elseif (WITH_SYSTEMD_JOURNAL STREQUAL "wrapper")
     set(SYSLOG_NG_SYSTEMD_JOURNAL_MODE SYSLOG_NG_JOURNALD_OPTIONAL)
@@ -240,21 +258,7 @@ endif ()
 
 MESSAGE(STATUS "Detected pythonlib version: ${PYTHONLIBS_VERSION_STRING}")
 
-set (NOSETESTS "" CACHE STRING "nosetests binary")
 set (PYLINT "" CACHE STRING "pylint binary")
-
-if (NOSETESTS)
-  set(NOSETESTS_BIN ${NOSETESTS})
-else ()
-  if (PYTHON_VERSION STREQUAL "3")
-    find_program(NOSETESTS_BIN "nosetests3")
-      if (NOT NOSETESTS_BIN)
-        find_program(NOSETESTS_BIN "nosetests")
-      endif()
-  else ()
-    find_program(NOSETESTS_BIN "nosetests")
-  endif ()
-endif()
 
 if (PYLINT)
   set(PYLINT_BIN ${PYLINT})
@@ -327,6 +331,8 @@ if (BUILD_TESTING AND NOT CRITERION_FOUND)
   message(FATAL_ERROR "BUILD_TESTING enabled without criterion detected!")
 endif()
 
+include(add_tests)
+
 if (CRITERION_FOUND)
   set(CTEST_ENVIRONMENT
     "G_SLICE=always-malloc,debug-blocks"
@@ -364,7 +370,9 @@ if (ENABLE_EXTRA_WARNINGS)
     -Wmissing-format-attribute
     -Wold-style-definition
     -Wundef
-    -Wignored-qualifiers)
+    -Wignored-qualifiers
+    -Wfloat-conversion
+    -Wbad-function-cast)
 
 if ("${CMAKE_C_COMPILER_ID}" MATCHES "Clang")
   set(EXTRA_WARNINGS
@@ -393,8 +401,6 @@ if (SANITIZER)
 endif()
 
 
-
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/syslog-ng-config.h.in ${CMAKE_CURRENT_BINARY_DIR}/syslog-ng-config.h)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
 add_subdirectory(Mk)
@@ -407,6 +413,8 @@ add_subdirectory(syslog-ng-ctl)
 add_test_subdirectory(libtest)
 add_subdirectory(tests)
 add_subdirectory(persist-tool)
+
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/syslog-ng-config.h.in ${CMAKE_CURRENT_BINARY_DIR}/syslog-ng-config.h)
 
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/syslog-ng-config.h DESTINATION include/syslog-ng)
 

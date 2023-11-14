@@ -28,6 +28,65 @@
 
 #include <stdlib.h>
 
+/* NOTE: this enum matches the legacy type values used by db-parser() 3.35
+ * and below.  With the PR that introduces generic typing, db-parser() is
+ * converted to use the new values, so 3.36 onwards we will never produce
+ * these values again by newly serialized LogMessage instances.
+ *
+ * When reading the old format however, we need to convert from the old to
+ * the new for which we are using this enum and the
+ * log_msg_map_legacy_dbparser_type_to_generic_type() function below.
+ */
+enum
+{
+  LEGACY_DBPARSER_TYPE_STRING,
+  LEGACY_DBPARSER_TYPE_QSTRING,
+  LEGACY_DBPARSER_TYPE_ESTRING,
+  LEGACY_DBPARSER_TYPE_IPV4,
+  LEGACY_DBPARSER_TYPE_NUMBER,
+  LEGACY_DBPARSER_TYPE_ANYSTRING,
+  LEGACY_DBPARSER_TYPE_IPV6,
+  LEGACY_DBPARSER_TYPE_IP,
+  LEGACY_DBPARSER_TYPE_FLOAT,
+  LEGACY_DBPARSER_TYPE_SET,
+  LEGACY_DBPARSER_TYPE_MACADDR,
+  LEGACY_DBPARSER_TYPE_PCRE,
+  LEGACY_DBPARSER_TYPE_EMAIL,
+  LEGACY_DBPARSER_TYPE_HOSTNAME,
+  LEGACY_DBPARSER_TYPE_LLADDR,
+  LEGACY_DBPARSER_TYPE_NLSTRING,
+  LEGACY_DBPARSER_TYPE_OPTIONALSET,
+};
+
+static LogMessageValueType
+log_msg_map_legacy_dbparser_type_to_generic_type(guint8 dbparser_type)
+{
+  switch (dbparser_type)
+    {
+    case LEGACY_DBPARSER_TYPE_NUMBER:
+      return LM_VT_INT64;
+    case LEGACY_DBPARSER_TYPE_FLOAT:
+      return LM_VT_DOUBLE;
+    case LEGACY_DBPARSER_TYPE_STRING:
+    case LEGACY_DBPARSER_TYPE_QSTRING:
+    case LEGACY_DBPARSER_TYPE_ESTRING:
+    case LEGACY_DBPARSER_TYPE_ANYSTRING:
+    case LEGACY_DBPARSER_TYPE_SET:
+    case LEGACY_DBPARSER_TYPE_OPTIONALSET:
+    case LEGACY_DBPARSER_TYPE_PCRE:
+    case LEGACY_DBPARSER_TYPE_EMAIL:
+    case LEGACY_DBPARSER_TYPE_HOSTNAME:
+    case LEGACY_DBPARSER_TYPE_NLSTRING:
+    case LEGACY_DBPARSER_TYPE_IPV4:
+    case LEGACY_DBPARSER_TYPE_IPV6:
+    case LEGACY_DBPARSER_TYPE_IP:
+    case LEGACY_DBPARSER_TYPE_LLADDR:
+    case LEGACY_DBPARSER_TYPE_MACADDR:
+    default:
+      return LM_VT_STRING;
+    }
+}
+
 /**********************************************************************
  * This chunk of code fixes up the NVHandle values scattered in a
  * deserialized NVTable.
@@ -175,14 +234,14 @@ _validate_entry(LogMessageSerializationState *state, NVEntry *entry)
     return FALSE;
 
   /* entry points above the start of the NVTable */
-  if (GPOINTER_TO_UINT(entry) < GPOINTER_TO_UINT(nvtable))
+  if ((guint8 *)(entry) < (guint8 *)(nvtable))
     return FALSE;
 
   /* entry header is inside the allocated NVTable */
-  if (GPOINTER_TO_UINT(entry) + NV_ENTRY_DIRECT_HDR > GPOINTER_TO_UINT(nvtable) + nvtable->size)
+  if ((guint8 *)entry + NV_ENTRY_DIRECT_HDR > (guint8 *)nvtable + nvtable->size)
     return FALSE;
   /* entry as a whole is inside the allocated NVTable */
-  if (GPOINTER_TO_UINT(entry) + entry->alloc_len > GPOINTER_TO_UINT(nvtable) + nvtable->size)
+  if ((guint8 *)entry + entry->alloc_len > ((guint8 *)nvtable + nvtable->size))
     return FALSE;
 
   if (!entry->indirect)
@@ -203,16 +262,26 @@ _update_entry(LogMessageSerializationState *state, NVEntry *entry)
 {
   if ((state->nvtable_flags & NVT_SUPPORTS_UNSET) == 0)
     {
-      /* if this was serialized with a syslog-ng that didn't support unset, make sure that:
-       *   1) unset is set to FALSE
-       *   2) the rest of the bits are cleared too
+      /* if this was serialized with a syslog-ng that didn't support unset or types, make sure that:
+       *   1) only the bits that were present in that version might be set
+       *   2) the rest of the bits are cleared
        *
        * This is needed as earlier syslog-ng versions unfortunately didn't
        * set the flags to 0, so it might contain garbage.  Anything that is
        * past NVT_SUPPORTS_UNSET however sets these bits to zero to make
        * adding new flags easier. */
-      entry->unset = FALSE;
-      entry->__bit_padding = 0;
+      entry->flags = entry->flags & NVENTRY_FLAGS_DEFINED_IN_LEGACY_FORMATS;
+    }
+  if (!entry->type_present)
+    {
+      entry->type_present = TRUE;
+      if (entry->indirect)
+        {
+          entry->type = log_msg_map_legacy_dbparser_type_to_generic_type(entry->vindirect.__deprecated_type_field);
+          entry->vindirect.__deprecated_type_field = 0;
+        }
+      else
+        entry->type = LM_VT_STRING;
     }
   return TRUE;
 }

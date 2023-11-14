@@ -23,16 +23,17 @@
  */
 
 #include "cr_template.h"
-#include "timeutils/misc.h"
 #include "stopwatch.h"
+#include "msg_parse_lib.h"
+
+#include "timeutils/misc.h"
 #include "logmsg/logmsg.h"
 #include "gsockaddr.h"
 #include "cfg.h"
 
-#include <criterion/criterion.h>
 #include <string.h>
+#include <criterion/criterion.h>
 
-#include "msg_parse_lib.h"
 
 static MsgFormatOptions parse_options;
 
@@ -75,9 +76,9 @@ LogMessage *
 create_empty_message(void)
 {
   LogMessage *msg;
-  const char *msg_str = "<155>2006-02-11T10:34:56+01:00 bzorp syslog-ng[23323]:árvíztűrőtükörfúrógép";
+  const gchar *msg_str = "<155>2006-02-11T10:34:56+01:00 bzorp syslog-ng[23323]:árvíztűrőtükörfúrógép";
 
-  msg = log_msg_new(msg_str, strlen(msg_str), &parse_options);
+  msg = msg_format_parse(&parse_options, (const guchar *) msg_str, strlen(msg_str));
   log_msg_set_saddr_ref(msg, g_sockaddr_inet_new("10.11.12.13", 1010));
   log_msg_set_daddr_ref(msg, g_sockaddr_inet_new("127.0.0.5", 6514));
   log_msg_set_match(msg, 0, "whole-match", -1);
@@ -131,12 +132,14 @@ create_sample_message(void)
   log_msg_set_value_by_name(msg, "comma_value", "value,with,a,comma", -1);
   log_msg_set_value_by_name(msg, "empty_value", "", -1);
   log_msg_set_value_by_name(msg, "template_name", "dummy", -1);
+  log_msg_set_value_by_name_with_type(msg, "number1", "123", -1, LM_VT_INT64);
+  log_msg_set_value_by_name_with_type(msg, "number2", "456", -1, LM_VT_INT64);
 
   return msg;
 }
 
 LogTemplate *
-compile_template(const gchar *template, gboolean escaping)
+compile_template_with_escaping(const gchar *template, gboolean escaping)
 {
   LogTemplate *templ = log_template_new(configuration, NULL);
   gboolean success;
@@ -152,13 +155,27 @@ compile_template(const gchar *template, gboolean escaping)
   return templ;
 }
 
+LogTemplate *
+compile_template(const gchar *template)
+{
+  return compile_template_with_escaping(template, FALSE);
+}
+
+LogTemplate *
+compile_escaped_template(const gchar *template)
+{
+  return compile_template_with_escaping(template, TRUE);
+}
+
 void
 assert_template_format_with_escaping_and_context_msgs(const gchar *template, gboolean escaping,
                                                       const gchar *expected, gssize expected_len,
+                                                      LogMessageValueType expected_type,
                                                       LogMessage **msgs, gint num_messages)
 {
-  LogTemplate *templ = compile_template(template, escaping);
+  LogTemplate *templ = compile_template_with_escaping(template, escaping);
   const gchar *prefix = "somevoodooprefix/";
+  LogMessageValueType type;
   gint prefix_len = strlen(prefix);
   if (!templ)
     return;
@@ -166,7 +183,8 @@ assert_template_format_with_escaping_and_context_msgs(const gchar *template, gbo
   GString *res = g_string_new(prefix);
   const gchar *context_id = "test-context-id";
 
-  log_template_append_format_with_context(templ, msgs, num_messages, NULL, LTZ_LOCAL, 999, context_id, res);
+  LogTemplateEvalOptions options = {NULL, LTZ_LOCAL, 999, context_id, LM_VT_STRING};
+  log_template_append_format_value_and_type_with_context(templ, msgs, num_messages, &options, res, &type);
   cr_assert(strncmp(res->str, prefix, prefix_len) == 0,
             "the prefix was overwritten by the template, template=%s, res=%s, expected_prefix=%s",
             template, res->str, prefix);
@@ -179,6 +197,10 @@ assert_template_format_with_escaping_and_context_msgs(const gchar *template, gbo
   cr_assert_arr_eq(res->str + prefix_len, expected, expected_len,
                    "context template test failed, template=%s, actual=%.*s, expected=%.*s",
                    template, (gint) res->len - prefix_len, res->str + prefix_len, (gint) expected_len, expected);
+  if (expected_type != LM_VT_NONE)
+    cr_assert_eq(type, expected_type,
+                 "expected type does not match template=%s, type=%d, expected_type=%d",
+                 template, type, expected_type);
   log_template_unref(templ);
   g_string_free(res, TRUE);
 }
@@ -187,7 +209,7 @@ void
 assert_template_format_with_context_msgs(const gchar *template, const gchar *expected, LogMessage **msgs,
                                          gint num_messages)
 {
-  assert_template_format_with_escaping_and_context_msgs(template, FALSE, expected, -1, msgs, num_messages);
+  assert_template_format_with_escaping_and_context_msgs(template, FALSE, expected, -1, LM_VT_NONE, msgs, num_messages);
 }
 
 
@@ -196,7 +218,7 @@ assert_template_format_with_escaping_msg(const gchar *template, gboolean escapin
                                          const gchar *expected,
                                          LogMessage *msg)
 {
-  assert_template_format_with_escaping_and_context_msgs(template, escaping, expected, -1, &msg, 1);
+  assert_template_format_with_escaping_and_context_msgs(template, escaping, expected, -1, LM_VT_NONE, &msg, 1);
 }
 
 void
@@ -221,6 +243,25 @@ assert_template_format(const gchar *template, const gchar *expected)
 }
 
 void
+assert_template_format_value_and_type(const gchar *template, const gchar *expected, LogMessageValueType expected_type)
+{
+  LogMessage *msg = create_sample_message();
+
+  assert_template_format_with_escaping_and_context_msgs(template, FALSE, expected, -1, expected_type, &msg, 1);
+  log_msg_unref(msg);
+}
+
+void
+assert_template_format_value_and_type_with_escaping(const gchar *template, gboolean escaping, const gchar *expected,
+                                                    LogMessageValueType expected_type)
+{
+  LogMessage *msg = create_sample_message();
+
+  assert_template_format_with_escaping_and_context_msgs(template, escaping, expected, -1, expected_type, &msg, 1);
+  log_msg_unref(msg);
+}
+
+void
 assert_template_format_with_context(const gchar *template, const gchar *expected)
 {
   LogMessage *msg;
@@ -239,7 +280,7 @@ assert_template_format_with_len(const gchar *template, const gchar *expected, gs
 {
   LogMessage *msg = create_sample_message();
 
-  assert_template_format_with_escaping_and_context_msgs(template, FALSE, expected, expected_len, &msg, 1);
+  assert_template_format_with_escaping_and_context_msgs(template, FALSE, expected, expected_len, LM_VT_NONE, &msg, 1);
   log_msg_unref(msg);
 }
 
@@ -284,7 +325,7 @@ perftest_template(gchar *template)
   start_stopwatch();
   for (i = 0; i < BENCHMARK_COUNT; i++)
     {
-      log_template_format(templ, msg, NULL, LTZ_LOCAL, 0, NULL, res);
+      log_template_format(templ, msg, &DEFAULT_TEMPLATE_EVAL_OPTIONS, res);
     }
   stop_stopwatch_and_display_result(BENCHMARK_COUNT,
                                     "      %-90.*s",

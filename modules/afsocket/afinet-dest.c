@@ -50,6 +50,8 @@
 #  define _GNU_SOURCE 1
 #endif
 
+static const gint MAX_UDP_PAYLOAD_SIZE = 65507;
+
 typedef struct _AFInetDestDriverTLSVerifyData
 {
   TLSContext *tls_context;
@@ -172,6 +174,14 @@ afinet_dd_tls_verify_data_free(gpointer s)
 }
 
 static gboolean
+_is_tls_used(const AFInetDestDriver *self)
+{
+  TransportMapperInet *transport_mapper_inet = (TransportMapperInet *) self->super.transport_mapper;
+
+  return transport_mapper_inet->tls_context != NULL;
+}
+
+static gboolean
 _is_failover_used(const AFInetDestDriver *self)
 {
   return self->failover != NULL;
@@ -190,12 +200,19 @@ void
 afinet_dd_set_tls_context(LogDriver *s, TLSContext *tls_context)
 {
   AFInetDestDriver *self = (AFInetDestDriver *) s;
-  AFInetDestDriverTLSVerifyData *verify_data;
-  TLSVerifier *verifier;
+  transport_mapper_inet_set_tls_context((TransportMapperInet *) self->super.transport_mapper, tls_context);
+}
 
-  verify_data = afinet_dd_tls_verify_data_new(tls_context, _afinet_dd_get_hostname(self));
-  verifier = tls_verifier_new(afinet_dd_verify_callback, verify_data, afinet_dd_tls_verify_data_free);
-  transport_mapper_inet_set_tls_context((TransportMapperInet *) self->super.transport_mapper, tls_context, verifier);
+void
+afinet_dd_setup_tls_verifier(AFInetDestDriver *self)
+{
+  TransportMapperInet *transport_mapper_inet = (TransportMapperInet *) self->super.transport_mapper;
+
+  AFInetDestDriverTLSVerifyData *verify_data;
+  verify_data = afinet_dd_tls_verify_data_new(transport_mapper_inet->tls_context, _afinet_dd_get_hostname(self));
+  TLSVerifier *verifier = tls_verifier_new(afinet_dd_verify_callback, verify_data, afinet_dd_tls_verify_data_free);
+
+  transport_mapper_inet_set_tls_verifier(transport_mapper_inet, verifier);
 }
 
 void
@@ -216,11 +233,22 @@ afinet_dd_add_failovers(LogDriver *s, GList *failovers)
 }
 
 void
+afinet_dd_fail_back_to_primary(gpointer s, gint fd, GSockAddr *saddr)
+{
+  AFInetDestDriver *self = (AFInetDestDriver *) s;
+
+  if (_is_tls_used(self))
+    afinet_dd_setup_tls_verifier(self);
+
+  afsocket_dd_connected_with_fd(s, fd, saddr);
+}
+
+void
 afinet_dd_enable_failback(LogDriver *s)
 {
   AFInetDestDriver *self = (AFInetDestDriver *) s;
   g_assert(self->failover != NULL);
-  afinet_dd_failover_enable_failback(self->failover, &self->super, afsocket_dd_connected_with_fd);
+  afinet_dd_failover_enable_failback(self->failover, &self->super, afinet_dd_fail_back_to_primary);
 }
 
 void
@@ -328,9 +356,13 @@ afinet_dd_setup_addresses(AFSocketDestDriver *s)
   if (_is_failover_used(self))
     afinet_dd_failover_next(self->failover);
 
+  if (_is_tls_used(self))
+    afinet_dd_setup_tls_verifier(self);
+
   if (!_setup_dest_addr(self))
     return FALSE;
 
+  iv_invalidate_now();
   return TRUE;
 }
 
@@ -398,11 +430,19 @@ afinet_dd_init(LogPipe *s)
           if (!self->lnet_ctx)
             {
               msg_error("Error initializing raw socket, spoof-source support disabled",
-                        evt_tag_str("error", NULL));
+                        evt_tag_str("error", error));
             }
         }
     }
 #endif
+
+  if (self->super.transport_mapper->sock_type == SOCK_DGRAM)
+    {
+      if (self->super.writer_options.truncate_size == -1)
+        {
+          self->super.writer_options.truncate_size = MAX_UDP_PAYLOAD_SIZE;
+        }
+    }
 
   if (_is_failover_used(self))
     {
@@ -510,11 +550,6 @@ afinet_dd_construct_ipv6_packet(AFInetDestDriver *self, LogMessage *msg, GString
   if (udp == -1)
     return FALSE;
 
-  /* There seems to be a bug in libnet 1.1.2 that is triggered when
-   * checksumming UDP6 packets. This is a workaround below. */
-
-  libnet_toggle_checksum(self->lnet_ctx, udp, LIBNET_OFF);
-
   memcpy(&ln_src, &src.sin6_addr, sizeof(ln_src));
   memcpy(&ln_dst, &dst->sin6_addr, sizeof(ln_dst));
   ip = libnet_build_ipv6(0, 0,
@@ -556,7 +591,7 @@ afinet_dd_spoof_write_message(AFInetDestDriver *self, LogMessage *msg, const Log
 {
   g_assert(self->super.transport_mapper->sock_type == SOCK_DGRAM);
 
-  g_static_mutex_lock(&self->lnet_lock);
+  g_mutex_lock(&self->lnet_lock);
 
   if (!self->lnet_buffer)
     self->lnet_buffer = g_string_sized_new(self->spoof_source_max_msglen);
@@ -584,7 +619,7 @@ afinet_dd_spoof_write_message(AFInetDestDriver *self, LogMessage *msg, const Log
   log_msg_unref(msg);
 
 finish:
-  g_static_mutex_unlock(&self->lnet_lock);
+  g_mutex_unlock(&self->lnet_lock);
   return success;
 }
 
@@ -635,7 +670,7 @@ afinet_dd_free(LogPipe *s)
 #if SYSLOG_NG_ENABLE_SPOOF_SOURCE
   if (self->lnet_buffer)
     g_string_free(self->lnet_buffer, TRUE);
-  g_static_mutex_free(&self->lnet_lock);
+  g_mutex_clear(&self->lnet_lock);
 #endif
   afsocket_dd_free(s);
 }
@@ -657,7 +692,7 @@ afinet_dd_new_instance(TransportMapper *transport_mapper, gchar *hostname, Globa
   self->primary = g_strdup(hostname);
 
 #if SYSLOG_NG_ENABLE_SPOOF_SOURCE
-  g_static_mutex_init(&self->lnet_lock);
+  g_mutex_init(&self->lnet_lock);
   self->spoof_source_max_msglen = 1024;
 #endif
   return self;

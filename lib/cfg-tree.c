@@ -255,7 +255,7 @@ log_expr_node_set_aux(LogExprNode *self, gpointer aux, GDestroyNotify destroy)
  * more information about LogExprNode objects and log expressions.
  **/
 LogExprNode *
-log_expr_node_new(gint layout, gint content, const gchar *name, LogExprNode *children, guint32 flags, YYLTYPE *yylloc)
+log_expr_node_new(gint layout, gint content, const gchar *name, LogExprNode *children, guint32 flags, CFG_LTYPE *yylloc)
 {
   LogExprNode *self = g_new0(LogExprNode, 1);
 
@@ -302,7 +302,7 @@ _log_expr_node_free(LogExprNode *self)
 }
 
 LogExprNode *
-log_expr_node_new_pipe(LogPipe *pipe, YYLTYPE *yylloc)
+log_expr_node_new_pipe(LogPipe *pipe, CFG_LTYPE *yylloc)
 {
   LogExprNode *node = log_expr_node_new(ENL_SINGLE, ENC_PIPE, NULL, NULL, 0, yylloc);
 
@@ -311,79 +311,79 @@ log_expr_node_new_pipe(LogPipe *pipe, YYLTYPE *yylloc)
 }
 
 LogExprNode *
-log_expr_node_new_source(const gchar *name, LogExprNode *children, YYLTYPE *yylloc)
+log_expr_node_new_source(const gchar *name, LogExprNode *children, CFG_LTYPE *yylloc)
 {
   return log_expr_node_new(ENL_SEQUENCE, ENC_SOURCE, name, children, 0, yylloc);
 }
 
 LogExprNode *
-log_expr_node_new_source_reference(const gchar *name, YYLTYPE *yylloc)
+log_expr_node_new_source_reference(const gchar *name, CFG_LTYPE *yylloc)
 {
   return log_expr_node_new(ENL_REFERENCE, ENC_SOURCE, name, NULL, 0, yylloc);
 }
 
 LogExprNode *
-log_expr_node_new_destination(const gchar *name, LogExprNode *children, YYLTYPE *yylloc)
+log_expr_node_new_destination(const gchar *name, LogExprNode *children, CFG_LTYPE *yylloc)
 {
   return log_expr_node_new(ENL_SEQUENCE, ENC_DESTINATION, name, children, 0, yylloc);
 }
 
 LogExprNode *
-log_expr_node_new_destination_reference(const gchar *name, YYLTYPE *yylloc)
+log_expr_node_new_destination_reference(const gchar *name, CFG_LTYPE *yylloc)
 {
   return log_expr_node_new(ENL_REFERENCE, ENC_DESTINATION, name, NULL, 0, yylloc);
 }
 
 LogExprNode *
-log_expr_node_new_filter(const gchar *name, LogExprNode *child, YYLTYPE *yylloc)
+log_expr_node_new_filter(const gchar *name, LogExprNode *child, CFG_LTYPE *yylloc)
 {
   return log_expr_node_new(ENL_SEQUENCE, ENC_FILTER, name, child, 0, yylloc);
 }
 
 LogExprNode *
-log_expr_node_new_filter_reference(const gchar *name, YYLTYPE *yylloc)
+log_expr_node_new_filter_reference(const gchar *name, CFG_LTYPE *yylloc)
 {
   return log_expr_node_new(ENL_REFERENCE, ENC_FILTER, name, NULL, 0, yylloc);
 }
 
 LogExprNode *
-log_expr_node_new_parser(const gchar *name, LogExprNode *children, YYLTYPE *yylloc)
+log_expr_node_new_parser(const gchar *name, LogExprNode *children, CFG_LTYPE *yylloc)
 {
   return log_expr_node_new(ENL_SEQUENCE, ENC_PARSER, name, children, 0, yylloc);
 }
 
 LogExprNode *
-log_expr_node_new_parser_reference(const gchar *name, YYLTYPE *yylloc)
+log_expr_node_new_parser_reference(const gchar *name, CFG_LTYPE *yylloc)
 {
   return log_expr_node_new(ENL_REFERENCE, ENC_PARSER, name, NULL, 0, yylloc);
 }
 
 LogExprNode *
-log_expr_node_new_rewrite(const gchar *name, LogExprNode *children, YYLTYPE *yylloc)
+log_expr_node_new_rewrite(const gchar *name, LogExprNode *children, CFG_LTYPE *yylloc)
 {
   return log_expr_node_new(ENL_SEQUENCE, ENC_REWRITE, name, children, 0, yylloc);
 }
 
 LogExprNode *
-log_expr_node_new_rewrite_reference(const gchar *name, YYLTYPE *yylloc)
+log_expr_node_new_rewrite_reference(const gchar *name, CFG_LTYPE *yylloc)
 {
   return log_expr_node_new(ENL_REFERENCE, ENC_REWRITE, name, NULL, 0, yylloc);
 }
 
 LogExprNode *
-log_expr_node_new_log(LogExprNode *children, guint32 flags, YYLTYPE *yylloc)
+log_expr_node_new_log(LogExprNode *children, guint32 flags, CFG_LTYPE *yylloc)
 {
   return log_expr_node_new(ENL_SEQUENCE, ENC_PIPE, NULL, children, flags, yylloc);
 }
 
 LogExprNode *
-log_expr_node_new_sequence(LogExprNode *children, YYLTYPE *yylloc)
+log_expr_node_new_sequence(LogExprNode *children, CFG_LTYPE *yylloc)
 {
   return log_expr_node_new(ENL_SEQUENCE, ENC_PIPE, NULL, children, 0, yylloc);
 }
 
 LogExprNode *
-log_expr_node_new_junction(LogExprNode *children, YYLTYPE *yylloc)
+log_expr_node_new_junction(LogExprNode *children, CFG_LTYPE *yylloc)
 {
   return log_expr_node_new(ENL_JUNCTION, ENC_PIPE, NULL, children, 0, yylloc);
 }
@@ -519,7 +519,7 @@ log_expr_node_conditional_set_false_branch_of_the_last_if(LogExprNode *condition
 /*
  */
 LogExprNode *
-log_expr_node_new_conditional_with_filter(LogExprNode *filter_pipe, LogExprNode *true_expr, YYLTYPE *yylloc)
+log_expr_node_new_conditional_with_filter(LogExprNode *filter_pipe, LogExprNode *true_expr, CFG_LTYPE *yylloc)
 {
   LogExprNode *filter_node = log_expr_node_new_filter(NULL, filter_pipe, NULL);
 
@@ -561,7 +561,7 @@ log_expr_node_new_conditional_with_filter(LogExprNode *filter_pipe, LogExprNode 
 }
 
 LogExprNode *
-log_expr_node_new_conditional_with_block(LogExprNode *block, YYLTYPE *yylloc)
+log_expr_node_new_conditional_with_block(LogExprNode *block, CFG_LTYPE *yylloc)
 {
   /*
    *  channel {
@@ -1022,6 +1022,12 @@ cfg_tree_compile_sequence(CfgTree *self, LogExprNode *node,
     }
 
 
+  if (!first_pipe && !last_pipe)
+    {
+      /* this is an empty sequence, insert a do-nothing LogPipe */
+      first_pipe = last_pipe = cfg_tree_new_pipe(self, node);
+    }
+
 
   /* NOTE: if flow control is enabled, then we either need to have an
    * embedded log statement (in which case first_pipe is set, as we're not
@@ -1031,12 +1037,6 @@ cfg_tree_compile_sequence(CfgTree *self, LogExprNode *node,
 
   g_assert(((node->flags & LC_FLOW_CONTROL) && (first_pipe || source_join_pipe)) ||
            !(node->flags & LC_FLOW_CONTROL));
-
-  if (!first_pipe && !last_pipe)
-    {
-      /* this is an empty sequence, insert a do-nothing LogPipe */
-      first_pipe = last_pipe = cfg_tree_new_pipe(self, node);
-    }
 
   if (!node_properties_propagated)
     {
@@ -1366,29 +1366,34 @@ cfg_tree_compile(CfgTree *self)
 static gboolean
 _verify_unique_persist_names_among_pipes(const GPtrArray *initialized_pipes)
 {
-  GHashTable *pipe_persist_names = g_hash_table_new(g_str_hash, g_str_equal);
+  GHashTable *pipe_persist_names = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
   gboolean result = TRUE;
 
   for (gint i = 0; i < initialized_pipes->len; ++i)
     {
       LogPipe *current_pipe = g_ptr_array_index(initialized_pipes, i);
-      const gchar *current_pipe_name = log_pipe_get_persist_name(current_pipe);
+      const gchar *current_pipe_name = g_strdup(log_pipe_get_persist_name(current_pipe));
 
       if (current_pipe_name != NULL)
         {
-          if (g_hash_table_lookup_extended(pipe_persist_names, current_pipe_name, NULL, NULL))
+          LogPipe *other_pipe = g_hash_table_lookup(pipe_persist_names, current_pipe_name);
+          if (other_pipe)
             {
-              msg_error("Error checking the uniqueness of the persist names, please override it "
-                        "with persist-name option. Shutting down.",
+              msg_error("Automatic assignment of persist names failed, as "
+                        "conflicting persist-names were found. Please override "
+                        "the automatically assigned identifier using an "
+                        "explicit perist-name() option or remove the duplicated "
+                        "configuration elements",
                         evt_tag_str("persist_name", current_pipe_name),
-                        log_pipe_location_tag(current_pipe), NULL);
+                        log_pipe_location_tag(current_pipe),
+                        log_pipe_location_tag(other_pipe));
               result = FALSE;
             }
           else
             {
               g_hash_table_replace(pipe_persist_names,
-                                   (gpointer)current_pipe_name,
-                                   (gpointer)current_pipe_name);
+                                   (gpointer) current_pipe_name,
+                                   current_pipe);
             }
         }
     }
@@ -1441,6 +1446,27 @@ cfg_tree_stop(CfgTree *self)
     }
 
   return success;
+}
+
+gboolean
+cfg_tree_on_inited(CfgTree *self)
+{
+  gint i;
+
+  for (i = 0; i < self->initialized_pipes->len; i++)
+    {
+      LogPipe *pipe = g_ptr_array_index(self->initialized_pipes, i);
+
+      if (!log_pipe_on_config_inited(pipe))
+        {
+          msg_error("Error executing on_config_inited hook",
+                    evt_tag_str("plugin_name", pipe->plugin_name ? pipe->plugin_name : "not a plugin"),
+                    log_pipe_location_tag(pipe));
+          return FALSE;
+        }
+    }
+
+  return TRUE;
 }
 
 void

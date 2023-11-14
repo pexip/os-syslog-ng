@@ -89,7 +89,7 @@ log_rewrite_set_severity_process(LogRewrite *s, LogMessage **pmsg, const LogPath
 
   log_msg_make_writable(pmsg, path_options);
 
-  log_template_format(self->severity, *pmsg, NULL, LTZ_LOCAL, 0, NULL, result);
+  log_template_format(self->severity, *pmsg, &DEFAULT_TEMPLATE_EVAL_OPTIONS, result);
 
   const gint severity = _convert_severity(result);
   if (severity < 0)
@@ -103,7 +103,7 @@ log_rewrite_set_severity_process(LogRewrite *s, LogMessage **pmsg, const LogPath
   msg_trace("Setting syslog severity",
             evt_tag_int("old_severity", LOG_PRI((*pmsg)->pri)),
             evt_tag_int("new_severity", severity),
-            evt_tag_printf("msg", "%p", *pmsg));
+            evt_tag_msg_reference(*pmsg));
   _set_msg_severity(*pmsg, severity);
 
 error:
@@ -117,8 +117,7 @@ log_rewrite_set_severity_clone(LogPipe *s)
   LogRewriteSetSeverity *cloned = (LogRewriteSetSeverity *)log_rewrite_set_severity_new(log_template_ref(self->severity),
                                   s->cfg);
 
-  if (self->super.condition)
-    cloned->super.condition = filter_expr_ref(self->super.condition);
+  cloned->super.condition = filter_expr_clone(self->super.condition);
 
   return &cloned->super.super;
 }

@@ -34,7 +34,7 @@ typedef struct _FilterCall
 } FilterCall;
 
 static gboolean
-filter_call_eval(FilterExprNode *s, LogMessage **msgs, gint num_msg)
+filter_call_eval(FilterExprNode *s, LogMessage **msgs, gint num_msg, LogTemplateEvalOptions *options)
 {
   gboolean res = FALSE;
   FilterCall *self = (FilterCall *) s;
@@ -42,7 +42,7 @@ filter_call_eval(FilterExprNode *s, LogMessage **msgs, gint num_msg)
   if (self->filter_expr)
     {
       /* rule is assumed to contain a single filter pipe */
-      res = filter_expr_eval_with_context(self->filter_expr, msgs, num_msg);
+      res = filter_expr_eval_with_context(self->filter_expr, msgs, num_msg, options);
     }
 
   if (res)
@@ -52,7 +52,7 @@ filter_call_eval(FilterExprNode *s, LogMessage **msgs, gint num_msg)
 
   msg_trace("filter() evaluation started",
             evt_tag_str("called-rule", self->rule),
-            evt_tag_printf("msg", "%p", msgs[num_msg - 1]));
+            evt_tag_msg_reference(msgs[num_msg - 1]));
 
   return res ^ s->comp;
 }
@@ -85,7 +85,7 @@ filter_call_init(FilterExprNode *s, GlobalConfig *cfg)
 
       LogFilterPipe *filter_pipe = (LogFilterPipe *) rule->children->object;
 
-      self->filter_expr = filter_expr_ref(filter_pipe->expr);
+      self->filter_expr = filter_expr_clone(filter_pipe->expr);
       if (!filter_expr_init(self->filter_expr, cfg))
         return FALSE;
       self->super.modify = self->filter_expr->modify;
@@ -140,4 +140,14 @@ filter_call_new(gchar *rule, GlobalConfig *cfg)
   self->rule = g_strdup(rule);
 
   return &self->super;
+}
+
+FilterExprNode *
+filter_call_clone(FilterExprNode *s)
+{
+  FilterCall *self = (FilterCall *) s;
+  FilterExprNode *cloned_self = filter_call_new(self->rule, configuration);
+  filter_call_init(cloned_self, configuration);
+
+  return cloned_self;
 }

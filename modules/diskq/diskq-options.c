@@ -29,14 +29,6 @@
 void
 disk_queue_options_qout_size_set(DiskQueueOptions *self, gint qout_size)
 {
-  if (qout_size < 64)
-    {
-      msg_warning("WARNING: The configured qout size is smaller than the minimum allowed",
-                  evt_tag_int("configured_size", qout_size),
-                  evt_tag_int("minimum_allowed_size", 64),
-                  evt_tag_int("new_size", 64));
-      qout_size = 64;
-    }
   self->qout_size = qout_size;
 }
 
@@ -76,6 +68,12 @@ void
 disk_queue_options_mem_buf_length_set(DiskQueueOptions *self, gint mem_buf_length)
 {
   self->mem_buf_length = mem_buf_length;
+}
+
+void
+disk_queue_options_set_truncate_size_ratio(DiskQueueOptions *self, gdouble truncate_size_ratio)
+{
+  self->truncate_size_ratio = truncate_size_ratio;
 }
 
 void
@@ -128,6 +126,7 @@ disk_queue_options_set_default_options(DiskQueueOptions *self)
   self->mem_buf_size = -1;
   self->qout_size = -1;
   self->dir = g_strdup(get_installation_path_for(SYSLOG_NG_PATH_LOCALSTATEDIR));
+  self->truncate_size_ratio = -1;
 }
 
 void
@@ -139,5 +138,3 @@ disk_queue_options_destroy(DiskQueueOptions *self)
       self->dir = NULL;
     }
 }
-
-

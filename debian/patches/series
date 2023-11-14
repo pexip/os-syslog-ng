@@ -1,14 +1,4 @@
-0001-syslogformat-reorder-functions.patch
-0002-syslogformat-utilize-sd_step.patch
-0003-syslogformat-sd_step-skip-if-no-char-left.patch
-0004-syslogformat-sd_step-_process_any_char.patch
-0005-syslogformat-skip-cisco-sequence-id-parsing.patch
-0006-syslogformat-fix-out-of-bounds-reading-of-data-buffe.patch
-0007-syslogformat-fix-reading-cisco-sequence-id-out-of-bo.patch
-0008-timeutils-fix-iterating-out-of-the-range-of-timestam.patch
-0009-timeutils-add-tests-for-non-zero-terminated-inputs.patch
-0010-timeutils-name-repeating-constant.patch
-0011-timeutils-fix-invalid-calculation-of-ISO-timestamp-l.patch
-0012-timeutils-fix-out-of-bounds-reading-of-data-buffer.patch
+0001-Replace-direct-md5sum-file-access-with-dpkg-verify-c.patch
+0002-Update-control-file-path.patch
 systemd_default_prio.patch
 openssl3-support.patch

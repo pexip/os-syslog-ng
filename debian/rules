@@ -68,6 +68,8 @@ ifneq (,${DH_VERBOSE})
 SILENT_MODE	       = --disable-silent-rules
 endif
 
+criterion = $(wildcard /usr/lib/*/pkgconfig/criterion.pc)
+
 ##
 #* Overrides for dh_auto*
 ##
@@ -134,8 +136,8 @@ override_dh_auto_install:
 # To get better test results, and actually see failing tests, we need
 # to pass VERBOSE=1 to make when running the tests. Do that here.
 override_dh_auto_test:
-	# disabled ATM
-	#dh_auto_test -- VERBOSE=1
+	-[ "${criterion}" ] && \
+		dh_auto_test -- VERBOSE=1
 
 ##
 #* Overrides for other debhelper commands
@@ -190,7 +192,7 @@ override_dh_python3:
 ##
 
 override_dh_missing:
-	dh_missing $(shell awk '{sub(/.*\//, "", $$1); print "-X"$$2$$1}' debian/syslog-ng-mod-extra.install) # --fail-missing
+	dh_missing $(shell awk '{sub(/.*\//, "", $$1); print "-X"$$2$$1}' debian/syslog-ng-scl.install) # --fail-missing
 
 # By default, the arch:all syslog-ng package does not need anything
 # built, so build-indep shall be empty. This avoids triggering another

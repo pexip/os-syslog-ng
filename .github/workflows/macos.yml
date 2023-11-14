@@ -1,39 +1,76 @@
-name: macOS-latest
+name: macOS
 
-on: [pull_request, push]
+on:
+  pull_request:
+  push:
+  schedule:
+    - cron: '00 21 * * *'
 
 jobs:
-  build-and-check:
+  general:
     runs-on: macOS-latest
     steps:
-      - uses: actions/checkout@v2
-      - name: build-and-check
+      - name: Checkout syslog-ng source
+        uses: actions/checkout@v2
+
+      - name: Unlinking preinstalled Python 2 (workaround)
+        # The python@3 brew package has to be installed and linked system-wide (it's a dependency of glib and syslog-ng)
+        # The macos-latest GitHub runner has Python 2.7 preinstalled as a pkg, this prevents linking the python@3
+        # brew package, even when linking is forced.
+        run : |
+          find /usr/local/bin/ -lname "*Python.framework*" -delete
+
+      - name: Install dependencies
+        run: |
+          brew update --preinstall
+          brew bundle --file=contrib/Brewfile
+          pip3 install --user -r requirements.txt
+
+      - name: Set ENV variables
+        run: |
+          . .github/workflows/gh-tools.sh
+
+          PYTHONUSERBASE="${HOME}/python_packages"
+          PKG_CONFIG_PATH="$(brew --prefix)/opt/openssl@1.1/lib/pkgconfig:$PKG_CONFIG_PATH"
+          THREADS="$(sysctl -n hw.physicalcpu)"
+          CONFIGURE_FLAGS="
+            --with-ivykis=system
+            --disable-sun-streams
+            --disable-systemd
+            --disable-pacct
+            --disable-smtp
+            --disable-mqtt
+            --enable-all-modules
+            --with-python=3
+          "
+
+          gh_export PYTHONUSERBASE PKG_CONFIG_PATH THREADS CONFIGURE_FLAGS
+          gh_path "/usr/local/opt/bison/bin:/usr/local/opt/libnet/bin:${PYTHONUSERBASE}/bin"
+
+      - name: autogen.sh
+        run: |
+          ./autogen.sh
+
+      - name: configure
+        run: |
+          ./configure ${CONFIGURE_FLAGS}
+
+      - name: make
         run: |
           set -e
-          export PYTHONUSERBASE=$HOME/python_packages
-          export PKG_CONFIG_PATH=/usr/local/opt/openssl/lib/pkgconfig:$PKG_CONFIG_PATH
-          export PATH=/usr/local/opt/bison/bin:/usr/local/opt/libnet/bin:$PYTHONUSERBASE/bin:$PATH
 
-          brew bundle --file=contrib/Brewfile
-          pip install --user -r requirements.txt
-
-          ./autogen.sh
-          ./configure \
-            --with-ivykis=system \
-            --disable-sun-streams \
-            --disable-systemd \
-            --disable-pacct \
-            --disable-smtp \
-            --enable-all-modules
-
-          make --keep-going -j $(sysctl -n hw.physicalcpu) || \
+          make --keep-going -j ${THREADS} || \
             { \
               S=$?; \
               make V=1; \
               return $S; \
             }
 
-          make --keep-going check -j $(sysctl -n hw.physicalcpu) || \
+      - name: make check
+        run: |
+          set -e
+
+          make --keep-going check -j ${THREADS} || \
             { \
               S=$?; \
               echo "Output of first test invocation:"; \

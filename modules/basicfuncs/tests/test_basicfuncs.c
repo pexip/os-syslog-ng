@@ -21,11 +21,10 @@
  *
  */
 
-#include "libtest/cr_template.h"
-#include "libtest/grab-logging.h"
-#include "libtest/testutils.h"
 #include <criterion/criterion.h>
 #include <criterion/parameterized.h>
+#include "libtest/cr_template.h"
+#include "libtest/grab-logging.h"
 
 #include "apphook.h"
 #include "plugin.h"
@@ -190,7 +189,7 @@ Test(basicfuncs, test_str_funcs)
 #endif
   start_grabbing_messages();
   assert_template_format("$(dns-resolve-ip --use-dns=no --dns-cache=yes 123.123.123.123)", "123.123.123.123");
-  assert_grabbed_messages_contain("WARNING: With use-dns(no), dns-cache() will be forced to 'no' too!", NULL);
+  assert_grabbed_log_contains("WARNING: With use-dns(no), dns-cache() will be forced to 'no' too!");
   stop_grabbing_messages();
 
   assert_template_format("$(length $HOST $PID)", "5 5");
@@ -201,6 +200,10 @@ Test(basicfuncs, test_str_funcs)
   assert_template_format("$(substr $HOST 1)", "zorp");
   assert_template_format("$(substr $HOST -1)", "p");
   assert_template_format("$(substr $HOST -2 1)", "r");
+
+  assert_template_format("$(substr 'ssstring-shorter-than-the-specified-length' 2 1400)",
+                         "string-shorter-than-the-specified-length");
+
 
   assert_template_format("$(strip ${APP.STRIP1})", "value");
   assert_template_format("$(strip ${APP.STRIP2})", "value");
@@ -548,6 +551,20 @@ Test(basicfuncs, test_context_funcs)
                                       "\"value,with,a,comma\",\"value,with,a,comma\"");
 }
 
+Test(basicfuncs, test_vp_funcs)
+{
+  assert_template_format_with_context("$(values .unix.*)", "command,1000,1000");
+  assert_template_format_with_context("$(values .foo.*)", "");
+  assert_template_format_with_context("$(values PID PROGRAM)", "23323,syslog-ng");
+  assert_template_format_with_context("$(values PROGRAM PID)", "23323,syslog-ng");
+  assert_template_format_with_context("$(values)", "");
+  assert_template_format_with_context("$(names .unix.*)", ".unix.cmd,.unix.gid,.unix.uid");
+  assert_template_format_with_context("$(names .foo.*)", "");
+  assert_template_format_with_context("$(names PID PROGRAM)", "PID,PROGRAM");
+  assert_template_format_with_context("$(names PROGRAM PID)", "PID,PROGRAM");
+  assert_template_format_with_context("$(names)", "");
+}
+
 
 Test(basicfuncs, test_tfurlencode)
 {
@@ -577,15 +594,16 @@ Test(basicfuncs, test_iterate)
   LogTemplate *template = log_template_new(configuration, NULL);
   cr_assert(log_template_compile(template, "Some prefix $(iterate \"$(+ 1 $_)\" 0)", NULL));
 
-  log_template_format(template, msg, NULL, LTZ_LOCAL, 999, "", result);
+  LogTemplateEvalOptions options = {NULL, LTZ_LOCAL, 999, "", LM_VT_STRING};
+  log_template_format(template, msg, &options, result);
   cr_assert_str_eq(result->str, "Some prefix 0");
 
   g_string_assign(result, "");
-  log_template_format(template, msg, NULL, LTZ_LOCAL, 999, "", result);
+  log_template_format(template, msg, &options, result);
   cr_assert_str_eq(result->str, "Some prefix 1");
 
   g_string_assign(result, "");
-  log_template_format(template, msg, NULL, LTZ_LOCAL, 999, "", result);
+  log_template_format(template, msg, &options, result);
   cr_assert_str_eq(result->str, "Some prefix 2");
 
   g_string_free(result, TRUE);
@@ -608,12 +626,40 @@ ParameterizedTestParameters(basicfuncs, test_map)
     { "Some prefix $(map \"$(+ 1 $_)\" 0,1,2)", "Some prefix 1,2,3" },
     { "Some prefix $(map \"$(+ 1 $_)\" '')", "Some prefix " },
     { "Some prefix $(map $(+ 1 $_) $(map $(+ 1 $_) 0,1,2))", "Some prefix 2,3,4" }, // embedded map
+    { "Some prefix $(map \"$(if ('$_' eq '1') 'same' 'different')\" 0,1,2)", "Some prefix different,same,different" },
+    { "Some prefix $(map \"$(if ('$_' le '1') 'smaller' 'larger')\" 0,1,2)", "Some prefix smaller,smaller,larger" },
+    { "Some prefix $(map \"$(if ('$_' ge '1') 'larger' 'smaller')\" 0,1,2)", "Some prefix smaller,larger,larger"},
+    { "$(map \"$(if ('$(echo $_)' eq '1') 'same' 'different')\" 0,1,2)", "different,same,different"},
   };
 
   return cr_make_param_array(struct test_params, params, sizeof(params)/sizeof(params[0]));
 }
 
 ParameterizedTest(struct test_params *param, basicfuncs, test_map)
+{
+  assert_template_format(param->template, param->expected);
+}
+
+ParameterizedTestParameters(basicfuncs, test_filter)
+{
+  static struct test_params params[] =
+  {
+    { "Some prefix $(filter ('1' == '1') 0,1,2)", "Some prefix 0,1,2" },
+    { "$(filter ('$_' le '1') 0,1,2)", "0,1" },
+    { "$(filter ('$(% $_ 2)' eq '0') 0,1,2,3)", "0,2" },
+    { "Something $(filter ('$_' eq '0') '')", "Something " },
+    { "$(filter ('1' eq '0') '')", "" },
+    { "$(filter message('árvíztűrőtükörfúrógép') 'doesnotchange')", "doesnotchange" },
+    { "$(filter (message('árvíz') and ('${APP.VALUE}' eq 'value')) 'doesnotchange')", "doesnotchange" },
+    { "$(filter (message('donotmatch') or ('${APP.VALUE}' eq 'value')) 'doesnotchange')", "doesnotchange" },
+    { "$(filter ('$YEAR' ge '1900') 'doesnotchange')", "doesnotchange" },
+    { "$(filter ('$YEAR' le '1900') 'doesnotchange')", "" },
+  };
+
+  return cr_make_param_array(struct test_params, params, sizeof(params)/sizeof(params[0]));
+}
+
+ParameterizedTest(struct test_params *param, basicfuncs, test_filter)
 {
   assert_template_format(param->template, param->expected);
 }

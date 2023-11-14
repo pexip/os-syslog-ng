@@ -26,9 +26,12 @@
 #include "stats/stats-csv.h"
 #include "stats/stats-counter.h"
 #include "stats/stats-registry.h"
+#include "stats/stats-cluster.h"
+#include "stats/aggregator/stats-aggregator-registry.h"
 #include "stats/stats-query-commands.h"
 #include "control/control-commands.h"
 #include "control/control-server.h"
+#include "control/control-connection.h"
 
 static void
 _reset_counter(StatsCluster *sc, gint type, StatsCounterItem *counter, gpointer user_data)
@@ -56,31 +59,78 @@ static void
 _reset_counters(void)
 {
   stats_lock();
-  stats_foreach_counter(_reset_counter_if_needed, NULL);
+  stats_foreach_counter(_reset_counter_if_needed, NULL, NULL);
   stats_unlock();
+  stats_aggregator_lock();
+  stats_aggregator_registry_reset();
+  stats_aggregator_unlock();
 }
 
 static void
-control_connection_send_stats(ControlConnection *cc, GString *command, gpointer user_data)
+_send_batched_response(const gchar *record, gpointer user_data)
 {
-  gchar *stats = stats_generate_csv();
-  GString *result = g_string_new(stats);
-  g_free(stats);
-  control_connection_send_reply(cc, result);
+  static const gsize BATCH_LEN = 2048;
+
+  gpointer *args = (gpointer *) user_data;
+  ControlConnection *cc = (ControlConnection *) args[0];
+  GString **batch = (GString **) args[1];
+
+  if (!*batch)
+    *batch = g_string_sized_new(512);
+  g_string_append_printf(*batch, "%s", record);
+
+  if ((*batch)->len > BATCH_LEN)
+    {
+      control_connection_send_batched_reply(cc, *batch);
+      *batch = NULL;
+    }
 }
 
 static void
-control_connection_reset_stats(ControlConnection *cc, GString *command, gpointer user_data)
+control_connection_send_stats(ControlConnection *cc, GString *command, gpointer user_data, gboolean *cancelled)
+{
+  GString *response = NULL;
+  gpointer args[] = {cc, &response};
+  stats_generate_csv(_send_batched_response, args, cancelled);
+  if (response != NULL)
+    control_connection_send_batched_reply(cc, response);
+  control_connection_send_close_batch(cc);
+}
+
+static void
+control_connection_reset_stats(ControlConnection *cc, GString *command, gpointer user_data, gboolean *cancelled)
 {
   GString *result = g_string_new("OK The statistics of syslog-ng have been reset to 0.");
   _reset_counters();
   control_connection_send_reply(cc, result);
 }
 
+static gboolean
+_is_cluster_orphaned(StatsCluster *sc, gpointer user_data)
+{
+  return stats_cluster_is_orphaned(sc);
+}
+
+static void
+control_connection_remove_orphans(ControlConnection *cc, GString *command, gpointer user_data, gboolean *cancelled)
+{
+  GString *result = g_string_new("OK Orphaned statistics have been removed.");
+
+  stats_aggregator_lock();
+  stats_aggregator_remove_orphaned_stats();
+  stats_aggregator_unlock();
+  stats_lock();
+  stats_foreach_cluster_remove(_is_cluster_orphaned, NULL);
+  stats_unlock();
+
+  control_connection_send_reply(cc, result);
+}
+
 void
 stats_register_control_commands(void)
 {
-  control_register_command("STATS", control_connection_send_stats, NULL);
-  control_register_command("RESET_STATS", control_connection_reset_stats, NULL);
-  control_register_command("QUERY", process_query_command, NULL);
+  control_register_command("STATS", control_connection_send_stats, NULL, TRUE);
+  control_register_command("RESET_STATS", control_connection_reset_stats, NULL, FALSE);
+  control_register_command("REMOVE_ORPHANED_STATS", control_connection_remove_orphans, NULL, FALSE);
+  control_register_command("QUERY", process_query_command, NULL, TRUE);
 }

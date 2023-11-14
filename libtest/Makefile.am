@@ -17,6 +17,8 @@ libtest_libsyslog_ng_test_a_SOURCES =   \
 	libtest/libtest.c		\
 	libtest/mock-cfg-parser.c	\
 	libtest/mock-cfg-parser.h	\
+	libtest/mock-logpipe.c		\
+	libtest/mock-logpipe.h		\
 	libtest/mock-transport.c	\
 	libtest/mock-transport.h	\
 	libtest/fake-time.c		\
@@ -30,9 +32,7 @@ libtest_libsyslog_ng_test_a_SOURCES =   \
 	libtest/queue_utils_lib.c	\
 	libtest/queue_utils_lib.h	\
 	libtest/stopwatch.c		\
-	libtest/stopwatch.h		\
-	libtest/testutils.c		\
-	libtest/testutils.h
+	libtest/stopwatch.h
 
 libtestinclude_HEADERS		    =	\
 	libtest/config_parse_lib.h		\
@@ -45,8 +45,7 @@ libtestinclude_HEADERS		    =	\
 	libtest/persist_lib.h		\
 	libtest/proto_lib.h		\
 	libtest/queue_utils_lib.h		\
-	libtest/stopwatch.h		\
-	libtest/testutils.h
+	libtest/stopwatch.h
 
 pkgconfig_DATA			   +=	\
 	libtest/syslog-ng-test.pc

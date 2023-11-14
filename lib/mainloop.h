@@ -37,11 +37,12 @@ typedef struct _MainLoopOptions
   gboolean syntax_only;
   gboolean interactive_mode;
   gboolean server_mode;
+  gboolean disable_module_discovery;
 } MainLoopOptions;
 
 extern ThreadId main_thread_handle;
-extern GCond *thread_halt_cond;
-extern GStaticMutex workers_running_lock;
+extern GCond thread_halt_cond;
+extern GMutex workers_running_lock;
 
 typedef gpointer (*MainLoopTaskFunc)(gpointer user_data);
 
@@ -72,6 +73,7 @@ void main_loop_run(MainLoop *self);
 
 MainLoop *main_loop_get_instance(void);
 GlobalConfig *main_loop_get_current_config(MainLoop *self);
+GlobalConfig *main_loop_get_pending_new_config(MainLoop *self);
 void main_loop_init(MainLoop *self, MainLoopOptions *options);
 void main_loop_deinit(MainLoop *self);
 
@@ -83,6 +85,8 @@ gboolean main_loop_initialize_state(GlobalConfig *cfg, const gchar *persist_file
 
 void main_loop_thread_resource_init(void);
 void main_loop_thread_resource_deinit(void);
+
+gboolean main_loop_is_control_server_running(MainLoop *self);
 
 #define MAIN_LOOP_ERROR main_loop_error_quark()
 

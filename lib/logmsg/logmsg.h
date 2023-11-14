@@ -31,8 +31,8 @@
 #include "serialize.h"
 #include "timeutils/unixtime.h"
 #include "logmsg/nvtable.h"
-#include "msg-format.h"
 #include "logmsg/tags.h"
+#include "messages.h"
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -62,7 +62,7 @@ typedef struct _LogPathOptions LogPathOptions;
 
 typedef void (*LMAckFunc)(LogMessage *lm, AckType ack_type);
 
-#define RE_MAX_MATCHES 256
+#define LOGMSG_MAX_MATCHES 256
 
 typedef enum
 {
@@ -142,6 +142,37 @@ enum
   __UNUSED_LF_LEGACY_MSGHDR    = 0x00020000,
 };
 
+typedef NVType LogMessageValueType;
+enum _LogMessageValueType
+{
+  /* Everything is represented as a string, formatted in a type specific
+   * automatically parseable format.
+   *
+   * Please note that these values are part of the serialized LogMessage
+   * format, so changing these would cause incompatibilities in type
+   * recognition. Add new types at the end.
+   */
+  LM_VT_STRING = 0,
+  LM_VT_JSON = 1,
+  LM_VT_BOOLEAN = 2,
+  LM_VT_INT32 = 3,
+  LM_VT_INT64 = 4,
+  LM_VT_DOUBLE = 5,
+  LM_VT_DATETIME = 6,
+  LM_VT_LIST = 7,
+  LM_VT_NULL = 8,
+
+  /* extremal value to indicate "unset" state.
+   *
+   * NOTE: THIS IS NOT THE DEFAULT for actual values even if type is
+   * unspecified, those cases default to LM_VT_STRING.
+   */
+  LM_VT_NONE = 255
+};
+
+const gchar *log_msg_value_type_to_str(LogMessageValueType self);
+gboolean log_msg_value_type_from_str(const gchar *in_str, LogMessageValueType *out_type);
+
 typedef struct _LogMessageQueueNode
 {
   struct iv_list_head list;
@@ -220,7 +251,7 @@ struct _LogMessage
 
   guint8 num_nodes;
   guint8 cur_node;
-  guint8 protect_cnt;
+  guint8 protected;
 
 
   /* preallocated LogQueueNodes used to insert this message into a LogQueue */
@@ -237,12 +268,11 @@ extern gint logmsg_node_max;
 LogMessage *log_msg_ref(LogMessage *m);
 void log_msg_unref(LogMessage *m);
 void log_msg_write_protect(LogMessage *m);
-void log_msg_write_unprotect(LogMessage *m);
 
 static inline gboolean
 log_msg_is_write_protected(const LogMessage *self)
 {
-  return self->protect_cnt > 0;
+  return self->protected;
 }
 
 LogMessage *log_msg_clone_cow(LogMessage *msg, const LogPathOptions *path_options);
@@ -259,36 +289,102 @@ gboolean log_msg_is_handle_macro(NVHandle handle);
 gboolean log_msg_is_handle_sdata(NVHandle handle);
 gboolean log_msg_is_handle_match(NVHandle handle);
 
+/*
+ * This macros allows the caching of a NVHandle (e.g.  the numeric
+ * identifier of a name-value pair) in a static variable.  This simplifies
+ * call sites by
+ *   1) not needed an extra initialization step to look up the handle, _or_
+ *   2) not having to open code a similar caching mechanism.
+ *
+ * NOTE: that the check itself is racy and there might be two threads
+ * executing the if() at the same time, and if they do they would _both_
+ * perform log_msg_get_value_handle().  The reason is that this is not a
+ * problem is that the handles are constant within the same execution, so
+ * both the winner and loser of the race would eventually set the cache to
+ * the right value.  And albeit this 2nd lookup is unnecessary, this would
+ * happen only a limited number of times (until the variables becomes
+ * visible for all CPUs), from which point on there's no race.
+ */
+#define LOG_MSG_GET_VALUE_HANDLE_STATIC(name) \
+  ({                                                              \
+    static NVHandle __log_msg_value_handle = 0;                   \
+                                                                  \
+    if (G_UNLIKELY(!__log_msg_value_handle))                      \
+      __log_msg_value_handle = log_msg_get_value_handle(name);    \
+    __log_msg_value_handle;                                       \
+  })
+
+static inline gboolean
+log_msg_is_handle_referencable_from_an_indirect_value(NVHandle handle)
+{
+  if (handle == LM_V_NONE)
+    return FALSE;
+
+  /* macro values should not be referenced as they are dynamic, store the actual value instead */
+  if (log_msg_is_handle_macro(handle))
+    return FALSE;
+
+  /* matches are pretty temporary, so we should not reference them, as the
+   * next matching operation would overwrite them anyway */
+
+  if (log_msg_is_handle_match(handle))
+    return FALSE;
+
+  return TRUE;
+}
+
 static inline gboolean
 log_msg_is_handle_settable_with_an_indirect_value(NVHandle handle)
 {
   return (handle >= LM_V_MAX);
 }
 
-const gchar *log_msg_get_macro_value(const LogMessage *self, gint id, gssize *value_len);
+const gchar *log_msg_get_macro_value(const LogMessage *self, gint id, gssize *value_len, LogMessageValueType *type);
+const gchar *log_msg_get_match_with_type(const LogMessage *self, gint index_,
+                                         gssize *value_len, LogMessageValueType *type);
+const gchar *log_msg_get_match_if_set_with_type(const LogMessage *self, gint index_,
+                                                gssize *value_len, LogMessageValueType *type);
+
+
 
 static inline const gchar *
-log_msg_get_value(const LogMessage *self, NVHandle handle, gssize *value_len)
+log_msg_get_value_if_set_with_type(const LogMessage *self, NVHandle handle,
+                                   gssize *value_len,
+                                   LogMessageValueType *type)
 {
   guint16 flags;
 
   flags = nv_registry_get_handle_flags(logmsg_registry, handle);
-  if ((flags & LM_VF_MACRO) == 0)
-    return nv_table_get_value(self->payload, handle, value_len);
+  if (G_UNLIKELY((flags & LM_VF_MACRO)))
+    return log_msg_get_macro_value(self, flags >> 8, value_len, type);
   else
-    return log_msg_get_macro_value(self, flags >> 8, value_len);
+    return nv_table_get_value(self->payload, handle, value_len, type);
+}
+
+static inline const gchar *
+log_msg_get_value_with_type(const LogMessage *self, NVHandle handle, gssize *value_len, LogMessageValueType *type)
+{
+  const gchar *result = log_msg_get_value_if_set_with_type(self, handle, value_len, type);
+
+  if (result)
+    return result;
+  if (type)
+    *type = LM_VT_NULL;
+  if (value_len)
+    *value_len = 0;
+  return "";
+}
+
+static inline const gchar *
+log_msg_get_value(const LogMessage *self, NVHandle handle, gssize *value_len)
+{
+  return log_msg_get_value_with_type(self, handle, value_len, NULL);
 }
 
 static inline const gchar *
 log_msg_get_value_if_set(const LogMessage *self, NVHandle handle, gssize *value_len)
 {
-  guint16 flags;
-
-  flags = nv_registry_get_handle_flags(logmsg_registry, handle);
-  if ((flags & LM_VF_MACRO) == 0)
-    return nv_table_get_value_if_set(self->payload, handle, value_len);
-  else
-    return log_msg_get_macro_value(self, flags >> 8, value_len);
+  return log_msg_get_value_if_set_with_type(self, handle, value_len, NULL);
 }
 
 static inline const gchar *
@@ -296,6 +392,15 @@ log_msg_get_value_by_name(const LogMessage *self, const gchar *name, gssize *val
 {
   NVHandle handle = log_msg_get_value_handle(name);
   return log_msg_get_value(self, handle, value_len);
+}
+
+static inline const gchar *
+log_msg_get_value_by_name_with_type(const LogMessage *self,
+                                    const gchar *name, gssize *value_len,
+                                    LogMessageValueType *type)
+{
+  NVHandle handle = log_msg_get_value_handle(name);
+  return log_msg_get_value_with_type(self, handle, value_len, type);
 }
 
 static inline const gchar *
@@ -308,22 +413,49 @@ typedef gboolean (*LogMessageTagsForeachFunc)(const LogMessage *self, LogTagId t
                                               gpointer user_data);
 
 void log_msg_set_value(LogMessage *self, NVHandle handle, const gchar *new_value, gssize length);
-void log_msg_set_value_indirect(LogMessage *self, NVHandle handle, NVHandle ref_handle, guint8 type, guint16 ofs,
-                                guint16 len);
+void log_msg_set_value_with_type(LogMessage *self, NVHandle handle,
+                                 const gchar *value, gssize value_len,
+                                 LogMessageValueType type);
+
+void log_msg_set_value_indirect(LogMessage *self, NVHandle handle, NVHandle ref_handle,
+                                guint16 ofs, guint16 len);
+void log_msg_set_value_indirect_with_type(LogMessage *self, NVHandle handle, NVHandle ref_handle,
+                                          guint16 ofs, guint16 len, LogMessageValueType type);
 void log_msg_unset_value(LogMessage *self, NVHandle handle);
 void log_msg_unset_value_by_name(LogMessage *self, const gchar *name);
 gboolean log_msg_values_foreach(const LogMessage *self, NVTableForeachFunc func, gpointer user_data);
+NVHandle log_msg_get_match_handle(gint index_);
+gint log_msg_get_match_index(NVHandle handle);
 void log_msg_set_match(LogMessage *self, gint index, const gchar *value, gssize value_len);
-void log_msg_set_match_indirect(LogMessage *self, gint index, NVHandle ref_handle, guint8 type, guint16 ofs,
-                                guint16 len);
+void log_msg_set_match_with_type(LogMessage *self, gint index,
+                                 const gchar *value, gssize value_len,
+                                 LogMessageValueType type);
+void log_msg_set_match_indirect(LogMessage *self, gint index, NVHandle ref_handle, guint16 ofs, guint16 len);
+void log_msg_set_match_indirect_with_type(LogMessage *self, gint index, NVHandle ref_handle,
+                                          guint16 ofs, guint16 len, LogMessageValueType type);
+void log_msg_unset_match(LogMessage *self, gint index_);
+const gchar *log_msg_get_match_with_type(const LogMessage *self, gint index_, gssize *value_len,
+                                         LogMessageValueType *type);
+const gchar *log_msg_get_match(const LogMessage *self, gint index_, gssize *value_len);
 void log_msg_clear_matches(LogMessage *self);
+void log_msg_truncate_matches(LogMessage *self, gint n);
+
+static inline void
+log_msg_set_value_by_name_with_type(LogMessage *self,
+                                    const gchar *name, const gchar *value, gssize length,
+                                    LogMessageValueType type)
+{
+  NVHandle handle = log_msg_get_value_handle(name);
+  log_msg_set_value_with_type(self, handle, value, length, type);
+}
 
 static inline void
 log_msg_set_value_by_name(LogMessage *self, const gchar *name, const gchar *value, gssize length)
 {
-  NVHandle handle = log_msg_get_value_handle(name);
-  log_msg_set_value(self, handle, value, length);
+  log_msg_set_value_by_name_with_type(self, name, value, length, LM_VT_STRING);
 }
+
+void log_msg_rename_value(LogMessage *self, NVHandle from, NVHandle to);
 
 void log_msg_append_format_sdata(const LogMessage *self, GString *result, guint32 seq_num);
 void log_msg_format_sdata(const LogMessage *self, GString *result, guint32 seq_num);
@@ -340,7 +472,8 @@ void log_msg_clear_tag_by_name(LogMessage *self, const gchar *name);
 gboolean log_msg_is_tag_by_id(LogMessage *self, LogTagId id);
 gboolean log_msg_is_tag_by_name(LogMessage *self, const gchar *name);
 void log_msg_tags_foreach(const LogMessage *self, LogMessageTagsForeachFunc callback, gpointer user_data);
-void log_msg_print_tags(const LogMessage *self, GString *result);
+void log_msg_format_tags(const LogMessage *self, GString *result);
+void log_msg_format_matches(const LogMessage *self, GString *result);
 
 LogMessageQueueNode *log_msg_alloc_queue_node(LogMessage *msg, const LogPathOptions *path_options);
 LogMessageQueueNode *log_msg_alloc_dynamic_queue_node(LogMessage *msg, const LogPathOptions *path_options);
@@ -349,8 +482,7 @@ void log_msg_free_queue_node(LogMessageQueueNode *node);
 void log_msg_clear(LogMessage *self);
 void log_msg_merge_context(LogMessage *self, LogMessage **context, gsize context_len);
 
-LogMessage *log_msg_new(const gchar *msg, gint length,
-                        MsgFormatOptions *parse_options);
+LogMessage *log_msg_sized_new(gsize payload_size);
 LogMessage *log_msg_new_mark(void);
 LogMessage *log_msg_new_internal(gint prio, const gchar *msg);
 LogMessage *log_msg_new_empty(void);
@@ -376,5 +508,26 @@ void log_msg_registry_foreach(GHFunc func, gpointer user_data);
 gint log_msg_lookup_time_stamp_name(const gchar *name);
 
 gssize log_msg_get_size(LogMessage *self);
+
+#define evt_tag_msg_reference(msg)             \
+    evt_tag_printf("msg", "%p", (msg)),        \
+    evt_tag_printf("rcptid", "%" G_GUINT64_FORMAT, (msg)->rcptid)
+
+static inline EVTTAG *
+evt_tag_msg_value(const gchar *name, LogMessage *msg, NVHandle value_handle)
+{
+  gssize value_len;
+  const gchar *value = log_msg_get_value(msg, value_handle, &value_len);
+
+  return evt_tag_mem(name, value, value_len);
+}
+
+static inline EVTTAG *
+evt_tag_msg_value_name(const gchar *name, NVHandle value_handle)
+{
+  const gchar *value_name = log_msg_get_value_name(value_handle, NULL);
+
+  return evt_tag_str(name, value_name);
+}
 
 #endif

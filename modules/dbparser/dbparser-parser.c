@@ -35,7 +35,7 @@ static CfgLexerKeyword dbparser_keywords[] =
   { "grouping_by",        KW_GROUPING_BY },
   { "file",               KW_FILE },
 
-  /* correllate options */
+  /* correlate options */
   { "inject_mode",        KW_INJECT_MODE },
   { "drop_unmatched",     KW_DROP_UNMATCHED },
   { "key",                KW_KEY },
@@ -64,4 +64,4 @@ CfgParser dbparser_parser =
   .cleanup = (void (*)(gpointer)) log_pipe_unref,
 };
 
-CFG_PARSER_IMPLEMENT_LEXER_BINDING(dbparser_, LogParser **)
+CFG_PARSER_IMPLEMENT_LEXER_BINDING(dbparser_, DBPARSER_, LogParser **)

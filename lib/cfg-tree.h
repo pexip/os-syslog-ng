@@ -133,29 +133,29 @@ const gchar *log_expr_node_format_location(LogExprNode *self, gchar *buf, gsize 
 EVTTAG *log_expr_node_location_tag(LogExprNode *self);
 
 LogExprNode *log_expr_node_new(gint layout, gint content, const gchar *name, LogExprNode *children, guint32 flags,
-                               YYLTYPE *yylloc);
+                               CFG_LTYPE *yylloc);
 
 LogExprNode *log_expr_node_ref(LogExprNode *self);
 LogExprNode *log_expr_node_unref(LogExprNode *self);
 
-LogExprNode *log_expr_node_new_pipe(LogPipe *pipe, YYLTYPE *yylloc);
-LogExprNode *log_expr_node_new_source(const gchar *name, LogExprNode *children, YYLTYPE *yylloc);
-LogExprNode *log_expr_node_new_source_reference(const gchar *name, YYLTYPE *yylloc);
-LogExprNode *log_expr_node_new_destination(const gchar *name, LogExprNode *children, YYLTYPE *yylloc);
-LogExprNode *log_expr_node_new_destination_reference(const gchar *name, YYLTYPE *yylloc);
-LogExprNode *log_expr_node_new_filter(const gchar *name, LogExprNode *node, YYLTYPE *yylloc);
-LogExprNode *log_expr_node_new_filter_reference(const gchar *name, YYLTYPE *yylloc);
-LogExprNode *log_expr_node_new_parser(const gchar *name, LogExprNode *children, YYLTYPE *yylloc);
-LogExprNode *log_expr_node_new_parser_reference(const gchar *name, YYLTYPE *yylloc);
-LogExprNode *log_expr_node_new_rewrite(const gchar *name, LogExprNode *children, YYLTYPE *yylloc);
-LogExprNode *log_expr_node_new_rewrite_reference(const gchar *name, YYLTYPE *yylloc);
-LogExprNode *log_expr_node_new_log(LogExprNode *children, guint32 flags, YYLTYPE *yylloc);
-LogExprNode *log_expr_node_new_sequence(LogExprNode *children, YYLTYPE *yylloc);
-LogExprNode *log_expr_node_new_junction(LogExprNode *children, YYLTYPE *yylloc);
+LogExprNode *log_expr_node_new_pipe(LogPipe *pipe, CFG_LTYPE *yylloc);
+LogExprNode *log_expr_node_new_source(const gchar *name, LogExprNode *children, CFG_LTYPE *yylloc);
+LogExprNode *log_expr_node_new_source_reference(const gchar *name, CFG_LTYPE *yylloc);
+LogExprNode *log_expr_node_new_destination(const gchar *name, LogExprNode *children, CFG_LTYPE *yylloc);
+LogExprNode *log_expr_node_new_destination_reference(const gchar *name, CFG_LTYPE *yylloc);
+LogExprNode *log_expr_node_new_filter(const gchar *name, LogExprNode *node, CFG_LTYPE *yylloc);
+LogExprNode *log_expr_node_new_filter_reference(const gchar *name, CFG_LTYPE *yylloc);
+LogExprNode *log_expr_node_new_parser(const gchar *name, LogExprNode *children, CFG_LTYPE *yylloc);
+LogExprNode *log_expr_node_new_parser_reference(const gchar *name, CFG_LTYPE *yylloc);
+LogExprNode *log_expr_node_new_rewrite(const gchar *name, LogExprNode *children, CFG_LTYPE *yylloc);
+LogExprNode *log_expr_node_new_rewrite_reference(const gchar *name, CFG_LTYPE *yylloc);
+LogExprNode *log_expr_node_new_log(LogExprNode *children, guint32 flags, CFG_LTYPE *yylloc);
+LogExprNode *log_expr_node_new_sequence(LogExprNode *children, CFG_LTYPE *yylloc);
+LogExprNode *log_expr_node_new_junction(LogExprNode *children, CFG_LTYPE *yylloc);
 void log_expr_node_conditional_set_false_branch_of_the_last_if(LogExprNode *conditional_node, LogExprNode *false_expr);
 LogExprNode *log_expr_node_new_conditional_with_filter(LogExprNode *filter_pipe, LogExprNode *true_expr,
-                                                       YYLTYPE *yylloc);
-LogExprNode *log_expr_node_new_conditional_with_block(LogExprNode *block, YYLTYPE *yylloc);
+                                                       CFG_LTYPE *yylloc);
+LogExprNode *log_expr_node_new_conditional_with_block(LogExprNode *block, CFG_LTYPE *yylloc);
 
 typedef struct _CfgTree
 {
@@ -183,6 +183,7 @@ gchar *cfg_tree_get_child_id(CfgTree *self, gint content, LogExprNode *node);
 
 gboolean cfg_tree_start(CfgTree *self);
 gboolean cfg_tree_stop(CfgTree *self);
+gboolean cfg_tree_on_inited(CfgTree *self);
 
 void cfg_tree_init_instance(CfgTree *self, GlobalConfig *cfg);
 void cfg_tree_free_instance(CfgTree *self);

@@ -20,13 +20,14 @@
  *
  */
 
+#include <criterion/criterion.h>
+#include <criterion/parameterized.h>
+#include "libtest/cr_template.h"
+
 #include "context-info-db.h"
 #include "apphook.h"
 #include "scratch-buffers.h"
 #include "cfg.h"
-#include "libtest/cr_template.h"
-#include <criterion/criterion.h>
-#include <criterion/parameterized.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -180,7 +181,7 @@ _foreach_get_nvpairs(gpointer arg, const ContextualDataRecord *record)
   pair.name = log_msg_get_value_name(record->value_handle, NULL);
 
   LogMessage *msg = create_sample_message();
-  log_template_format(record->value, msg, NULL, LTZ_LOCAL, 0, NULL, result);
+  log_template_format(record->value, msg, &DEFAULT_TEMPLATE_EVAL_OPTIONS, result);
   log_msg_unref(msg);
 
   pair.value = result->str;

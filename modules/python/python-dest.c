@@ -55,8 +55,6 @@ typedef struct
     PyObject *open;
     PyObject *send;
     PyObject *flush;
-    PyObject *log_template_options;
-    PyObject *seqnum;
     PyObject *generate_persist_name;
     GPtrArray *_refs_to_clean;
   } py;
@@ -197,7 +195,7 @@ _py_invoke_open(PythonDestDriver *self)
       if (ret == Py_None)
         {
           msg_warning_once("Since " VERSION_3_25 ", the return value of open method in python destination "
-                           "is used as success/failure indicator. Please use return True or return False explicitely",
+                           "is used as success/failure indicator. Please use return True or return False explicitly",
                            evt_tag_str("class", self->class));
           result = TRUE;
         }
@@ -230,8 +228,10 @@ _as_int(PyObject *obj)
   if (result == -1 && PyErr_Occurred())
     {
       gchar buf[256];
+      _py_format_exception_text(buf, sizeof(buf));
+
       msg_error("Error converting PyObject to int. Retrying message later",
-                evt_tag_str("exception", _py_format_exception_text(buf, sizeof(buf))));
+                evt_tag_str("exception", buf));
       _py_finish_exception_handling();
       return LTR_ERROR;
     }
@@ -346,33 +346,36 @@ _py_init_bindings(PythonDestDriver *self)
   if (!self->py.class)
     {
       gchar buf[256];
+      _py_format_exception_text(buf, sizeof(buf));
 
       msg_error("Error looking Python driver class",
                 evt_tag_str("driver", self->super.super.super.id),
                 evt_tag_str("class", self->class),
-                evt_tag_str("exception", _py_format_exception_text(buf, sizeof(buf))));
+                evt_tag_str("exception", buf));
       _py_finish_exception_handling();
       return FALSE;
     }
 
   _inject_worker_insert_result_consts(self);
 
-  self->py.log_template_options = py_log_template_options_new(&self->template_options);
-  PyObject_SetAttrString(self->py.class, "template_options", self->py.log_template_options);
-  Py_DECREF(self->py.log_template_options);
-  self->py.seqnum = py_integer_pointer_new(&self->super.worker.instance.seq_num);
-  PyObject_SetAttrString(self->py.class, "seqnum", self->py.seqnum);
-  Py_DECREF(self->py.seqnum);
+  PyObject *py_log_template_options = py_log_template_options_new(&self->template_options);
+  PyObject_SetAttrString(self->py.class, "template_options", py_log_template_options);
+  Py_DECREF(py_log_template_options);
+
+  PyObject *py_seqnum = py_integer_pointer_new(&self->super.worker.instance.seq_num);
+  PyObject_SetAttrString(self->py.class, "seqnum", py_seqnum);
+  Py_DECREF(py_seqnum);
 
   self->py.instance = _py_invoke_function(self->py.class, NULL, self->class, self->super.super.super.id);
   if (!self->py.instance)
     {
       gchar buf[256];
+      _py_format_exception_text(buf, sizeof(buf));
 
       msg_error("Error instantiating Python driver class",
                 evt_tag_str("driver", self->super.super.super.id),
                 evt_tag_str("class", self->class),
-                evt_tag_str("exception", _py_format_exception_text(buf, sizeof(buf))));
+                evt_tag_str("exception", buf));
       _py_finish_exception_handling();
       return FALSE;
     }
@@ -401,8 +404,6 @@ _py_init_bindings(PythonDestDriver *self)
   g_ptr_array_add(self->py._refs_to_clean, self->py.open);
   g_ptr_array_add(self->py._refs_to_clean, self->py.flush);
   g_ptr_array_add(self->py._refs_to_clean, self->py.send);
-  g_ptr_array_add(self->py._refs_to_clean, self->py.log_template_options);
-  g_ptr_array_add(self->py._refs_to_clean, self->py.seqnum);
   g_ptr_array_add(self->py._refs_to_clean, self->py.generate_persist_name);
 
   return TRUE;
@@ -443,7 +444,8 @@ _py_construct_message(PythonDestDriver *self, LogMessage *msg, PyObject **msg_ob
 
   if (self->vp)
     {
-      success = py_value_pairs_apply(self->vp, &self->template_options, self->super.worker.instance.seq_num, msg, msg_object);
+      LogTemplateEvalOptions options = {&self->template_options, LTZ_LOCAL, self->super.worker.instance.seq_num, NULL, LM_VT_STRING};
+      success = py_value_pairs_apply(self->vp, &options, msg, msg_object);
       if (!success && (self->template_options.on_error & ON_ERROR_DROP_MESSAGE))
         return FALSE;
     }
@@ -557,26 +559,28 @@ python_dd_init(LogPipe *d)
       return FALSE;
     }
 
-  if (!log_threaded_dest_driver_init_method(d))
-    return FALSE;
-
   log_template_options_init(&self->template_options, cfg);
   self->super.time_reopen = 1;
 
   gstate = PyGILState_Ensure();
-
   _py_perform_imports(self->loaders);
-  if (!_py_init_bindings(self) ||
-      !_py_init_object(self))
+  if (!_py_init_bindings(self))
     goto fail;
+  PyGILState_Release(gstate);
 
+  if (!log_threaded_dest_driver_init_method(d))
+    return FALSE;
+
+  gstate = PyGILState_Ensure();
+  if (!_py_init_object(self))
+    goto fail;
   PyGILState_Release(gstate);
 
   msg_verbose("Python destination initialized",
               evt_tag_str("driver", self->super.super.super.id),
               evt_tag_str("class", self->class));
 
-  return log_threaded_dest_driver_start_workers(&self->super);
+  return TRUE;
 
 fail:
   PyGILState_Release(gstate);

@@ -46,6 +46,7 @@
 #include "scratch-buffers.h"
 #include "timeutils/cache.h"
 #include "mainloop.h"
+#include "msg-format.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -216,7 +217,8 @@ error:
   if (parse_ctx)
     g_markup_parse_context_free(parse_ctx);
 
-  g_error_free(error);
+  if (error)
+    g_error_free(error);
 
   return success;
 }
@@ -290,7 +292,8 @@ pdbtool_merge(int argc, char *argv[])
     {
       fprintf(stderr, "Error storing patterndb; filename='%s', errror='%s'\n", patterndb_file,
               error ? error->message : "Unknown error");
-      g_error_free(error);
+      if (error)
+        g_error_free(error);
       ok = FALSE;
     }
 
@@ -333,7 +336,9 @@ static gboolean debug_pattern = FALSE;
 static gboolean debug_pattern_parse = FALSE;
 
 gboolean
-pdbtool_match_values(NVHandle handle, const gchar *name, const gchar *value, gssize length, gpointer user_data)
+pdbtool_match_values(NVHandle handle, const gchar *name,
+                     const gchar *value, gssize length,
+                     LogMessageValueType type, gpointer user_data)
 {
   gint *ret = user_data;
 
@@ -365,13 +370,13 @@ pdbtool_pdb_emit(LogMessage *msg, gboolean synthetic, gpointer user_data)
 
           nv_table_foreach(msg->payload, logmsg_registry, pdbtool_match_values, ret);
           g_string_truncate(output, 0);
-          log_msg_print_tags(msg, output);
+          log_msg_format_tags(msg, output);
           printf("TAGS=%s\n", output->str);
           printf("\n");
         }
       else
         {
-          log_template_format(template, msg, NULL, LTZ_LOCAL, 0, NULL, output);
+          log_template_format(template, msg, &DEFAULT_TEMPLATE_EVAL_OPTIONS, output);
           printf("%s", output->str);
         }
     }
@@ -410,11 +415,17 @@ pdbtool_match(int argc, char *argv[])
 
   if (template_string)
     {
-      gchar *t;
+      GError *error = NULL;
 
-      t = g_strcompress(template_string);
+      gchar *t = g_strcompress(template_string);
       template = log_template_new(configuration, NULL);
-      log_template_compile(template, t, NULL);
+      if (!log_template_compile(template, t, &error))
+        {
+          fprintf(stderr, "Error compiling template: %s, error: %s\n", template->template, error->message);
+          g_clear_error(&error);
+          g_free(t);
+          return 1;
+        }
       g_free(t);
 
     }
@@ -482,7 +493,8 @@ pdbtool_match(int argc, char *argv[])
         }
       transport = log_transport_file_new(fd);
       proto = log_proto_text_server_new(transport, &proto_options);
-      eof = log_proto_server_fetch(proto, &buf, &buflen, &may_read, NULL, NULL) != LPS_SUCCESS;
+      LogProtoStatus status = log_proto_server_fetch(proto, &buf, &buflen, &may_read, NULL, NULL);
+      eof = status != (LPS_SUCCESS && status != LPS_AGAIN);
     }
 
   if (!debug_pattern)
@@ -503,8 +515,7 @@ pdbtool_match(int argc, char *argv[])
       if (G_LIKELY(proto))
         {
           log_msg_unref(msg);
-          msg = log_msg_new_empty();
-          parse_options.format_handler->parse(&parse_options, buf, buflen, msg);
+          msg = msg_format_parse(&parse_options, buf, buflen);
         }
 
       if (G_UNLIKELY(debug_pattern))
@@ -530,7 +541,7 @@ pdbtool_match(int argc, char *argv[])
 
                       printf("%s@%s:%s=%.*s@%s",
                              colors[COLOR_PARSER],
-                             r_parser_type_name(dbg_info->pnode->type),
+                             r_parser_type_name(dbg_info->pnode->parser_type),
                              name_len ? name : "",
                              name_len ? dbg_info->match_len : 0,
                              name_len ? msg_string + dbg_info->match_off : "",
@@ -570,7 +581,7 @@ pdbtool_match(int argc, char *argv[])
 
                   printf("PDBTOOL_DEBUG=%d:%d:%d:%d:%d:%s:%s\n",
                          i, dbg_info->i, dbg_info->node->keylen, dbg_info->match_off, dbg_info->match_len,
-                         dbg_info->pnode ? r_parser_type_name(dbg_info->pnode->type) : "",
+                         dbg_info->pnode ? r_parser_type_name(dbg_info->pnode->parser_type) : "",
                          dbg_info->pnode && name_len ? name : ""
                         );
                 }
@@ -599,7 +610,8 @@ pdbtool_match(int argc, char *argv[])
       if (G_LIKELY(proto))
         {
           buf = NULL;
-          eof = log_proto_server_fetch(proto, &buf, &buflen, &may_read, NULL, NULL) != LPS_SUCCESS;
+          LogProtoStatus status = log_proto_server_fetch(proto, &buf, &buflen, &may_read, NULL, NULL);
+          eof = (status != LPS_SUCCESS && status != LPS_AGAIN);
         }
       else
         {
@@ -638,11 +650,11 @@ static GOptionEntry match_options[] =
   },
   {
     "debug-pattern", 'D', 0, G_OPTION_ARG_NONE, &debug_pattern,
-    "Print debuging information on pattern matching", NULL
+    "Print debugging information on pattern matching", NULL
   },
   {
     "debug-csv", 'C', 0, G_OPTION_ARG_NONE, &debug_pattern_parse,
-    "Output debuging information in parseable format", NULL
+    "Output debugging information in parseable format", NULL
   },
   {
     "color-out", 'c', 0, G_OPTION_ARG_NONE, &color_out,
@@ -856,7 +868,7 @@ static GOptionEntry test_options[] =
   },
   {
     "debug", 'D', 0, G_OPTION_ARG_NONE, &debug_pattern,
-    "Print debuging information on non-matching patterns", NULL
+    "Print debugging information on non-matching patterns", NULL
   },
   {
     "color-out", 'c', 0, G_OPTION_ARG_NONE, &color_out,
@@ -872,11 +884,15 @@ pdbtool_walk_tree(RNode *root, gint level, gboolean program)
 {
   gint i;
 
+  printf("[%d]\t", level);
   for (i = 0; i < level; i++)
-    printf(" ");
+    printf("  ");
 
   if (root->parser)
-    printf("@%s:%s@ ", r_parser_type_name(root->parser->type), log_msg_get_value_name(root->parser->handle, NULL));
+    printf("@%s:%s@ [%s]",
+           r_parser_type_name(root->parser->parser_type),
+           log_msg_get_value_name(root->parser->handle, NULL),
+           root->pdb_location ? : "");
   printf("'%s' ", root->key ? (gchar *) root->key : "");
 
   if (root->value)
@@ -1266,9 +1282,9 @@ main(int argc, char *argv[])
   ret = modes[mode].main(argc, argv);
   scratch_buffers_allocator_deinit();
   scratch_buffers_global_deinit();
-  stats_destroy();
   log_tags_global_deinit();
   log_msg_global_deinit();
+  stats_destroy();
 
   cfg_free(configuration);
   configuration = NULL;

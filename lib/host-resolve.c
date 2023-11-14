@@ -27,10 +27,18 @@
 #include "cfg.h"
 #include "tls-support.h"
 #include "compat/socket.h"
+#include "apphook.h"
+
+#include <iv.h>
 
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <string.h>
+#include <resolv.h>
+
+#ifndef AI_V4MAPPED
+#define AI_V4MAPPED 0
+#endif
 
 #if !defined(SYSLOG_NG_HAVE_GETADDRINFO) || !defined(SYSLOG_NG_HAVE_GETNAMEINFO)
 G_LOCK_DEFINE_STATIC(resolv_lock);
@@ -226,6 +234,13 @@ resolve_hostname_to_sockaddr_using_gethostbyname(GSockAddr **addr, gint family, 
 }
 #endif
 
+static inline void
+_attempt_to_invalidate_iv_now(void)
+{
+  if (iv_inited())
+    iv_invalidate_now();
+}
+
 gboolean
 resolve_hostname_to_sockaddr(GSockAddr **addr, gint family, const gchar *name)
 {
@@ -239,6 +254,9 @@ resolve_hostname_to_sockaddr(GSockAddr **addr, gint family, const gchar *name)
 #else
   result = resolve_hostname_to_sockaddr_using_gethostbyname(addr, family, name);
 #endif
+
+  _attempt_to_invalidate_iv_now();
+
   return result;
 }
 
@@ -366,10 +384,16 @@ resolve_sockaddr_to_inet_or_inet6_hostname(gsize *result_len, GSockAddr *saddr,
 const gchar *
 resolve_sockaddr_to_hostname(gsize *result_len, GSockAddr *saddr, const HostResolveOptions *host_resolve_options)
 {
+  const gchar *res;
+
   if (is_sockaddr_local(saddr))
-    return resolve_sockaddr_to_local_hostname(result_len, saddr, host_resolve_options);
+    res = resolve_sockaddr_to_local_hostname(result_len, saddr, host_resolve_options);
   else
-    return resolve_sockaddr_to_inet_or_inet6_hostname(result_len, saddr, host_resolve_options);
+    res = resolve_sockaddr_to_inet_or_inet6_hostname(result_len, saddr, host_resolve_options);
+
+  _attempt_to_invalidate_iv_now();
+
+  return res;
 }
 
 /****************************************************************************
@@ -386,7 +410,11 @@ resolve_hostname_to_hostname(gsize *result_len, const gchar *hname, HostResolveO
   else
     convert_hostname_to_short_hostname(hostname_buffer, sizeof(hostname_buffer));
 
-  return hostname_apply_options(-1, result_len, hname, host_resolve_options);
+  const gchar *res = hostname_apply_options(-1, result_len, hname, host_resolve_options);
+
+  _attempt_to_invalidate_iv_now();
+
+  return res;
 }
 
 /****************************************************************************
@@ -447,4 +475,16 @@ host_resolve_options_init(HostResolveOptions *options, HostResolveOptions *globa
 void
 host_resolve_options_destroy(HostResolveOptions *options)
 {
+}
+
+static void
+_reinit_resolver(gint type, gpointer user_data)
+{
+  res_init();
+}
+
+void
+host_resolve_global_init(void)
+{
+  register_application_hook(AH_CONFIG_STOPPED, _reinit_resolver, NULL, AHM_RUN_REPEAT);
 }

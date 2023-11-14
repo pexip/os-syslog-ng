@@ -47,6 +47,7 @@ static CfgLexerKeyword afsocket_keywords[] =
   { "peer_verify",        KW_PEER_VERIFY },
   { "key_file",           KW_KEY_FILE },
   { "cert_file",          KW_CERT_FILE },
+  { "keylog_file",        KW_KEYLOG_FILE },
   { "dhparam_file",       KW_DHPARAM_FILE },
   { "pkcs12_file",        KW_PKCS12_FILE },
   { "ca_dir",             KW_CA_DIR },
@@ -55,6 +56,10 @@ static CfgLexerKeyword afsocket_keywords[] =
   { "trusted_keys",       KW_TRUSTED_KEYS },
   { "trusted_dn",         KW_TRUSTED_DN },
   { "cipher_suite",       KW_CIPHER_SUITE },
+  { "tls12_and_older",    KW_TLS12_AND_OLDER },
+  { "tls13",              KW_TLS13 },
+  { "sigalgs",            KW_SIGALGS },
+  { "client_sigalgs",     KW_CLIENT_SIGALGS },
   { "ecdh_curve_list",    KW_ECDH_CURVE_LIST },
   { "curve_list",         KW_ECDH_CURVE_LIST, KWS_OBSOLETE, "ecdh_curve_list"},
   { "ssl_options",        KW_SSL_OPTIONS },
@@ -80,6 +85,8 @@ static CfgLexerKeyword afsocket_keywords[] =
   { "tcp_keepalive_time", KW_TCP_KEEPALIVE_TIME },
   { "tcp_keepalive_probes", KW_TCP_KEEPALIVE_PROBES },
   { "tcp_keepalive_intvl", KW_TCP_KEEPALIVE_INTVL },
+  { "so_passcred",        KW_SO_PASSCRED },
+  { "local_creds",        KW_SO_PASSCRED },   /* BSD specific alias */
   { "spoof_source",       KW_SPOOF_SOURCE },
   { "spoof_source_max_msglen", KW_SPOOF_SOURCE_MAX_MSGLEN },
   { "transport",          KW_TRANSPORT },
@@ -112,4 +119,4 @@ CfgParser afsocket_parser =
   .cleanup = (void (*)(gpointer)) log_pipe_unref,
 };
 
-CFG_PARSER_IMPLEMENT_LEXER_BINDING(afsocket_, LogDriver **)
+CFG_PARSER_IMPLEMENT_LEXER_BINDING(afsocket_, AFSOCKET_, LogDriver **)

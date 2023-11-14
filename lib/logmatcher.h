@@ -48,6 +48,9 @@ enum
   /* string flags */
   LMF_SUBSTRING = 0x0080,
   LMF_PREFIX = 0x0100,
+
+  /*  advanced LIBPCRE flags */
+  LMF_DUPNAMES = 0x00080000,
 };
 
 typedef struct _LogMatcherOptions
@@ -84,6 +87,11 @@ log_matcher_match(LogMatcher *s, LogMessage *msg, gint value_handle, const gchar
   return s->match(s, msg, value_handle, value, value_len);
 }
 
+gboolean log_matcher_match_value(LogMatcher *s, LogMessage *msg, gint value_handle);
+gboolean log_matcher_match_buffer(LogMatcher *s, LogMessage *msg, const gchar *value, gssize value_len);
+gboolean log_matcher_match_template(LogMatcher *s, LogMessage *msg,
+                                    LogTemplate *template, LogTemplateEvalOptions *options);
+
 static inline gchar *
 log_matcher_replace(LogMatcher *s, LogMessage *msg, gint value_handle, const gchar *value, gssize value_len,
                     LogTemplate *replacement, gssize *new_length)
@@ -119,5 +127,7 @@ gboolean log_matcher_options_process_flag(LogMatcherOptions *self, const gchar *
 void log_matcher_options_defaults(LogMatcherOptions *options);
 void log_matcher_options_init(LogMatcherOptions *options);
 void log_matcher_options_destroy(LogMatcherOptions *options);
+
+void log_matcher_pcre_set_nv_prefix(LogMatcher *s, const gchar *prefix);
 
 #endif

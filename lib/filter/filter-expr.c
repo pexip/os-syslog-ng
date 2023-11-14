@@ -42,24 +42,25 @@ filter_expr_node_init_instance(FilterExprNode *self)
  * do that.
  */
 gboolean
-filter_expr_eval_with_context(FilterExprNode *self, LogMessage **msg, gint num_msg)
+filter_expr_eval_with_context(FilterExprNode *self, LogMessage **msg, gint num_msg, LogTemplateEvalOptions *options)
 {
   gboolean res;
 
   g_assert(num_msg > 0);
 
-  res = self->eval(self, msg, num_msg);
+  res = self->eval(self, msg, num_msg, options);
   return res;
 }
 
 gboolean
 filter_expr_eval(FilterExprNode *self, LogMessage *msg)
 {
-  return filter_expr_eval_with_context(self, &msg, 1);
+  return filter_expr_eval_with_context(self, &msg, 1, &DEFAULT_TEMPLATE_EVAL_OPTIONS);
 }
 
 gboolean
 filter_expr_eval_root_with_context(FilterExprNode *self, LogMessage **msg, gint num_msg,
+                                   LogTemplateEvalOptions *options,
                                    const LogPathOptions *path_options)
 {
   g_assert(num_msg > 0);
@@ -67,16 +68,16 @@ filter_expr_eval_root_with_context(FilterExprNode *self, LogMessage **msg, gint 
   if (self->modify)
     log_msg_make_writable(&msg[num_msg - 1], path_options);
 
-  return filter_expr_eval_with_context(self, msg, num_msg);
+  return filter_expr_eval_with_context(self, msg, num_msg, options);
 }
 
 gboolean
 filter_expr_eval_root(FilterExprNode *self, LogMessage **msg, const LogPathOptions *path_options)
 {
-  return filter_expr_eval_root_with_context(self, msg, 1, path_options);
+  return filter_expr_eval_root_with_context(self, msg, 1, &DEFAULT_TEMPLATE_EVAL_OPTIONS, path_options);
 }
 
-FilterExprNode *
+static FilterExprNode *
 filter_expr_ref(FilterExprNode *self)
 {
   self->ref_cnt++;
@@ -92,4 +93,17 @@ filter_expr_unref(FilterExprNode *self)
         self->free_fn(self);
       g_free(self);
     }
+}
+
+FilterExprNode *
+filter_expr_clone(FilterExprNode *self)
+{
+  if (!self)
+    return NULL;
+  if (!self->clone)
+    return filter_expr_ref(self);
+
+  FilterExprNode *cloned = self->clone(self);
+  cloned->comp = self->comp;
+  return cloned;
 }

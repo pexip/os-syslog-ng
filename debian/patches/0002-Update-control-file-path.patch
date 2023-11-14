@@ -1,0 +1,23 @@
+From: Attila Szalay <sasa@ubainba.hu>
+Date: Sun, 18 Sep 2022 15:22:32 +0100
+Subject: Update control file path
+
+In Debian, the localstatedir is set to /var/lib/syslog-ng instead of the
+upstream default /var/run
+---
+ doc/man/syslog-ng.8.xml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/doc/man/syslog-ng.8.xml b/doc/man/syslog-ng.8.xml
+index d8ca6c5..6977bbb 100644
+--- a/doc/man/syslog-ng.8.xml
++++ b/doc/man/syslog-ng.8.xml
+@@ -81,7 +81,7 @@
+           <term><command>--control &lt;file&gt; </command> or <command>-c &lt;file&gt;</command>
+                     </term>
+           <listitem>
+-            <para>Set the location of the syslog-ng control socket. Default value: <filename>/var/run/syslog-ng.ctl</filename></para>
++            <para>Set the location of the syslog-ng control socket. Default value: <filename>/var/lib/syslog-ng/syslog-ng.ctl</filename></para>
+           </listitem>
+         </varlistentry>
+         <varlistentry>

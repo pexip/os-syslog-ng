@@ -33,7 +33,7 @@ static CfgLexerKeyword afmongodb_keywords[] =
   { "mongodb", KW_MONGODB },
   { "uri", KW_URI },
   { "collection", KW_COLLECTION },
-  { }
+  { NULL }
 };
 
 CfgParser afmongodb_parser =
@@ -47,4 +47,4 @@ CfgParser afmongodb_parser =
   .cleanup = (void (*)(gpointer)) log_pipe_unref,
 };
 
-CFG_PARSER_IMPLEMENT_LEXER_BINDING(afmongodb_, LogDriver **)
+CFG_PARSER_IMPLEMENT_LEXER_BINDING(afmongodb_, AFMONGODB_, LogDriver **)

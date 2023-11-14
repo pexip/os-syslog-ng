@@ -22,6 +22,9 @@
  *
  */
 
+#include <criterion/criterion.h>
+#include <criterion/parameterized.h>
+
 #include "apphook.h"
 #include "radix.h"
 #include "messages.h"
@@ -31,9 +34,6 @@
 #include <time.h>
 #include <string.h>
 #include <stdlib.h>
-
-#include <criterion/criterion.h>
-#include <criterion/parameterized.h>
 
 #define RADIX_TEST_MAX_PATTERN 5
 #define RADIX_TEST_MAX_NODE 5
@@ -54,7 +54,7 @@ insert_node_with_value(RNode *root, const gchar *key, const gpointer value)
    * and it might be a read-only string literal */
 
   dup = g_strdup(key);
-  r_insert_node(root, dup, value ? : (gpointer)key, NULL);
+  r_insert_node(root, dup, value ? : (gpointer)key, NULL, NULL);
   g_free(dup);
 }
 
@@ -257,6 +257,8 @@ Test(dbparser, test_parsers, .init = test_setup, .fini = test_teardown)
   insert_node(root, "AAA@NUMBER:invalid=@AAA");
   insert_node(root, "AAA@SET@AAA");
   insert_node(root, "AAA@SET:set@AAA");
+  insert_node(root, "AAA@OPTIONALSET@AAA");
+  insert_node(root, "AAA@OPTIONALSET:set@AAA");
   insert_node(root, "AAA@MACADDR@AAA");
   insert_node(root, "newline@NUMBER@\n2ndline\n");
   insert_node(root, "AAA@PCRE:set@AAA");
@@ -943,6 +945,21 @@ ParameterizedTestParameters(dbparser, test_radix_search_matches)
       .node_to_insert = {"@SET:set:  @", NULL},
       .key = "  aaa",
       .expected_pattern = {"set", "  ", NULL},
+    },
+    {
+      .node_to_insert = {"@OPTIONALSET:set:  @", NULL},
+      .key = " aaa",
+      .expected_pattern = {"set", " ", NULL},
+    },
+    {
+      .node_to_insert = {"@OPTIONALSET:set:  @", NULL},
+      .key = "  aaa",
+      .expected_pattern = {"set", "  ", NULL},
+    },
+    {
+      .node_to_insert = {"@OPTIONALSET:set:  @", NULL},
+      .key = "aaa",
+      .expected_pattern = {"set", "", NULL},
     },
     /* test_mcaddr_matches */
     {

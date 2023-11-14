@@ -61,18 +61,20 @@ EXTRA_DIST += \
 	contrib/openbsd-packaging/syslog-ng.conf \
 	\
 	contrib/selinux/README \
+	contrib/selinux/src/root_unsafe/syslog_ng.el6.fc.in \
+	contrib/selinux/src/root_unsafe/syslog_ng.el78.fc.in \
+	contrib/selinux/src/root_unsafe/syslog_ng.el5.fc.in \
+	contrib/selinux/src/root_safe/syslog_ng.el6.fc.in \
+	contrib/selinux/src/root_safe/syslog_ng.el78.fc.in \
+	contrib/selinux/src/root_safe/syslog_ng.el5.fc.in \
+	contrib/selinux/src/syslog_ng.el6.0to4.te.in \
+	contrib/selinux/src/syslog_ng.el7.te.in \
+	contrib/selinux/src/syslog_ng.el8.te.in \
+	contrib/selinux/src/syslog_ng.module.version \
+	contrib/selinux/src/syslog_ng.el6.5up.te.in \
+	contrib/selinux/src/syslog_ng.el5.te.in \
 	contrib/selinux/labels.txt \
 	contrib/selinux/syslog_ng.sh \
-	contrib/selinux/src/syslog_ng.el67.te.in \
-	contrib/selinux/src/syslog_ng.module.version \
-	contrib/selinux/src/root_unsafe/syslog_ng.el7.fc.in \
-	contrib/selinux/src/root_unsafe/syslog_ng.el6.fc.in \
-	contrib/selinux/src/root_unsafe/syslog_ng.el5.fc.in \
-	contrib/selinux/src/root_safe/syslog_ng.el7.fc.in \
-	contrib/selinux/src/root_safe/syslog_ng.el6.fc.in \
-	contrib/selinux/src/root_safe/syslog_ng.el5.fc.in \
-	contrib/selinux/src/syslog_ng.el5.te.in \
-	contrib/selinux/src/syslog_ng.el6.0to4.te.in \
 	\
 	contrib/apparmor/opt.syslog-ng.sbin.syslog-ng \
 	\
@@ -99,7 +101,21 @@ EXTRA_DIST += \
 	contrib/config_option_database/utils/__init__.py \
 	contrib/config_option_database/utils/test/test_BisonGraph.py \
 	contrib/config_option_database/utils/test/test_OptionParser.py \
-	contrib/config_option_database/utils/test/test_Yacc2Graph.py
+	contrib/config_option_database/utils/test/test_Yacc2Graph.py \
+	\
+	contrib/syslog-ng-helm-chart/.helmignore \
+	contrib/syslog-ng-helm-chart/values.yaml \
+	contrib/syslog-ng-helm-chart/Chart.yaml \
+	contrib/syslog-ng-helm-chart/templates/NOTES.txt \
+	contrib/syslog-ng-helm-chart/templates/_helpers.tpl \
+	contrib/syslog-ng-helm-chart/templates/compress-job.yaml \
+	contrib/syslog-ng-helm-chart/templates/config.yaml \
+	contrib/syslog-ng-helm-chart/templates/deployment.yaml \
+	contrib/syslog-ng-helm-chart/templates/hpa.yaml \
+	contrib/syslog-ng-helm-chart/templates/pvc.yaml \
+	contrib/syslog-ng-helm-chart/templates/service.yaml \
+	contrib/syslog-ng-helm-chart/templates/serviceaccount.yaml \
+	contrib/syslog-ng-helm-chart/templates/tests/test-connection.yaml
 
 if ENABLE_SYSTEMD_UNIT_INSTALL
 systemdsystemunit_DATA = contrib/systemd/syslog-ng@.service

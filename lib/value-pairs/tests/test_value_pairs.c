@@ -22,22 +22,22 @@
  *
  */
 
-#include "value-pairs/value-pairs.h"
-
 #include <criterion/criterion.h>
 #include <criterion/parameterized.h>
 
+#include "value-pairs/value-pairs.h"
 #include "logmsg/logmsg.h"
 #include "apphook.h"
 #include "cfg.h"
 #include "plugin.h"
+#include "msg-format.h"
 
 #include <stdlib.h>
 
 gboolean success = TRUE;
 
 gboolean
-vp_keys_foreach(const gchar *name, TypeHint type, const gchar *value,
+vp_keys_foreach(const gchar *name, LogMessageValueType type, const gchar *value,
                 gsize value_len, gpointer user_data)
 {
   gpointer *args = (gpointer *) user_data;
@@ -72,7 +72,7 @@ create_message(void)
     "<134>1 2009-10-16T11:51:56+02:00 exchange.macartney.esbjerg MSExchange_ADAccess 20208 _MSGID_ [origin ip=\"exchange.macartney.esbjerg\"][meta sequenceId=\"191732\" sysUpTime=\"68807696\"][EventData@18372.4 Data=\"MSEXCHANGEOWAAPPPOOL.CONFIG\\\" -W \\\"\\\" -M 1 -AP \\\"MSEXCHANGEOWAAPPPOOL5244fileserver.macartney.esbjerg CDG 1 7 7 1 0 1 1 7 1 mail.macartney.esbjerg CDG 1 7 7 1 0 1 1 7 1 maindc.macartney.esbjerg CD- 1 6 6 0 0 1 1 6 1 \"][Keywords@18372.4 Keyword=\"Classic\"] ApplicationMSExchangeADAccess: message";
   const gchar *unset_nvpair = "unset_value";
 
-  msg = log_msg_new(text, strlen(text), &parse_options);
+  msg = msg_format_parse(&parse_options, (const guchar *) text, strlen(text));
   log_msg_set_tag_by_name(msg, "almafa");
   log_msg_set_value_by_name(msg, unset_nvpair, "value that has been unset", -1);
   log_msg_unset_value_by_name(msg, unset_nvpair);
@@ -85,7 +85,7 @@ create_template(const gchar *type_hint_string, const gchar *template_string)
   LogTemplate *template;
 
   template = log_template_new(configuration, NULL);
-  log_template_compile(template, template_string, NULL);
+  cr_assert(log_template_compile(template, template_string, NULL));
   log_template_set_type_hint(template, type_hint_string, NULL);
   return template;
 }
@@ -119,7 +119,7 @@ testcase(const gchar *scope, const gchar *exclude, const gchar *expected)
   gboolean test_key_found = FALSE;
   LogTemplate *template;
 
-  vp = value_pairs_new();
+  vp = value_pairs_new(configuration);
   value_pairs_add_scope(vp, scope);
   if (exclude)
     value_pairs_add_glob_pattern(vp, exclude, FALSE);
@@ -129,7 +129,8 @@ testcase(const gchar *scope, const gchar *exclude, const gchar *expected)
 
   args[0] = &vp_keys_list;
   args[1] = &test_key_found;
-  value_pairs_foreach(vp, vp_keys_foreach, msg, 11, LTZ_LOCAL, &template_options, args);
+  LogTemplateEvalOptions options = {&template_options, LTZ_LOCAL, 11, NULL, LM_VT_STRING};
+  value_pairs_foreach(vp, vp_keys_foreach, msg, &options, args);
 
   cr_expect(test_key_found, "test.key is not found in the result set");
 
@@ -150,7 +151,7 @@ transformers_testcase(const gchar *scope, const gchar *transformed_keys, const g
   gpointer args[2];
   gboolean test_key_found = FALSE;
 
-  vp = value_pairs_new();
+  vp = value_pairs_new(configuration);
   value_pairs_add_scope(vp, scope);
 
   if (transformers)
@@ -165,7 +166,8 @@ transformers_testcase(const gchar *scope, const gchar *transformed_keys, const g
 
   args[0] = &vp_keys_list;
   args[1] = &test_key_found;
-  value_pairs_foreach(vp, vp_keys_foreach, msg, 11, LTZ_LOCAL, &template_options, args);
+  LogTemplateEvalOptions options = {&template_options, LTZ_LOCAL, 11, NULL, LM_VT_STRING};
+  value_pairs_foreach(vp, vp_keys_foreach, msg, &options, args);
 
   assert_keys_match_expected(scope, vp_keys_list, expected);
 
@@ -283,8 +285,6 @@ Test(value_pairs, test_transformer_shift_levels)
   g_ptr_array_free(transformers, TRUE);
 }
 
-GlobalConfig *cfg;
-
 void
 setup(void)
 {
@@ -292,17 +292,17 @@ setup(void)
   setenv("TZ", "MET-1METDST", TRUE);
   tzset();
 
-  cfg = cfg_new_snippet();
-  cfg_load_module(cfg, "syslogformat");
+  configuration = cfg_new_snippet();
+  cfg_load_module(configuration, "syslogformat");
   msg_format_options_defaults(&parse_options);
-  msg_format_options_init(&parse_options, cfg);
+  msg_format_options_init(&parse_options, configuration);
   parse_options.flags |= LP_SYSLOG_PROTOCOL;
 }
 
 void
 teardown(void)
 {
-  cfg_free(cfg);
+  cfg_free(configuration);
   app_shutdown();
 }
 

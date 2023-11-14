@@ -30,11 +30,10 @@
 
 #include "systemd-journal.h"
 #include "cfg-parser.h"
-#include "systemd-journal-grammar.h"
 #include "syslog-names.h"
 #include "messages.h"
 #include "plugin.h"
-#include "cfg-grammar.h"
+#include "cfg-grammar-internal.h"
 
 #include <string.h>
 
@@ -42,7 +41,7 @@ JournalReaderOptions *last_journal_reader_options;
 
 }
 
-%name-prefix "systemd_journal_"
+%define api.prefix {systemd_journal_}
 
 /* this parameter is needed in order to instruct bison to use a complete
  * argument list for yylex/yyerror */
@@ -57,6 +56,7 @@ JournalReaderOptions *last_journal_reader_options;
 %token KW_SYSTEMD_JOURNAL
 %token KW_PREFIX
 %token KW_MAX_FIELD_SIZE
+%token KW_NAMESPACE
 
 %type   <ptr> source_systemd_journal
 %type   <ptr> source_systemd_journal_params
@@ -68,7 +68,7 @@ start
         ;
 
 source_systemd_journal
-	: KW_SYSTEMD_JOURNAL '(' source_systemd_journal_params ')' { $$ = $3; }
+	: KW_SYSTEMD_JOURNAL '(' _inner_src_context_push source_systemd_journal_params _inner_src_context_pop ')' { $$ = $4; }
 	;
 
 source_systemd_journal_params
@@ -89,38 +89,35 @@ source_systemd_journal_options
 source_systemd_journal_option
         : KW_DEFAULT_SEVERITY '(' severity_string ')'
           {
-            if (last_journal_reader_options->default_pri == 0xFFFF)
-              last_journal_reader_options->default_pri = LOG_USER;
-            last_journal_reader_options->default_pri = (last_journal_reader_options->default_pri & ~7) | $3;
+            journal_reader_options_set_default_severity(last_journal_reader_options, $3);
           }
         | KW_DEFAULT_FACILITY '(' facility_string ')'
           {
-            if (last_journal_reader_options->default_pri == 0xFFFF)
-              last_journal_reader_options->default_pri = LOG_NOTICE;
-            last_journal_reader_options->default_pri = (last_journal_reader_options->default_pri & 7) | $3;
+            journal_reader_options_set_default_facility(last_journal_reader_options, $3);
           }
         | KW_TIME_ZONE '(' string ')'
           {
-            if (last_journal_reader_options->recv_time_zone)
-              free(last_journal_reader_options->recv_time_zone);
-            last_journal_reader_options->recv_time_zone = strdup($3);
+            journal_reader_options_set_time_zone(last_journal_reader_options, $3);
             free($3);
           }
 
         | KW_PREFIX '(' string ')'
           {
-            if (last_journal_reader_options->prefix)
-              free(last_journal_reader_options->prefix);
-            last_journal_reader_options->prefix = strdup($3);
+            journal_reader_options_set_prefix(last_journal_reader_options, $3);
             free($3);
           }
         | KW_MAX_FIELD_SIZE '(' positive_integer ')'
           {
-            last_journal_reader_options->max_field_size = $3;
+            journal_reader_options_set_max_field_size(last_journal_reader_options, $3);
+          }
+        | KW_NAMESPACE '(' string ')'
+          {
+            journal_reader_options_set_namespace(last_journal_reader_options, $3);
+            free($3);
           }
         | KW_LOG_FETCH_LIMIT '(' positive_integer ')'
           {
-            last_journal_reader_options->fetch_limit = $3;
+            journal_reader_options_set_log_fetch_limit(last_journal_reader_options, $3);
           }
         | source_option
 	| source_driver_option

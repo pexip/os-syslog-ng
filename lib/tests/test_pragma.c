@@ -22,15 +22,15 @@
  *
  */
 
-#include "pragma-parser.h"
-
 #include <criterion/criterion.h>
+
+#include "pragma-parser.h"
 
 Test(pragma_parser, process_valid_major_minor)
 {
-  const guint version = process_version_string("3.28");
+  const guint version = process_version_string("3.27");
 
-  cr_assert_eq(0x031c, version);
+  cr_assert_eq(0x031b, version);
 }
 
 Test(pragma_parser, process_version_large_minor)

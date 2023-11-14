@@ -142,8 +142,8 @@ r_parser_pcre(gchar *str, gint *len, const gchar *param, gpointer state, RParser
 
   if (pcre_fullinfo(self->re, self->extra, PCRE_INFO_CAPTURECOUNT, &num_matches) < 0)
     g_assert_not_reached();
-  if (num_matches > RE_MAX_MATCHES)
-    num_matches = RE_MAX_MATCHES;
+  if (num_matches > LOGMSG_MAX_MATCHES)
+    num_matches = LOGMSG_MAX_MATCHES;
 
   gsize matches_size = 3 * (num_matches + 1);
   gint *matches = g_alloca(matches_size * sizeof(gint));
@@ -243,6 +243,12 @@ r_parser_set(gchar *str, gint *len, const gchar *param, gpointer state, RParserM
   return FALSE;
 }
 
+gboolean
+r_parser_optionalset(gchar *str, gint *len, const gchar *param, gpointer state, RParserMatch *match)
+{
+  r_parser_set(str, len, param, state, match);
+  return TRUE;
+}
 
 gboolean
 r_parser_email(gchar *str, gint *len, const gchar *param, gpointer state, RParserMatch *match)
@@ -517,17 +523,26 @@ r_parser_ip(gchar *str, gint *len, const gchar *param, gpointer state, RParserMa
   return r_parser_ipv4(str, len, param, state, match) || r_parser_ipv6(str, len, param, state, match);
 }
 
+static inline void
+_scan_digits(gchar *str, gint *len)
+{
+  while (g_ascii_isdigit(str[*len]))
+    (*len)++;
+}
+
 gboolean
 r_parser_float(gchar *str, gint *len, const gchar *param, gpointer state, RParserMatch *match)
 {
-  gboolean dot = FALSE;
-
   *len = 0;
   if (str[*len] == '-')
     (*len)++;
 
-  while (g_ascii_isdigit(str[*len]) || (!dot && str[*len] == '.' && (dot = TRUE)))
-    (*len)++;
+  _scan_digits(str, len);
+  if (str[*len] == '.')
+    {
+      (*len)++;
+      _scan_digits(str, len);
+    }
 
   if (*len > 0 && (str[*len] == 'e' || str[*len] == 'E'))
     {
@@ -595,33 +610,34 @@ r_new_pnode(gchar *key)
 
   parser_node->first = CHAR_MIN;
   parser_node->last = CHAR_MAX;
-
+  parser_node->value_type = LM_VT_STRING;
   if (strcmp(params[0], "IPv4") == 0)
     {
       parser_node->parse = r_parser_ipv4;
-      parser_node->type = RPT_IPV4;
+      parser_node->parser_type = RPT_IPV4;
       parser_node->first = '0';
       parser_node->last = '9';
     }
   else if (strcmp(params[0], "IPv6") == 0)
     {
       parser_node->parse = r_parser_ipv6;
-      parser_node->type = RPT_IPV6;
+      parser_node->parser_type = RPT_IPV6;
     }
   else if (strcmp(params[0], "IPvANY") == 0)
     {
       parser_node->parse = r_parser_ip;
-      parser_node->type = RPT_IP;
+      parser_node->parser_type = RPT_IP;
     }
   else if (strcmp(params[0], "MACADDR") == 0)
     {
       parser_node->parse = r_parser_macaddr;
-      parser_node->type = RPT_MACADDR;
+      parser_node->parser_type = RPT_MACADDR;
     }
   else if (strcmp(params[0], "NUMBER") == 0)
     {
       parser_node->parse = r_parser_number;
-      parser_node->type = RPT_NUMBER;
+      parser_node->parser_type = RPT_NUMBER;
+      parser_node->value_type = LM_VT_INT64;
       parser_node->first = '-';
       parser_node->last = '9';
     }
@@ -629,21 +645,22 @@ r_new_pnode(gchar *key)
     {
       /* DOUBLE is a deprecated alias for FLOAT */
       parser_node->parse = r_parser_float;
-      parser_node->type = RPT_FLOAT;
+      parser_node->parser_type = RPT_FLOAT;
       parser_node->first = '-';
       parser_node->last = '9';
+      parser_node->value_type = LM_VT_DOUBLE;
     }
   else if (strcmp(params[0], "STRING") == 0)
     {
       parser_node->parse = r_parser_string;
-      parser_node->type = RPT_STRING;
+      parser_node->parser_type = RPT_STRING;
     }
   else if (strcmp(params[0], "ESTRING") == 0)
     {
       if (params_len == 3)
         {
           parser_node->parse = r_parser_estring_c;
-          parser_node->type = RPT_ESTRING;
+          parser_node->parser_type = RPT_ESTRING;
 
           if (params[2] && (strlen(params[2]) > 1))
             {
@@ -666,7 +683,7 @@ r_new_pnode(gchar *key)
       if (params_len <= 2)
         {
           parser_node->parse = r_parser_nlstring;
-          parser_node->type = RPT_NLSTRING;
+          parser_node->parser_type = RPT_NLSTRING;
         }
       else
         {
@@ -678,7 +695,7 @@ r_new_pnode(gchar *key)
   else if (strcmp(params[0], "PCRE") == 0)
     {
       parser_node->parse = r_parser_pcre;
-      parser_node->type = RPT_PCRE;
+      parser_node->parser_type = RPT_PCRE;
 
       if (params[2])
         {
@@ -696,14 +713,14 @@ r_new_pnode(gchar *key)
   else if (strcmp(params[0], "ANYSTRING") == 0)
     {
       parser_node->parse = r_parser_anystring;
-      parser_node->type = RPT_ANYSTRING;
+      parser_node->parser_type = RPT_ANYSTRING;
     }
   else if (strcmp(params[0], "SET") == 0)
     {
       if (params_len == 3)
         {
           parser_node->parse = r_parser_set;
-          parser_node->type = RPT_SET;
+          parser_node->parser_type = RPT_SET;
         }
       else
         {
@@ -713,20 +730,35 @@ r_new_pnode(gchar *key)
           parser_node = NULL;
         }
     }
+  else if (strcmp(params[0], "OPTIONALSET") == 0)
+    {
+      if (params_len == 3)
+        {
+          parser_node->parse = r_parser_optionalset;
+          parser_node->parser_type = RPT_OPTIONALSET;
+        }
+      else
+        {
+          g_free(parser_node);
+          msg_error("Missing OPTIONALSET parser parameters",
+                    evt_tag_str("type", params[0]));
+          parser_node = NULL;
+        }
+    }
   else if (strcmp(params[0], "EMAIL") == 0)
     {
       parser_node->parse = r_parser_email;
-      parser_node->type = RPT_EMAIL;
+      parser_node->parser_type = RPT_EMAIL;
     }
   else if (strcmp(params[0], "HOSTNAME") == 0)
     {
       parser_node->parse = r_parser_hostname;
-      parser_node->type = RPT_HOSTNAME;
+      parser_node->parser_type = RPT_HOSTNAME;
     }
   else if (strcmp(params[0], "LLADDR") == 0)
     {
       parser_node->parse = r_parser_lladdr;
-      parser_node->type = RPT_LLADDR;
+      parser_node->parser_type = RPT_LLADDR;
     }
   else if (g_str_has_prefix(params[0], "QSTRING"))
     {
@@ -735,7 +767,7 @@ r_new_pnode(gchar *key)
           gchar *state = (gchar *) &(parser_node->state);
 
           parser_node->parse = r_parser_qstring;
-          parser_node->type = RPT_QSTRING;
+          parser_node->parser_type = RPT_QSTRING;
           parser_node->first = params[2][0];
           parser_node->last = params[2][0];
 
@@ -828,7 +860,7 @@ r_add_child(RNode *parent, RNode *child)
 }
 
 static inline void
-r_add_child_check(RNode *root, gchar *key, gpointer value, RNodeGetValueFunc value_func)
+r_add_child_check(RNode *root, gchar *key, gpointer value, RNodeGetValueFunc value_func, const gchar *location)
 {
   gchar *at;
 
@@ -845,12 +877,12 @@ r_add_child_check(RNode *root, gchar *key, gpointer value, RNodeGetValueFunc val
 
           /* and insert the rest beginning from @ under the newly created literal node */
           *at = '@';
-          r_insert_node(child, at, value, value_func);
+          r_insert_node(child, at, value, value_func, location);
         }
       else
         {
           /* @ is the first so let's insert it simply and let insert_node handle @ */
-          r_insert_node(root, key, value, value_func);
+          r_insert_node(root, key, value, value_func, location);
         }
     }
   else
@@ -924,7 +956,7 @@ r_find_child_by_first_character(RNode *root, char key)
 }
 
 void
-r_insert_node(RNode *root, gchar *key, gpointer value, RNodeGetValueFunc value_func)
+r_insert_node(RNode *root, gchar *key, gpointer value, RNodeGetValueFunc value_func, const gchar *location)
 {
   RNode *node;
   gint keylen = strlen(key);
@@ -959,12 +991,13 @@ r_insert_node(RNode *root, gchar *key, gpointer value, RNodeGetValueFunc value_f
                 msg_error("Duplicate key in parser radix tree",
                           evt_tag_str("key", "@"),
                           evt_tag_str("value", value_func ? value_func(value) : "unknown"),
-                          evt_tag_str("other-value", value_func ? value_func(node->value) : "unknown"));
+                          evt_tag_str("other-value", value_func ? value_func(node->value) : "unknown"),
+                          evt_tag_str("location", location));
             }
 
           /* go down building the tree if there is key left */
           if (keylen > 2)
-            r_insert_node(node, key + 2, value, value_func);
+            r_insert_node(node, key + 2, value, value_func, location);
 
         }
       else if ((keylen >= 2) && (end = strchr((const gchar *)key + 1, '@')) != NULL)
@@ -981,6 +1014,7 @@ r_insert_node(RNode *root, gchar *key, gpointer value, RNodeGetValueFunc value_f
               if (!node)
                 {
                   node = r_new_node(NULL, NULL);
+                  node->pdb_location = g_strdup(location);
                   node->parser = parser_node;
 
                   r_add_pchild(root, node);
@@ -994,7 +1028,7 @@ r_insert_node(RNode *root, gchar *key, gpointer value, RNodeGetValueFunc value_f
               if ((end - key) < (keylen - 1))
                 {
                   /* the key is not over so go on building the tree */
-                  r_insert_node(node, end + 1, value, value_func);
+                  r_insert_node(node, end + 1, value, value_func, location);
                 }
               else
                 {
@@ -1008,10 +1042,12 @@ r_insert_node(RNode *root, gchar *key, gpointer value, RNodeGetValueFunc value_f
                     {
                       /* FIXME: print parser type in string format */
                       msg_error("Duplicate parser node in radix tree",
-                                evt_tag_int("type", node->parser->type),
+                                evt_tag_str("type", r_parser_type_name(node->parser->parser_type)),
                                 evt_tag_str("name", log_msg_get_value_name(node->parser->handle, NULL)),
                                 evt_tag_str("value", value_func ? value_func(value) : "unknown"),
-                                evt_tag_str("other-value", value_func ? value_func(node->value) : "unknown"));
+                                evt_tag_str("other-value", value_func ? value_func(node->value) : "unknown"),
+                                evt_tag_str("location", location),
+                                evt_tag_str("other-location", node->pdb_location));
                     }
                 }
             }
@@ -1020,7 +1056,8 @@ r_insert_node(RNode *root, gchar *key, gpointer value, RNodeGetValueFunc value_f
       else
         msg_error("Key contains '@' without escaping",
                   evt_tag_str("key", key),
-                  evt_tag_str("value", value_func ? value_func(value) : "unknown"));
+                  evt_tag_str("value", value_func ? value_func(value) : "unknown"),
+                  evt_tag_str("location", location));
     }
   else
     {
@@ -1046,13 +1083,13 @@ r_insert_node(RNode *root, gchar *key, gpointer value, RNodeGetValueFunc value_f
             {
               /* @ is always a singel node, and we also have an @ so insert us under root */
               if (key[i] == '@')
-                r_insert_node(root, key + i, value, value_func);
+                r_insert_node(root, key + i, value, value_func, location);
               else
-                r_insert_node(node, key + i, value, value_func);
+                r_insert_node(node, key + i, value, value_func, location);
             }
           else
             {
-              r_add_child_check(root, key + i, value, value_func);
+              r_add_child_check(root, key + i, value, value_func, location);
             }
         }
       else if (i == keylen && i == nodelen)
@@ -1064,7 +1101,8 @@ r_insert_node(RNode *root, gchar *key, gpointer value, RNodeGetValueFunc value_f
           else
             msg_error("Duplicate key in radix tree",
                       evt_tag_str("key", key),
-                      evt_tag_str("value", value_func ? value_func(value) : "unknown"));
+                      evt_tag_str("value", value_func ? value_func(value) : "unknown"),
+                      evt_tag_str("location", location));
         }
       else if (i > 0 && i < nodelen)
         {
@@ -1100,7 +1138,7 @@ r_insert_node(RNode *root, gchar *key, gpointer value, RNodeGetValueFunc value_f
           if (i < keylen)
             {
               /* we add a new sub tree */
-              r_add_child_check(root, key + i, value, value_func);
+              r_add_child_check(root, key + i, value, value_func, location);
             }
           else
             {
@@ -1111,7 +1149,7 @@ r_insert_node(RNode *root, gchar *key, gpointer value, RNodeGetValueFunc value_f
       else
         {
           /* simply a new children */
-          r_add_child_check(root, key + i, value, value_func);
+          r_add_child_check(root, key + i, value, value_func, location);
         }
     }
 }
@@ -1297,7 +1335,7 @@ _fixup_match_offsets(RFindNodeState *state, RParserNode *parser_node, gint extra
        * REF_MATCH and we only need to duplicate the
        * result if the string is indeed modified
        */
-      match->type = parser_node->type;
+      match->type = parser_node->value_type;
       match->ofs = match->ofs + remaining_key - state->whole_key;
       match->len = (gint16) match->len + extracted_match_len;
       match->handle = parser_node->handle;
@@ -1511,7 +1549,7 @@ r_find_all_applicable_nodes(RNode *root, gchar *key, gint keylen, RNodeGetValueF
 RNode *
 r_new_node(const gchar *key, gpointer value)
 {
-  RNode *node = g_malloc(sizeof(RNode));
+  RNode *node = g_malloc0(sizeof(RNode));
 
   node->key = g_strdup(key);
   node->keylen = (key ? strlen(key) : -1);
@@ -1546,6 +1584,8 @@ r_free_node(RNode *node, void (*free_fn)(gpointer data))
 
   if (node->key)
     g_free(node->key);
+
+  g_free(node->pdb_location);
 
   if (node->value && free_fn)
     free_fn(node->value);

@@ -40,7 +40,7 @@ _number_of_dynamic_clusters(void)
   return g_hash_table_size(stats_cluster_container.dynamic_clusters);
 }
 
-static GStaticMutex stats_mutex = G_STATIC_MUTEX_INIT;
+static GMutex stats_mutex;
 gboolean stats_locked;
 
 static void
@@ -55,7 +55,7 @@ _insert_cluster(StatsCluster *sc)
 void
 stats_lock(void)
 {
-  g_static_mutex_lock(&stats_mutex);
+  g_mutex_lock(&stats_mutex);
   stats_locked = TRUE;
 }
 
@@ -63,7 +63,7 @@ void
 stats_unlock(void)
 {
   stats_locked = FALSE;
-  g_static_mutex_unlock(&stats_mutex);
+  g_mutex_unlock(&stats_mutex);
 }
 
 static StatsCluster *
@@ -197,7 +197,7 @@ _register_external_counter(gint stats_level, const StatsClusterKey *sc_key, gint
  * @type: the counter type (processed, dropped, etc)
  * @counter: returned pointer to the counter
  *
- * This fuction registers a general purpose counter. Whenever multiple
+ * This function registers a general purpose counter. Whenever multiple
  * objects touch the same counter all of these should register the counter
  * with the same name. Internally the stats subsystem counts the number of
  * users of the same counter in this case, thus the counter will only be
@@ -215,6 +215,12 @@ stats_register_external_counter(gint stats_level, const StatsClusterKey *sc_key,
                                 atomic_gssize *external_counter)
 {
   return _register_external_counter(stats_level, sc_key, type, FALSE, external_counter);
+}
+
+StatsCluster *
+stats_register_alias_counter(gint level, const StatsClusterKey *sc_key, gint type, StatsCounterItem *aliased_counter)
+{
+  return stats_register_external_counter(level, sc_key, type, &aliased_counter->value);
 }
 
 StatsCluster *
@@ -315,6 +321,11 @@ stats_unregister_external_counter(const StatsClusterKey *sc_key, gint type,
   stats_cluster_untrack_counter(sc, type, &ctr);
 }
 
+void
+stats_unregister_alias_counter(const StatsClusterKey *sc_key, gint type, StatsCounterItem *aliased_counter)
+{
+  stats_unregister_external_counter(sc_key, type, &aliased_counter->value);
+}
 
 void
 stats_unregister_dynamic_counter(StatsCluster *sc, gint type, StatsCounterItem **counter)
@@ -325,8 +336,8 @@ stats_unregister_dynamic_counter(StatsCluster *sc, gint type, StatsCounterItem *
   stats_cluster_untrack_counter(sc, type, counter);
 }
 
-static StatsCluster *
-_lookup_cluster(const StatsClusterKey *sc_key)
+StatsCluster *
+stats_get_cluster(const StatsClusterKey *sc_key)
 {
   g_assert(stats_locked);
 
@@ -343,7 +354,7 @@ stats_contains_counter(const StatsClusterKey *sc_key, gint type)
 {
   g_assert(stats_locked);
 
-  StatsCluster *sc = _lookup_cluster(sc_key);
+  StatsCluster *sc = stats_get_cluster(sc_key);
   if (!sc)
     {
       return FALSE;
@@ -356,7 +367,7 @@ StatsCounterItem *
 stats_get_counter(const StatsClusterKey *sc_key, gint type)
 {
   g_assert(stats_locked);
-  StatsCluster *sc = _lookup_cluster(sc_key);
+  StatsCluster *sc = stats_get_cluster(sc_key);
 
   if (!sc)
     return NULL;
@@ -375,14 +386,29 @@ _foreach_cluster_helper(gpointer key, gpointer value, gpointer user_data)
   func(sc, func_data);
 }
 
+static void
+_foreach_cluster(GHashTable *clusters, gpointer *args, gboolean *cancelled)
+{
+  GHashTableIter iter;
+  g_hash_table_iter_init(&iter, clusters);
+  gpointer key, value;
+
+  while (g_hash_table_iter_next(&iter, &key, &value))
+    {
+      if (cancelled && *cancelled)
+        break;
+      _foreach_cluster_helper(key, value, args);
+    }
+}
+
 void
-stats_foreach_cluster(StatsForeachClusterFunc func, gpointer user_data)
+stats_foreach_cluster(StatsForeachClusterFunc func, gpointer user_data, gboolean *cancelled)
 {
   gpointer args[] = { func, user_data };
 
   g_assert(stats_locked);
-  g_hash_table_foreach(stats_cluster_container.static_clusters, _foreach_cluster_helper, args);
-  g_hash_table_foreach(stats_cluster_container.dynamic_clusters, _foreach_cluster_helper, args);
+  _foreach_cluster(stats_cluster_container.static_clusters, args, cancelled);
+  _foreach_cluster(stats_cluster_container.dynamic_clusters, args, cancelled);
 }
 
 static gboolean
@@ -393,7 +419,12 @@ _foreach_cluster_remove_helper(gpointer key, gpointer value, gpointer user_data)
   gpointer func_data = args[1];
   StatsCluster *sc = (StatsCluster *) value;
 
-  return func(sc, func_data);
+  gboolean should_be_removed = func(sc, func_data);
+
+  if (should_be_removed)
+    stats_query_deindex_cluster(sc);
+
+  return should_be_removed;
 }
 
 void
@@ -415,12 +446,12 @@ _foreach_counter_helper(StatsCluster *sc, gpointer user_data)
 }
 
 void
-stats_foreach_counter(StatsForeachCounterFunc func, gpointer user_data)
+stats_foreach_counter(StatsForeachCounterFunc func, gpointer user_data, gboolean *cancelled)
 {
   gpointer args[] = { func, user_data };
 
   g_assert(stats_locked);
-  stats_foreach_cluster(_foreach_counter_helper, args);
+  stats_foreach_cluster(_foreach_counter_helper, args, cancelled);
 }
 
 void
@@ -433,7 +464,7 @@ stats_registry_init(void)
                                              (GEqualFunc) stats_cluster_equal, NULL,
                                              (GDestroyNotify) stats_cluster_free);
 
-  g_static_mutex_init(&stats_mutex);
+  g_mutex_init(&stats_mutex);
 }
 
 void
@@ -443,6 +474,5 @@ stats_registry_deinit(void)
   g_hash_table_destroy(stats_cluster_container.dynamic_clusters);
   stats_cluster_container.static_clusters = NULL;
   stats_cluster_container.dynamic_clusters = NULL;
-  g_static_mutex_free(&stats_mutex);
+  g_mutex_clear(&stats_mutex);
 }
-

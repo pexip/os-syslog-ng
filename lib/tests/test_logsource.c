@@ -22,7 +22,9 @@
  *
  */
 
-#include "syslog-ng.h"
+#include <criterion/criterion.h>
+#include <criterion/parameterized.h>
+
 #include "logsource.h"
 #include "logmsg/logmsg.h"
 #include "logpipe.h"
@@ -30,11 +32,7 @@
 #include "apphook.h"
 #include "dynamic-window-pool.h"
 
-#include <criterion/criterion.h>
-#include <criterion/parameterized.h>
-
 #include <syslog.h>
-
 #include <string.h>
 
 #define TEST_SOURCE_GROUP "test_source_group"
@@ -81,7 +79,7 @@ test_source_init(LogSourceOptions *options)
   source->super.wakeup = test_source_wakeup;
 
   log_source_options_init(options, cfg, TEST_SOURCE_GROUP);
-  log_source_set_options(&source->super, options, TEST_STATS_ID, TEST_STATS_INSTANCE, TRUE, FALSE, NULL);
+  log_source_set_options(&source->super, options, TEST_STATS_ID, TEST_STATS_INSTANCE, TRUE, NULL);
   cr_assert(log_pipe_init(&source->super.super));
   return &source->super;
 }

@@ -112,13 +112,15 @@ tf_grep_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent, gint
  *  --max-count or -m          The maximum number of matches, 0 for unlimited
  */
 void
-tf_grep_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *args, GString *result)
+tf_grep_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *args, GString *result,
+             LogMessageValueType *type)
 {
   gint i, msg_ndx;
   gboolean first = TRUE;
   TFCondState *state = (TFCondState *) s;
   gint count = 0;
 
+  *type = LM_VT_STRING;
   for (msg_ndx = 0; msg_ndx < args->num_messages; msg_ndx++)
     {
       LogMessage *msg = args->messages[msg_ndx];
@@ -133,8 +135,7 @@ tf_grep_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs 
 
               /* NOTE: not recursive, as the message context is just one message */
               log_template_append_format(state->super.argv_templates[i], msg,
-                                         args->opts, args->tz, args->seq_num, args->context_id,
-                                         result);
+                                         args->options, result);
               first = FALSE;
             }
           if (state->grep_max_count && count >= state->grep_max_count)
@@ -159,33 +160,33 @@ tf_if_prepare(LogTemplateFunction *self, gpointer s, LogTemplate *parent, gint a
 }
 
 void
-tf_if_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *args, GString *result)
+tf_if_call(LogTemplateFunction *self, gpointer s, const LogTemplateInvokeArgs *args, GString *result,
+           LogMessageValueType *type)
 {
   TFCondState *state = (TFCondState *) s;
 
-  if (filter_expr_eval_with_context(state->filter, args->messages, args->num_messages))
+  if (filter_expr_eval_with_context(state->filter, args->messages, args->num_messages, args->options))
     {
-      log_template_append_format_with_context(state->super.argv_templates[0],
-                                              args->messages, args->num_messages, args->opts, args->tz,
-                                              args->seq_num, args->context_id,
-                                              result);
+      log_template_append_format_value_and_type_with_context(state->super.argv_templates[0],
+                                                             args->messages, args->num_messages, args->options,
+                                                             result, type);
     }
   else
     {
-      log_template_append_format_with_context(state->super.argv_templates[1],
-                                              args->messages, args->num_messages, args->opts, args->tz,
-                                              args->seq_num, args->context_id,
-                                              result);
+      log_template_append_format_value_and_type_with_context(state->super.argv_templates[1],
+                                                             args->messages, args->num_messages, args->options,
+                                                             result, type);
     }
 }
 
 TEMPLATE_FUNCTION(TFCondState, tf_if, tf_if_prepare, NULL, tf_if_call, tf_cond_free_state, NULL);
 
 static void
-tf_or (LogMessage *msg, gint argc, GString *argv[], GString *result)
+tf_or (LogMessage *msg, gint argc, GString *argv[], GString *result, LogMessageValueType *type)
 {
   gint i;
 
+  *type = LM_VT_STRING;
   for (i = 0; i < argc; i++)
     {
       if (argv[i]->len == 0)

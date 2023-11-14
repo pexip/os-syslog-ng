@@ -135,6 +135,11 @@ _setup_static_options_in_curl(HTTPDestinationWorker *self)
   if (owner->ciphers)
     curl_easy_setopt(self->curl, CURLOPT_SSL_CIPHER_LIST, owner->ciphers);
 
+#if SYSLOG_NG_HAVE_DECL_CURLOPT_TLS13_CIPHERS
+  if (owner->tls13_ciphers)
+    curl_easy_setopt(self->curl, CURLOPT_TLS13_CIPHERS, owner->tls13_ciphers);
+#endif
+
   if (owner->proxy)
     curl_easy_setopt(self->curl, CURLOPT_PROXY, owner->proxy);
 
@@ -271,8 +276,10 @@ _add_message_to_batch(HTTPDestinationWorker *self, LogMessage *msg)
     }
   if (owner->body_template)
     {
-      log_template_append_format(owner->body_template, msg, &owner->template_options, LTZ_SEND,
-                                 self->super.seq_num, NULL, self->request_body);
+      LogTemplateEvalOptions options = {&owner->template_options, LTZ_SEND,
+                                        self->super.seq_num, NULL, LM_VT_STRING
+                                       };
+      log_template_append_format(owner->body_template, msg, &options, self->request_body);
     }
   else
     {
@@ -670,6 +677,9 @@ _flush(LogThreadedDestWorker *s, LogThreadedFlushMode mode)
       retval = _flush_on_target(self, target);
       if (retval == LTR_SUCCESS)
         {
+          gsize msg_length = self->request_body->len;
+          log_threaded_dest_driver_insert_batch_length_stats(self->super.owner, msg_length);
+
           http_load_balancer_set_target_successful(owner->load_balancer, target);
           break;
         }
@@ -716,7 +726,10 @@ _insert_batched(LogThreadedDestWorker *s, LogMessage *msg)
 {
   HTTPDestinationWorker *self = (HTTPDestinationWorker *) s;
 
+  gsize orig_msg_len = self->request_body->len;
   _add_message_to_batch(self, msg);
+  gsize diff_msg_len = self->request_body->len - orig_msg_len;
+  log_threaded_dest_driver_insert_msg_length_stats(self->super.owner, diff_msg_len);
 
   if (_should_initiate_flush(self))
     {
@@ -730,14 +743,18 @@ _insert_single(LogThreadedDestWorker *s, LogMessage *msg)
 {
   HTTPDestinationWorker *self = (HTTPDestinationWorker *) s;
 
+  gsize orig_msg_len = self->request_body->len;
   _add_message_to_batch(self, msg);
+  gsize diff_msg_len = self->request_body->len - orig_msg_len;
+  log_threaded_dest_driver_insert_msg_length_stats(self->super.owner, diff_msg_len);
+
   _add_msg_specific_headers(self, msg);
 
   return log_threaded_dest_worker_flush(&self->super, LTF_FLUSH_NORMAL);
 }
 
 static gboolean
-_thread_init(LogThreadedDestWorker *s)
+_init(LogThreadedDestWorker *s)
 {
   HTTPDestinationWorker *self = (HTTPDestinationWorker *) s;
   HTTPDestinationDriver *owner = (HTTPDestinationDriver *) self->super.owner;
@@ -759,7 +776,7 @@ _thread_init(LogThreadedDestWorker *s)
 }
 
 static void
-_thread_deinit(LogThreadedDestWorker *s)
+_deinit(LogThreadedDestWorker *s)
 {
   HTTPDestinationWorker *self = (HTTPDestinationWorker *) s;
 
@@ -785,8 +802,8 @@ http_dw_new(LogThreadedDestDriver *o, gint worker_index)
   HTTPDestinationDriver *owner = (HTTPDestinationDriver *) o;
 
   log_threaded_dest_worker_init_instance(&self->super, o, worker_index);
-  self->super.thread_init = _thread_init;
-  self->super.thread_deinit = _thread_deinit;
+  self->super.init = _init;
+  self->super.deinit = _deinit;
   self->super.flush = _flush;
   self->super.free_fn = http_dw_free;
 
