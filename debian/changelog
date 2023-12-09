@@ -1,3 +1,9 @@
+syslog-ng (3.38.1-5pexip1) pexip-bookworm; urgency=medium
+
+  * Bookworm build for product distribution
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Sat, 09 Dec 2023 22:58:48 +0000
+
 syslog-ng (3.38.1-5) unstable; urgency=medium
 
   * Build without Criterion support.
