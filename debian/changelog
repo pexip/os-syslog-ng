@@ -1,3 +1,9 @@
+syslog-ng (3.38.1-5+pexip24u2) pexip-bookworm; urgency=medium
+
+  * Initial bookworm build
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Fri, 02 Feb 2024 10:27:25 +0000
+
 syslog-ng (3.38.1-5pexip1) pexip-bookworm; urgency=medium
 
   * Bookworm build for product distribution
