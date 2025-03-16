@@ -81,14 +81,16 @@
  *  SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include <ctype.h>
-#include <stdint.h>
-#include <string.h>
 
 #include "timeutils/wallclocktime.h"
 #include "timeutils/unixtime.h"
 #include "timeutils/cache.h"
 #include "timeutils/misc.h"
+
+#include <ctype.h>
+#include <stdint.h>
+#include <string.h>
+
 
 void
 wall_clock_time_unset(WallClockTime *self)
@@ -268,6 +270,12 @@ static const int start_of_month[2][13] =
   { 0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366 }
 };
 
+static inline gboolean
+_is_str_empty(const gchar *str)
+{
+  return !str || strcmp(str, "") == 0;
+}
+
 gchar *
 wall_clock_time_strptime(WallClockTime *wct, const gchar *format, const gchar *input)
 {
@@ -277,6 +285,7 @@ wall_clock_time_strptime(WallClockTime *wct, const gchar *format, const gchar *i
                      day_offset = -1, week_offset = 0, offs, mandatory;
   const char *new_fmt;
   const char *const *system_tznames;
+  int system_tznames_len;
 
   bp = (const unsigned char *)input;
 
@@ -672,12 +681,13 @@ recurse:
                   continue;
                 }
               system_tznames = cached_get_system_tznames();
-              ep = find_string(bp, &i, system_tznames, NULL, 2);
+              system_tznames_len = _is_str_empty(system_tznames[1]) ? 1 : 2;
+              ep = find_string(bp, &i, system_tznames, NULL, system_tznames_len);
               if (ep != NULL)
                 {
                   wct->tm.tm_isdst = i;
                   wct->wct_gmtoff = -cached_get_system_tzofs() + wct->tm.tm_isdst*3600;
-                  wct->wct_zone = system_tznames[i];
+                  wct->wct_zone = __UNCONST(system_tznames[i]);
                   bp = ep;
                   continue;
                 }
@@ -713,6 +723,13 @@ recurse:
                   i++;
                   continue;
                 }
+              if (i == 1 && *bp == ':')
+                {
+                  /* colon after the first digit, behave as if we had two digits */
+                  bp++;
+                  i++;
+                  continue;
+                }
               if (i == 2 && *bp == ':')
                 {
                   bp++;
@@ -723,9 +740,11 @@ recurse:
           switch (i)
             {
             case 2:
+              /* just hours, HH */
               offs *= 3600;
               break;
             case 4:
+              /* full offset HH:MM */
               i = offs % 100;
               offs /= 100;
               if (i >= 60)
@@ -864,10 +883,9 @@ wall_clock_time_guess_missing_year(WallClockTime *self)
 {
   if (self->wct_year == -1)
     {
-      time_t now;
+      time_t now = get_cached_realtime_sec();
       struct tm tm;
 
-      now = cached_g_current_time_sec();
       cached_localtime(&now, &tm);
       self->wct_year = determine_year_for_month(self->wct_mon, &tm);
     }
@@ -885,10 +903,9 @@ wall_clock_time_guess_missing_fields(WallClockTime *self)
    * the missing field makes sense. And the year is initializeed to the current
    *  one.
    */
-  time_t now;
+  time_t now = get_cached_realtime_sec();
   struct tm tm;
 
-  now = cached_g_current_time_sec();
   cached_localtime(&now, &tm);
 
   if (self->wct_year == -1 && self->wct_mon == -1 && self->wct_mday == -1)

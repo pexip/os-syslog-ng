@@ -51,7 +51,9 @@ enum
   M_SOURCE_IP,
   M_DEST_IP,
   M_DEST_PORT,
+  M_IP_PROTOCOL,
   M_PROTOCOL,
+  M_RAWMSG_SIZE,
   M_SEQNUM,
   M_CONTEXT_ID,
 
@@ -118,7 +120,7 @@ extern LogMacroDef macros[];
 
 /* low level macro functions */
 guint log_macro_lookup(const gchar *macro, gint len);
-gboolean log_macro_expand(gint id, gboolean escape, LogTemplateEvalOptions *options,
+gboolean log_macro_expand(gint id, LogTemplateEvalOptions *options,
                           const LogMessage *msg,
                           GString *result, LogMessageValueType *type);
 gboolean log_macro_expand_simple(gint id, const LogMessage *msg,

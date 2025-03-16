@@ -26,15 +26,16 @@
 #define _SNG_PYTHON_DEST_H
 
 #include "python-module.h"
+#include "python-binding.h"
 #include "driver.h"
 #include "logwriter.h"
 #include "value-pairs/value-pairs.h"
 
 LogDriver *python_dd_new(GlobalConfig *cfg);
-void python_dd_set_loaders(LogDriver *d, GList *loaders);
-void python_dd_set_class(LogDriver *d, gchar *class_name);
 void python_dd_set_value_pairs(LogDriver *d, ValuePairs *vp);
-void python_dd_set_option(LogDriver  *d, gchar *key, gchar *value);
+PythonBinding *python_dd_get_binding(LogDriver *d);
 LogTemplateOptions *python_dd_get_template_options(LogDriver *d);
+
+void py_log_destination_global_init(void);
 
 #endif

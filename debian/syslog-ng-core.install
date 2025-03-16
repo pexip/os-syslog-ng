@@ -18,7 +18,6 @@ usr/lib/syslog-ng/*/libbasicfuncs.so
 usr/lib/syslog-ng/*/libconfgen.so
 usr/lib/syslog-ng/*/libcryptofuncs.so
 usr/lib/syslog-ng/*/libcsvparser.so
-usr/lib/syslog-ng/*/libdbparser.so
 usr/lib/syslog-ng/*/libjson-plugin.so
 usr/lib/syslog-ng/*/libhook-commands.so
 usr/lib/syslog-ng/*/libkvformat.so
@@ -31,6 +30,7 @@ usr/lib/syslog-ng/*/libtimestamp.so
 usr/lib/syslog-ng/*/libcef.so
 usr/lib/syslog-ng/*/libdisk-buffer.so
 usr/lib/syslog-ng/*/libappmodel.so
+usr/lib/syslog-ng/*/libcorrelation.so
 usr/lib/syslog-ng/*/libregexp-parser.so
 usr/lib/syslog-ng/*/librate-limit-filter.so
 usr/lib/syslog-ng/*/libtfgetent.so
@@ -41,14 +41,14 @@ usr/lib/syslog-ng/libloggen_helper.so
 usr/lib/syslog-ng/libloggen_plugin.so
 usr/lib/syslog-ng/libloggen_helper-*.so.*
 usr/lib/syslog-ng/libloggen_plugin-*.so.*
+usr/share/syslog-ng/smart-multi-line.fsm
 usr/share/syslog-ng/xsd/*
 [linux-any] usr/lib/syslog-ng/*/libsdjournal.so
 [linux-any] usr/lib/syslog-ng/*/libpacctformat.so
-
-#[!kfreebsd-any] lib/systemd/system/*
-[!kfreebsd-any] debian/syslog-ng.systemd =>  lib/systemd/system/syslog-ng.service
 
 debian/syslog-ng.conf                   /etc/syslog-ng/
 
 debian/tty10.plugin   => /usr/share/syslog-ng/include/scl/getvirtconsole/plugin.conf
 debian/tty10.sh   => /usr/share/syslog-ng/include/scl/getvirtconsole/tty10.sh
+
+usr/share/syslog-ng/include/scl.conf

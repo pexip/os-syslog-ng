@@ -27,6 +27,8 @@
 #include "logpipe.h"
 #include "apphook.h"
 #include "mainloop.h"
+#include "timeutils/misc.h"
+#include "compat/time.h"
 
 #include <stdio.h>
 #include <unistd.h>
@@ -41,6 +43,7 @@ struct _Debugger
   LogMessage *current_msg;
   LogPipe *current_pipe;
   gboolean drop_current_message;
+  struct timespec last_trace_event;
 };
 
 static gboolean
@@ -49,6 +52,17 @@ _format_nvpair(NVHandle handle,
                const gchar *value, gssize length,
                LogMessageValueType type, gpointer user_data)
 {
+  if (type == LM_VT_BYTES || type == LM_VT_PROTOBUF)
+    {
+      printf("%s=", name);
+      for (gssize i = 0; i < length; i++)
+        {
+          const guchar b = (const guchar) value[i];
+          printf("%02hhx", b);
+        }
+      printf("\n");
+      return FALSE;
+    }
   printf("%s=%.*s\n", name, (gint) length, value);
   return FALSE;
 }
@@ -60,7 +74,7 @@ _display_msg_details(Debugger *self, LogMessage *msg)
 
   log_msg_values_foreach(msg, _format_nvpair, NULL);
   g_string_truncate(output, 0);
-  log_msg_format_tags(msg, output);
+  log_msg_format_tags(msg, output, TRUE);
   printf("TAGS=%s\n", output->str);
   printf("\n");
   g_string_free(output, TRUE);
@@ -126,7 +140,9 @@ _cmd_help(Debugger *self, gint argc, gchar *argv[])
 {
   printf("syslog-ng interactive console, the following commands are available\n\n"
          "  help, h, or ?            Display this help\n"
+         "  info                     Display information about the current execution state\n"
          "  continue or c            Continue until the next breakpoint\n"
+         "  trace                    Display timing information as the message traverses the config\n"
          "  print, p                 Print the current log message\n"
          "  drop, d                  Drop the current message\n"
          "  quit, q                  Tell syslog-ng to exit\n"
@@ -172,7 +188,7 @@ _cmd_display(Debugger *self, gint argc, gchar *argv[])
           return TRUE;
         }
     }
-  printf("display: The template is set to: \"%s\"\n", self->display_template->template);
+  printf("display: The template is set to: \"%s\"\n", self->display_template->template_str);
   return TRUE;
 }
 
@@ -184,11 +200,43 @@ _cmd_drop(Debugger *self, gint argc, gchar *argv[])
 }
 
 static gboolean
+_cmd_trace(Debugger *self, gint argc, gchar *argv[])
+{
+  self->current_msg->flags |= LF_STATE_TRACING;
+  return FALSE;
+}
+
+static gboolean
 _cmd_quit(Debugger *self, gint argc, gchar *argv[])
 {
   main_loop_exit(self->main_loop);
   self->drop_current_message = TRUE;
   return FALSE;
+}
+
+static gboolean
+_cmd_info_pipe(Debugger *self, LogPipe *pipe)
+{
+  gchar buf[1024];
+
+  printf("LogPipe %p at %s\n", pipe, log_expr_node_format_location(pipe->expr_node, buf, sizeof(buf)));
+  _display_source_line(pipe->expr_node);
+
+  return TRUE;
+}
+
+static gboolean
+_cmd_info(Debugger *self, gint argc, gchar *argv[])
+{
+  if (argc >= 2)
+    {
+      if (strcmp(argv[1], "pipe") == 0)
+        return _cmd_info_pipe(self, self->current_pipe);
+    }
+
+  printf("info: List of info subcommands\n"
+         "info pipe -- display information about the current pipe\n");
+  return TRUE;
 }
 
 typedef gboolean (*DebuggerCommandFunc)(Debugger *self, gint argc, gchar *argv[]);
@@ -210,6 +258,9 @@ struct
   { "drop",     _cmd_drop },
   { "quit",     _cmd_quit },
   { "q",        _cmd_quit },
+  { "trace",    _cmd_trace },
+  { "info",     _cmd_info },
+  { "i",        _cmd_info },
   { NULL, NULL }
 };
 
@@ -348,6 +399,22 @@ debugger_stop_at_breakpoint(Debugger *self, LogPipe *pipe_, LogMessage *msg)
   self->current_msg = NULL;
   self->current_pipe = NULL;
   return !self->drop_current_message;
+}
+
+gboolean
+debugger_perform_tracing(Debugger *self, LogPipe *pipe_, LogMessage *msg)
+{
+  struct timespec ts, *prev_ts = &self->last_trace_event;
+  gchar buf[1024];
+
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+
+  long diff = prev_ts->tv_sec == 0 ? 0 : timespec_diff_nsec(&ts, prev_ts);
+  printf("[%"G_GINT64_FORMAT".%09"G_GINT64_FORMAT" +%ld] Tracing %s\n",
+         (gint64)ts.tv_sec, (gint64)ts.tv_nsec, diff,
+         log_expr_node_format_location(pipe_->expr_node, buf, sizeof(buf)));
+  *prev_ts = ts;
+  return TRUE;
 }
 
 Debugger *

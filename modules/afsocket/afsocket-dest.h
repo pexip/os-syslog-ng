@@ -38,7 +38,7 @@ struct _AFSocketDestDriver
 {
   LogDestDriver super;
 
-  gboolean
+  guint
   connections_kept_alive_across_reloads:1;
   gboolean close_on_input;
   gint fd;
@@ -48,12 +48,16 @@ struct _AFSocketDestDriver
 
   GSockAddr *bind_addr;
   GSockAddr *dest_addr;
-  gint time_reopen;
   gboolean connection_initialized;
   struct iv_fd connect_fd;
   struct iv_timer reconnect_timer;
   SocketOptions *socket_options;
   TransportMapper *transport_mapper;
+
+  struct
+  {
+    StatsCounterItem *output_unreachable;
+  } metrics;
 
   LogWriter *(*construct_writer)(AFSocketDestDriver *self);
   gboolean (*setup_addresses)(AFSocketDestDriver *s);

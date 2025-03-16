@@ -24,7 +24,7 @@
 SUBDIRS			=
 DIST_SUBDIRS		=
 AM_MAKEFLAGS		= --no-print-directory
-AM_YFLAGS		= -Wno-yacc -Wno-other -Werror=conflicts-sr -Werror=conflicts-rr
+AM_YFLAGS		= -Wno-yacc -Wno-other -Werror=conflicts-sr -Werror=conflicts-rr -Wcounterexamples
 
 AM_TESTS_ENVIRONMENT	= top_srcdir="$(top_srcdir)" CRITERION_TEST_PATTERN='!(*/*performance*)' ASAN_OPTIONS="detect_odr_violation=0"
 if ENABLE_SANITIZER
@@ -33,7 +33,7 @@ endif
 
 ACLOCAL_AMFLAGS		= -I m4 --install
 
-EXTRA_DIST		= ${BUILT_SOURCES} VERSION NEWS.md autogen.sh \
+EXTRA_DIST		= $(filter-out ${NODIST_BUILT_SOURCES},${BUILT_SOURCES}) VERSION.txt NEWS.md autogen.sh \
 			  dist.conf dist.conf.in syslog-ng.pc.in \
 			  syslog-ng-config.h.in	\
 			  CONTRIBUTING.md	\
@@ -42,15 +42,18 @@ EXTRA_DIST		= ${BUILT_SOURCES} VERSION NEWS.md autogen.sh \
 			  syslog-ng-native-connector.pc.cmake	\
 			  syslog-ng-ctl/CMakeLists.txt	\
 			  requirements.txt	\
+			  dev-requirements.txt  \
+			  optional-dev-requirements.txt  \
 			  README.md	\
-			  .astylerc	\
-			  .travis.yml
+			  .astylerc
 
 
 pkgconfigdir		= $(libdir)/pkgconfig
 pkgconfig_DATA		= syslog-ng.pc
 
 AM_CPPFLAGS		= -I$(top_srcdir)/lib -I$(top_srcdir)/modules -I$(top_builddir)/lib -I$(top_builddir)/modules
+
+AM_OBJCFLAGS	= -fobjc-arc
 
 # configure script gives us -g and/or -O2, but all warning related settings
 # should be here
@@ -59,8 +62,16 @@ AM_CPPFLAGS		= -I$(top_srcdir)/lib -I$(top_srcdir)/modules -I$(top_builddir)/lib
 AM_CFLAGS = \
 	-Wshadow
 
+AM_CXXFLAGS = \
+	-Wshadow
+
 # Acceptable warnings
 AM_CFLAGS += \
+	-Wno-stack-protector \
+	-Wno-unused-parameter \
+	-Wno-variadic-macros
+
+AM_CXXFLAGS += \
 	-Wno-stack-protector \
 	-Wno-unused-parameter \
 	-Wno-variadic-macros
@@ -68,8 +79,9 @@ AM_CFLAGS += \
 if ENABLE_EXTRA_WARNINGS
 AM_CFLAGS += \
 	-Wimplicit-function-declaration \
+	$(CFLAGS_W_NO_INITIALIZER_OVERRIDES) \
+	$(CFLAGS_W_OLD_STYLE_DECLARATION) \
 	-Wnested-externs \
-	-Wold-style-declaration \
 	-Wstrict-prototypes \
 	-Wswitch-default \
 	-Wimplicit-int \
@@ -90,6 +102,22 @@ AM_CFLAGS += \
 	-Woverride-init \
 	-Wfloat-conversion \
 	-Wbad-function-cast
+
+AM_CXXFLAGS += \
+	-Wswitch-default \
+	-Wall \
+	-Wuninitialized \
+	-Wdeprecated \
+	-Wdeprecated-declarations \
+	-Woverflow \
+	-Wdouble-promotion \
+	-Wfloat-equal \
+	-Wpointer-arith \
+	-Wmissing-format-attribute \
+	-Wundef \
+	-Wignored-qualifiers \
+	-Wfloat-conversion \
+	-Wunused-but-set-parameter
 endif
 
 if ENABLE_DEBUG
@@ -98,11 +126,13 @@ endif
 
 TEST_CFLAGS		= -DTOP_SRCDIR=\"$(abs_top_srcdir)\" $(AM_CFLAGS) $(CRITERION_CFLAGS)
 
+TEST_CXXFLAGS		= -DTOP_SRCDIR=\"$(abs_top_srcdir)\" $(AM_CXXFLAGS) $(CRITERION_CFLAGS)
+
 TEST_LDADD		= $(LIBTEST_LIBS) $(CRITERION_LIBS) \
 			  $(top_builddir)/lib/libsyslog-ng.la \
 			  $(TOOL_DEPS_LIBS)
 
-test_ldflags		= -no-install $(NO_PIE_LDFLAG)
+test_ldflags		= $(TEST_NO_INSTALL_FLAG) $(NO_PIE_LDFLAG)
 
 PREOPEN_SYSLOGFORMAT	= -dlpreopen ${top_builddir}/modules/syslogformat/libsyslogformat.la
 PREOPEN_BASICFUNCS	= -dlpreopen ${top_builddir}/modules/basicfuncs/libbasicfuncs.la
@@ -150,6 +180,7 @@ pkginclude_HEADERS	= syslog-ng-config.h
 module_LTLIBRARIES	=
 loggenplugin_LTLIBRARIES	=
 BUILT_SOURCES		=
+NODIST_BUILT_SOURCES		=
 CLEANFILES 		= $(BUILT_SOURCES)
 check_PROGRAMS		=
 check_SCRIPTS		=
@@ -213,6 +244,7 @@ install_loggenpluginLTLIBRARIES	= install-loggenpluginLTLIBRARIES
 $(install_loggenpluginLTLIBRARIES): install-libLTLIBRARIES
 
 include Mk/lex-rules.am
+include Mk/python-venv.am
 include Mk/Makefile.am
 if ENABLE_TESTING
 include libtest/Makefile.am

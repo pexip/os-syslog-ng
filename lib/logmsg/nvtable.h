@@ -69,6 +69,8 @@ struct _NVRegistry
 extern const gchar *null_string;
 
 void nv_registry_add_alias(NVRegistry *self, NVHandle handle, const gchar *alias);
+void nv_registry_add_predefined(NVRegistry *self, NVHandle handle, const gchar *name);
+void nv_registry_assert_next_handle(NVRegistry *self, NVHandle handle);
 NVHandle nv_registry_get_handle(NVRegistry *self, const gchar *name);
 NVHandle nv_registry_alloc_handle(NVRegistry *self, const gchar *name);
 void nv_registry_set_handle_flags(NVRegistry *self, NVHandle handle, guint16 flags);
@@ -310,7 +312,7 @@ gboolean nv_table_foreach_entry(NVTable *self, NVTableForeachEntryFunc func, gpo
 
 NVTable *nv_table_new(gint num_static_values, gint index_size_hint, gint init_length);
 NVTable *nv_table_init_borrowed(gpointer space, gsize space_len, gint num_static_entries);
-gboolean nv_table_realloc(NVTable *self, NVTable **new);
+gboolean nv_table_realloc(NVTable *self, NVTable **new_nv_table);
 NVTable *nv_table_compact(NVTable *self);
 NVTable *nv_table_clone(NVTable *self, gint additional_space);
 NVTable *nv_table_ref(NVTable *self);
@@ -359,7 +361,7 @@ nv_table_get_ofs_table_top(NVTable *self)
 static inline gboolean
 nv_table_alloc_check(NVTable *self, gsize alloc_size)
 {
-  if (nv_table_get_bottom(self) - nv_table_get_ofs_table_top(self) < alloc_size)
+  if ((gsize)(nv_table_get_bottom(self) - nv_table_get_ofs_table_top(self)) < alloc_size)
     return FALSE;
   return TRUE;
 }

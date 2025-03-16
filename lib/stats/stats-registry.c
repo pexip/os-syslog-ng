@@ -129,6 +129,19 @@ _grab_cluster(gint stats_level, const StatsClusterKey *sc_key, gboolean dynamic)
   return sc;
 }
 
+static gchar *
+_construct_counter_item_name(StatsCluster *sc, gint type)
+{
+  return g_strdup_printf("%s.%s", sc->query_key, stats_cluster_get_type_name(sc, type));
+}
+
+static void
+_update_counter_name_if_needed(StatsCounterItem *counter, StatsCluster *sc, gint type)
+{
+  if (counter->name == NULL)
+    counter->name = _construct_counter_item_name(sc, type);
+}
+
 static StatsCluster *
 _register_counter(gint stats_level, const StatsClusterKey *sc_key, gint type,
                   gboolean dynamic, StatsCounterItem **counter)
@@ -144,8 +157,9 @@ _register_counter(gint stats_level, const StatsClusterKey *sc_key, gint type,
       *counter = stats_cluster_track_counter(sc, type);
       if (ctr && ctr->external)
         return sc;
-      (*counter)->type = type;
       (*counter)->external = FALSE;
+      (*counter)->type = type;
+      _update_counter_name_if_needed(*counter, sc, type);
     }
   else
     {
@@ -170,6 +184,9 @@ _register_external_counter(gint stats_level, const StatsClusterKey *sc_key, gint
 {
   StatsCluster *sc;
 
+  if (!external_counter)
+    return NULL;
+
   g_assert(stats_locked);
 
   sc = _grab_cluster(stats_level, sc_key, dynamic);
@@ -180,6 +197,7 @@ _register_external_counter(gint stats_level, const StatsClusterKey *sc_key, gint
       ctr->external = TRUE;
       ctr->value_ref = external_counter;
       ctr->type = type;
+      _update_counter_name_if_needed(ctr, sc, type);
     }
 
   return sc;
@@ -221,17 +239,6 @@ StatsCluster *
 stats_register_alias_counter(gint level, const StatsClusterKey *sc_key, gint type, StatsCounterItem *aliased_counter)
 {
   return stats_register_external_counter(level, sc_key, type, &aliased_counter->value);
-}
-
-StatsCluster *
-stats_register_counter_and_index(gint stats_level, const StatsClusterKey *sc_key, gint type,
-                                 StatsCounterItem **counter)
-{
-  StatsCluster *cluster =  _register_counter(stats_level, sc_key, type, FALSE, counter);
-  if (cluster)
-    stats_query_index_counter(cluster, type);
-
-  return cluster;
 }
 
 StatsCluster *
@@ -288,6 +295,7 @@ stats_register_associated_counter(StatsCluster *sc, gint type, StatsCounterItem 
   g_assert(sc->dynamic);
 
   *counter = stats_cluster_track_counter(sc, type);
+  _update_counter_name_if_needed(*counter, sc, type);
 }
 
 void
@@ -311,6 +319,9 @@ stats_unregister_external_counter(const StatsClusterKey *sc_key, gint type,
                                   atomic_gssize *external_counter)
 {
   StatsCluster *sc;
+
+  if (!external_counter)
+    return;
 
   g_assert(stats_locked);
 
@@ -347,6 +358,31 @@ stats_get_cluster(const StatsClusterKey *sc_key)
     sc = g_hash_table_lookup(stats_cluster_container.dynamic_clusters, sc_key);
 
   return sc;
+}
+
+gboolean
+stats_remove_cluster(const StatsClusterKey *sc_key)
+{
+  g_assert(stats_locked);
+  StatsCluster *sc;
+
+  sc = g_hash_table_lookup(stats_cluster_container.dynamic_clusters, sc_key);
+  if (sc)
+    {
+      if (stats_cluster_is_orphaned(sc))
+        return g_hash_table_remove(stats_cluster_container.dynamic_clusters, sc_key);
+      return FALSE;
+    }
+
+  sc = g_hash_table_lookup(stats_cluster_container.static_clusters, sc_key);
+  if (sc)
+    {
+      if (stats_cluster_is_orphaned(sc))
+        return g_hash_table_remove(stats_cluster_container.static_clusters, sc_key);
+      return FALSE;
+    }
+
+  return FALSE;
 }
 
 gboolean
@@ -419,11 +455,7 @@ _foreach_cluster_remove_helper(gpointer key, gpointer value, gpointer user_data)
   gpointer func_data = args[1];
   StatsCluster *sc = (StatsCluster *) value;
 
-  gboolean should_be_removed = func(sc, func_data);
-
-  if (should_be_removed)
-    stats_query_deindex_cluster(sc);
-
+  gboolean should_be_removed = func(sc, func_data) && stats_cluster_is_orphaned(sc);
   return should_be_removed;
 }
 
@@ -445,6 +477,13 @@ _foreach_counter_helper(StatsCluster *sc, gpointer user_data)
   stats_cluster_foreach_counter(sc, func, func_data);
 }
 
+static void
+_foreach_legacy_counter_helper(StatsCluster *sc, gpointer user_data)
+{
+  if (stats_cluster_key_is_legacy(&sc->key))
+    _foreach_counter_helper(sc, user_data);
+}
+
 void
 stats_foreach_counter(StatsForeachCounterFunc func, gpointer user_data, gboolean *cancelled)
 {
@@ -455,13 +494,22 @@ stats_foreach_counter(StatsForeachCounterFunc func, gpointer user_data, gboolean
 }
 
 void
+stats_foreach_legacy_counter(StatsForeachCounterFunc func, gpointer user_data, gboolean *cancelled)
+{
+  gpointer args[] = { func, user_data };
+
+  g_assert(stats_locked);
+  stats_foreach_cluster(_foreach_legacy_counter_helper, args, cancelled);
+}
+
+void
 stats_registry_init(void)
 {
-  stats_cluster_container.static_clusters = g_hash_table_new_full((GHashFunc) stats_cluster_hash,
-                                            (GEqualFunc) stats_cluster_equal, NULL,
+  stats_cluster_container.static_clusters = g_hash_table_new_full((GHashFunc) stats_cluster_key_hash,
+                                            (GEqualFunc) stats_cluster_key_equal, NULL,
                                             (GDestroyNotify) stats_cluster_free);
-  stats_cluster_container.dynamic_clusters = g_hash_table_new_full((GHashFunc) stats_cluster_hash,
-                                             (GEqualFunc) stats_cluster_equal, NULL,
+  stats_cluster_container.dynamic_clusters = g_hash_table_new_full((GHashFunc) stats_cluster_key_hash,
+                                             (GEqualFunc) stats_cluster_key_equal, NULL,
                                              (GDestroyNotify) stats_cluster_free);
 
   g_mutex_init(&stats_mutex);

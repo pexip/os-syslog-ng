@@ -55,8 +55,17 @@ $(SYSLOG_NG_CORE_JAR): $(JAVA_CLASS_FILES) $(SYSLOG_NG_CORE_LIBS_DIR)
 $(SYSLOG_NG_CORE_LIBS_DIR) $(SYSLOG_NG_CORE_CLASSES_DIR) $(SYSLOG_NG_CORE_PACKAGE_DIR) $(JAVA_BUILDDIR):
 	mkdir -p $@
 
+if HAVE_JAVAH
+
 $(JAVA_HEADER_FILES): $(JAVA_BUILDDIR)/org_syslog_ng_%.h: $(SYSLOG_NG_CORE_PACKAGE_DIR)/%.class
 	$(AM_V_GEN)$(JAVAH) -classpath  $(SYSLOG_NG_CORE_CLASSES_DIR) -d $(JAVA_BUILDDIR) org.syslog_ng.$*
+
+else
+
+JAVAC_HEADER_OPTIONS = -h $(JAVA_BUILDDIR)
+$(JAVA_HEADER_FILES): $(JAVA_CLASS_FILES)
+
+endif
 
 all-local: java-binaries java-headers
 
@@ -112,14 +121,15 @@ modules_java_libmod_java_la_LIBADD =  $(JNI_LIBS) $(MODULE_DEPS_LIBS)
 modules_java_libmod_java_la_LDFLAGS = \
     -avoid-version -module -no-undefined $(MODULE_LDFLAGS)
 
-modules_java_libmod_java_la_DEPENDENCIES  = \
+EXTRA_modules_java_libmod_java_la_DEPENDENCIES  = \
         $(MODULE_DEPS_LIBS)
 
 JAVA_HEADER_FILES = \
-   $(JAVA_BUILDDIR)/org_syslog_ng_LogMessage.h \
-   $(JAVA_BUILDDIR)/org_syslog_ng_LogDestination.h \
-   $(JAVA_BUILDDIR)/org_syslog_ng_LogTemplate.h \
-   $(JAVA_BUILDDIR)/org_syslog_ng_InternalMessageSender.h
+    $(JAVA_BUILDDIR)/org_syslog_ng_LogMessage.h \
+    $(JAVA_BUILDDIR)/org_syslog_ng_LogPipe.h \
+    $(JAVA_BUILDDIR)/org_syslog_ng_LogDestination.h \
+    $(JAVA_BUILDDIR)/org_syslog_ng_LogTemplate.h \
+    $(JAVA_BUILDDIR)/org_syslog_ng_InternalMessageSender.h
 
 JAVA_CLASS_FILES = $(patsubst %.java, $(SYSLOG_NG_CORE_PACKAGE_DIR)/%.class, $(JAVA_FILES))
 
@@ -138,7 +148,8 @@ EXTRA_DIST += \
     modules/java/native/java-grammar.ym \
     modules/java/CMakeLists.txt	\
     modules/java/tools/syslog-ng.conf.example	\
-    $(patsubst %, $(SYSLOG_NG_CORE_SRC_DIR)/%, $(JAVA_FILES))
+    $(patsubst %, $(SYSLOG_NG_CORE_SRC_DIR)/%, $(JAVA_FILES))	\
+    cmake/syslog_ng_core_java_native.cmake
 
 .SECONDEXPANSION:
 
@@ -147,7 +158,7 @@ if ENABLE_JAVA
 # this needs to come after .SECONDEXPANSION
 
 $(JAVA_CLASS_FILES): $(SYSLOG_NG_CORE_PACKAGE_DIR)/%.class: $(SYSLOG_NG_CORE_SRC_DIR)/%.java $(SYSLOG_NG_CORE_CLASSES_DIR) $$($$*_CLASS_DEPS)
-	$(AM_V_GEN)$(JAVAC) -classpath  $(SYSLOG_NG_CORE_CLASSES_DIR) -d $(SYSLOG_NG_CORE_CLASSES_DIR) $<
+	$(AM_V_GEN)$(JAVAC) $(JAVAC_HEADER_OPTIONS) -classpath  $(SYSLOG_NG_CORE_CLASSES_DIR) -d $(SYSLOG_NG_CORE_CLASSES_DIR) $<
 
 endif
 

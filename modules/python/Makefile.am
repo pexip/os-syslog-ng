@@ -24,6 +24,8 @@ modules_python_libmod_python_la_SOURCES		= \
 	modules/python/compat/compat-python.h     \
 	modules/python/compat/compat-python.c     \
 	modules/python/python-module.h		  \
+	modules/python/python-binding.h		  \
+	modules/python/python-binding.c		  \
 	modules/python/python-config.h		  \
 	modules/python/python-config.c		  \
 	modules/python/python-persist.h		  \
@@ -36,6 +38,10 @@ modules_python_libmod_python_la_SOURCES		= \
 	modules/python/python-grammar.y		  \
 	modules/python/python-value-pairs.c	  \
 	modules/python/python-value-pairs.h	  \
+	modules/python/python-startup.c		  \
+	modules/python/python-startup.h		  \
+	modules/python/python-global.c		  \
+	modules/python/python-global.h		  \
 	modules/python/python-dest.c		  \
 	modules/python/python-dest.h		  \
 	modules/python/python-tf.c		  \
@@ -67,14 +73,24 @@ modules_python_libmod_python_la_SOURCES		= \
 	modules/python/python-bookmark.h \
 	modules/python/python-bookmark.c \
 	modules/python/python-ack-tracker.h \
-	modules/python/python-ack-tracker.c
+	modules/python/python-ack-tracker.c \
+	modules/python/python-types.h \
+	modules/python/python-types.c \
+	modules/python/python-confgen.h \
+	modules/python/python-confgen.c \
+	modules/python/python-options.h \
+	modules/python/python-options.c \
+	modules/python/python-flags.h \
+	modules/python/python-flags.c \
+	modules/python/python-reloc.h \
+	modules/python/python-reloc.c
 
 
 modules_python_libmod_python_la_LDFLAGS		 = \
 	$(MODULE_LDFLAGS) \
 	$(PYTHON_LDADD)
 
-modules_python_libmod_python_la_DEPENDENCIES=	\
+EXTRA_modules_python_libmod_python_la_DEPENDENCIES=	\
 	$(MODULE_DEPS_LIBS)
 
 modules/python mod-python: modules/python/libmod-python.la
@@ -83,16 +99,12 @@ else
 modules/python mod-python:
 endif
 
-include modules/python/pylib/Makefile.am
-
 BUILT_SOURCES					+= \
 	modules/python/python-grammar.y		   \
 	modules/python/python-grammar.c		   \
 	modules/python/python-grammar.h
 
 EXTRA_DIST					+= \
-	modules/python/compat/compat-python-v2.c   \
-	modules/python/compat/compat-python-v3.c   \
 	modules/python/python-grammar.ym	   \
 	modules/python/python-example.conf	   \
 	modules/python/sngexample.py	\

@@ -5,6 +5,7 @@ modules_afsocket_libafsocket_la_SOURCES	=	\
 	modules/afsocket/afsocket-source.h		\
 	modules/afsocket/afsocket-dest.c		\
 	modules/afsocket/afsocket-dest.h		\
+	modules/afsocket/afsocket-signals.h		\
 	modules/afsocket/socket-options.c        	\
 	modules/afsocket/socket-options.h		\
 	modules/afsocket/transport-mapper.c		\
@@ -51,7 +52,7 @@ modules_afsocket_libafsocket_la_LIBADD	=	\
 	$(MODULE_DEPS_LIBS) $(OPENSSL_LIBS)	\
 	$(ZLIB_LIBS) $(LIBNET_LIBS)	\
 	$(LIBWRAP_LIBS) $(libsystemd_LIBS)
-modules_afsocket_libafsocket_la_DEPENDENCIES= 	\
+EXTRA_modules_afsocket_libafsocket_la_DEPENDENCIES= 	\
 	$(MODULE_DEPS_LIBS)
 modules_afsocket_libafsocket_la_LDFLAGS	= 	\
 	$(MODULE_LDFLAGS)

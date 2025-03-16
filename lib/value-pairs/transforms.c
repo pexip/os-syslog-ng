@@ -127,6 +127,42 @@ value_pairs_new_transform_add_prefix (const gchar *prefix)
   return (ValuePairsTransform *)vpt;
 }
 
+/* upper() */
+
+static void
+vp_trans_upper(ValuePairsTransform *self, GString *key)
+{
+  g_string_ascii_up(key);
+}
+
+ValuePairsTransform *
+value_pairs_new_transform_upper (void)
+{
+  ValuePairsTransform *vpt = g_new0(ValuePairsTransform, 1);
+
+  vp_trans_init(vpt, vp_trans_upper, NULL);
+
+  return vpt;
+}
+
+/* lower() */
+
+static void
+vp_trans_lower(ValuePairsTransform *self, GString *key)
+{
+  g_string_ascii_down(key);
+}
+
+ValuePairsTransform *
+value_pairs_new_transform_lower (void)
+{
+  ValuePairsTransform *vpt = g_new0(ValuePairsTransform, 1);
+
+  vp_trans_init(vpt, vp_trans_lower, NULL);
+
+  return vpt;
+}
+
 /* shift() */
 
 static void
@@ -269,7 +305,7 @@ value_pairs_transform_set_free(ValuePairsTransformSet *vpts)
 void
 value_pairs_transform_set_apply(ValuePairsTransformSet *vpts, GString *key)
 {
-  if (g_pattern_match_string(vpts->pattern, key->str))
+  if (g_pattern_spec_match_string(vpts->pattern, key->str))
     {
       GList *l;
 

@@ -100,9 +100,11 @@ _add_name_value(gpointer key, gpointer value, gpointer data)
   gchar *name = (gchar *) key;
   LogTemplate *val = (LogTemplate *) value;
   LogMessage *msg = (LogMessage *) data;
+  LogMessageValueType type;
+
   GString *msg_body = g_string_sized_new(128);
-  log_template_format(val, msg, &DEFAULT_TEMPLATE_EVAL_OPTIONS, msg_body);
-  log_msg_set_value_by_name(msg, name, msg_body->str, msg_body->len);
+  log_template_format_value_and_type(val, msg, &DEFAULT_TEMPLATE_EVAL_OPTIONS, msg_body, &type);
+  log_msg_set_value_by_name_with_type(msg, name, msg_body->str, msg_body->len, type);
   g_string_free(msg_body, TRUE);
 
 }
@@ -170,10 +172,10 @@ msg_generator_source_free(MsgGeneratorSource *self)
 
 void
 msg_generator_source_set_options(MsgGeneratorSource *self, MsgGeneratorSourceOptions *options,
-                                 const gchar *stats_id, const gchar *stats_instance, gboolean threaded,
+                                 const gchar *stats_id, StatsClusterKeyBuilder *kb, gboolean threaded,
                                  gboolean pos_tracked, LogExprNode *expr_node)
 {
-  log_source_set_options(&self->super, &options->super, stats_id, stats_instance, threaded, expr_node);
+  log_source_set_options(&self->super, &options->super, stats_id, kb, threaded, expr_node);
 
   AckTrackerFactory *factory = pos_tracked ? consecutive_ack_tracker_factory_new() :
                                instant_ack_tracker_bookmarkless_factory_new();

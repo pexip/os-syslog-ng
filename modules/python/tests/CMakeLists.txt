@@ -1,3 +1,7 @@
+if (NOT ENABLE_PYTHON)
+  return()
+endif()
+
 add_unit_test(LIBTEST CRITERION
   TARGET test_python_logmsg
   INCLUDES "${PYTHON_INCLUDE_DIR}" "${PYTHON_INCLUDE_DIRS}"
@@ -11,6 +15,13 @@ add_unit_test(LIBTEST CRITERION
   DEPENDS mod-python "${PYTHON_LIBRARIES}" syslogformat)
 
 set_property(TEST test_python_template APPEND PROPERTY ENVIRONMENT "PYTHONMALLOC=malloc_debug")
+
+add_unit_test(LIBTEST CRITERION
+  TARGET test_python_tf
+  INCLUDES "${PYTHON_INCLUDE_DIR}" "${PYTHON_INCLUDE_DIRS}"
+  DEPENDS mod-python "${PYTHON_LIBRARIES}" syslogformat)
+
+set_property(TEST test_python_tf APPEND PROPERTY ENVIRONMENT "PYTHONMALLOC=malloc_debug")
 
 add_unit_test(LIBTEST CRITERION
   TARGET test_python_persist_name
@@ -39,3 +50,17 @@ add_unit_test(LIBTEST CRITERION
   DEPENDS syslogformat mod-python "${PYTHON_LIBRARIES}")
 
 set_property(TEST test_python_ack_tracker APPEND PROPERTY ENVIRONMENT "PYTHONMALLOC=malloc_debug")
+
+add_unit_test(LIBTEST CRITERION
+  TARGET test_python_options
+  INCLUDES "${PYTHON_INCLUDE_DIR}" "${PYTHON_INCLUDE_DIRS}"
+  DEPENDS mod-python "${PYTHON_LIBRARIES}")
+
+set_property(TEST test_python_options APPEND PROPERTY ENVIRONMENT "PYTHONMALLOC=malloc_debug")
+
+add_unit_test(LIBTEST CRITERION
+  TARGET test_python_reloc
+  INCLUDES "${PYTHON_INCLUDE_DIR}" "${PYTHON_INCLUDE_DIRS}"
+  DEPENDS mod-python "${PYTHON_LIBRARIES}")
+
+set_property(TEST test_python_reloc APPEND PROPERTY ENVIRONMENT "PYTHONMALLOC=malloc_debug")

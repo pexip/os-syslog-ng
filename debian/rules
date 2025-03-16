@@ -99,6 +99,7 @@ override_dh_auto_configure:
 		--enable-json \
 		--enable-riemann \
 		--disable-java \
+		--disable-smtp \
 		--enable-manpages \
 		--enable-amqp \
 		$(PACCT_CONFIGURE_OPTS) \
@@ -106,6 +107,7 @@ override_dh_auto_configure:
 		--with-python=3 \
 		--enable-http \
 		--enable-kafka \
+		--disable-cloud-auth \
 		\
 		--with-mongoc=system \
 		--with-ivykis=system \
@@ -113,7 +115,8 @@ override_dh_auto_configure:
 		--with-librabbitmq-client=system \
 		\
 		--with-module-dir='$${exec_prefix}/lib/syslog-ng/${UMAJOR}' \
-		--with-systemdsystemunitdir="/lib/systemd/system" \
+		\
+		--with-python-packages=none \
 		\
 		SOURCE_REVISION="$${SOURCE_REVISION}" \
 		${SYSTEMD_CONFIGURE_OPTS} \

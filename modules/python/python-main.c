@@ -24,7 +24,7 @@
 #include "python-main.h"
 #include "python-module.h"
 #include "python-helpers.h"
-#include "python-global-code-loader.h"
+
 #include "cfg.h"
 #include "messages.h"
 
@@ -49,7 +49,7 @@
  */
 
 static PyObject *
-_py_construct_main_module(void)
+_py_construct_main_module(PythonConfig *pc)
 {
   PyObject *module;
   PyObject *module_dict;
@@ -64,10 +64,9 @@ _py_construct_main_module(void)
   if (!module)
     {
       gchar buf[256];
-      _py_format_exception_text(buf, sizeof(buf));
 
       msg_error("Error creating syslog-ng main module",
-                evt_tag_str("exception", buf));
+                evt_tag_str("exception", _py_format_exception_text(buf, sizeof(buf))));
       _py_finish_exception_handling();
       return NULL;
     }
@@ -84,6 +83,9 @@ _py_construct_main_module(void)
       Py_XDECREF(builtins_module);
     }
 
+  /* there's a circular reference between GlobalConfig -> PythonConfig -> main_module -> main_module.__config__ -> GlobalConfig */
+  PyDict_SetItemString(module_dict, "__config__", PyCapsule_New(pc, "_syslogng_main.__config__", NULL));
+
   /* return a reference */
   Py_INCREF(module);
   return module;
@@ -91,7 +93,7 @@ _py_construct_main_module(void)
 
 /* switch the _syslogng_main module to the one in a specific configuration */
 void
-_py_switch_main_module(PythonConfig *pc)
+_py_switch_to_config_main_module(PythonConfig *pc)
 {
   PyObject *modules = PyImport_GetModuleDict();
 
@@ -106,107 +108,35 @@ _py_switch_main_module(PythonConfig *pc)
     }
 }
 
-
-/* get the current main module in a production context by using the Python
- * module registry instead of the GlobalConfig machinery.  This only works
- * once _py_switch_to_main_module() has been called (e.g. past init()).
- *
- * returns borrowed reference. */
-PyObject *
-_py_get_current_main_module(void)
-{
-  return PyImport_AddModule("_syslogng_main");
-}
-
 /* get the current main module as stored in the current GlobalConfig.
  * returns borrowed reference */
 PyObject *
 _py_get_main_module(PythonConfig *pc)
 {
   if (!pc->main_module)
-    pc->main_module = _py_construct_main_module();
+    pc->main_module = _py_construct_main_module(pc);
   return pc->main_module;
 }
 
 gboolean
-_py_evaluate_global_code(PythonConfig *pc, const gchar *filename, const gchar *code)
-{
-  PyObject *module;
-  PyObject *dict;
-  PyObject *code_object;
-
-  module = _py_get_main_module(pc);
-  if (!module)
-    return FALSE;
-
-  /* NOTE: this has become a tad more difficult than PyRun_SimpleString(),
-   * because we want proper backtraces originating from this module.  Should
-   * we only use PyRun_SimpleString(), we would not get source lines in our
-   * backtraces.
-   *
-   * This implementation basically mimics what an import would do, compiles
-   * the code as it was coming from a "virtual" file and then executes the
-   * compiled code in the context of the _syslogng_main module.
-   *
-   * Since we attach a __loader__ to the module, that will be called when
-   * the source is needed to report backtraces.  Its implementation is in
-   * the python-global-code-loader.c, that simply returns the source when
-   * its get_source() method is called.
-   */
-
-  dict = PyModule_GetDict(module);
-  PyDict_SetItemString(dict, "__loader__", py_global_code_loader_new(code));
-
-  code_object = Py_CompileString((char *) code, filename, Py_file_input);
-  if (!code_object)
-    {
-      gchar buf[256];
-      _py_format_exception_text(buf, sizeof(buf));
-
-      msg_error("Error compiling Python global code block",
-                evt_tag_str("exception", buf));
-      _py_finish_exception_handling();
-      return FALSE;
-    }
-  module = PyImport_ExecCodeModuleEx("_syslogng_main", code_object, (char *) filename);
-  Py_DECREF(code_object);
-
-  if (!module)
-    {
-      gchar buf[256];
-      _py_format_exception_text(buf, sizeof(buf));
-
-      msg_error("Error evaluating global Python block",
-                evt_tag_str("exception", buf));
-      _py_finish_exception_handling();
-      return FALSE;
-    }
-  return TRUE;
-}
-
-gboolean
-python_evaluate_global_code(GlobalConfig *cfg, const gchar *code, CFG_LTYPE *yylloc)
+_py_init_main_module_for_config(PythonConfig *pc)
 {
   PyGILState_STATE gstate;
-  gchar buf[256];
-  PythonConfig *pc = python_config_get(cfg);
   gboolean result;
 
   gstate = PyGILState_Ensure();
-  g_snprintf(buf, sizeof(buf), "%s{python-global-code:%d}", cfg->filename, yylloc->first_line);
-  result = _py_evaluate_global_code(pc, buf, code);
+  result = _py_get_main_module(pc) != NULL;
   PyGILState_Release(gstate);
 
   return result;
 }
 
-void
-propagate_persist_state(GlobalConfig *cfg)
+PythonConfig *
+_py_get_config_from_main_module(void)
 {
-  g_assert(cfg->state);
-  PyGILState_STATE gstate = PyGILState_Ensure();
-  g_assert(PyModule_AddObject(PyImport_AddModule("_syslogng"),
-                              "persist_state",
-                              PyCapsule_New(cfg->state, "_syslogng.persist_state", NULL)) == 0);
-  PyGILState_Release(gstate);
+  PythonConfig *pc;
+
+  pc = (PythonConfig *) PyCapsule_Import("_syslogng_main.__config__", FALSE);
+  g_assert(pc != NULL);
+  return pc;
 }

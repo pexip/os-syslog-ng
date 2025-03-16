@@ -24,7 +24,7 @@
 #define TRANSPORT_MAPPER_INET_H_INCLUDED
 
 #include "transport-mapper.h"
-#include "tlscontext.h"
+#include "transport/tls-context.h"
 
 typedef struct _TransportMapperInet
 {
@@ -36,6 +36,7 @@ typedef struct _TransportMapperInet
   gboolean require_tls;
   gboolean allow_tls;
   gboolean require_tls_when_has_tls_context;
+  gboolean proxied;
   TLSContext *tls_context;
   TLSVerifier *tls_verifier;
   gpointer secret_store_cb_data;

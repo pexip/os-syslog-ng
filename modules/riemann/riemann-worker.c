@@ -28,7 +28,12 @@
 #include "generic-number.h"
 #include "parse-number.h"
 
+#include <riemann/riemann-client.h>
+
+#if RCC_VERSION_NUMBER < 0x020100
 #include <riemann/simple.h>
+#endif
+
 #include <stdlib.h>
 
 static void
@@ -186,17 +191,16 @@ riemann_add_metric_to_event(RiemannDestWorker *self, riemann_event_t *event, Log
 
   switch (type)
     {
-    case LM_VT_INT32:
-    case LM_VT_INT64:
+    case LM_VT_INTEGER:
     {
       gint64 i;
 
-      if (type_cast_to_int64(str->str, &i, NULL))
+      if (type_cast_to_int64(str->str, -1, &i, NULL))
         riemann_event_set(event, RIEMANN_EVENT_FIELD_METRIC_S64, i,
                           RIEMANN_EVENT_FIELD_NONE);
       else
         return !type_cast_drop_helper(owner->template_options.on_error,
-                                      str->str, "int");
+                                      str->str, -1, "int");
       break;
     }
     case LM_VT_DOUBLE:
@@ -204,17 +208,17 @@ riemann_add_metric_to_event(RiemannDestWorker *self, riemann_event_t *event, Log
     {
       gdouble d;
 
-      if (type_cast_to_double(str->str, &d, NULL))
+      if (type_cast_to_double(str->str, -1, &d, NULL))
         riemann_event_set(event, RIEMANN_EVENT_FIELD_METRIC_D, d,
                           RIEMANN_EVENT_FIELD_NONE);
       else
         return !type_cast_drop_helper(owner->template_options.on_error,
-                                      str->str, "double");
+                                      str->str, -1, "double");
       break;
     }
     default:
       return !type_cast_drop_helper(owner->template_options.on_error,
-                                    str->str, "<unknown>");
+                                    str->str, -1, "<unknown>");
       break;
     }
   return TRUE;
@@ -234,12 +238,12 @@ riemann_add_ttl_to_event(RiemannDestWorker *self, riemann_event_t *event, LogMes
   if (str->len == 0)
     return TRUE;
 
-  if (type_cast_to_double (str->str, &d, NULL))
+  if (type_cast_to_double (str->str, -1, &d, NULL))
     riemann_event_set(event, RIEMANN_EVENT_FIELD_TTL, d,
                       RIEMANN_EVENT_FIELD_NONE);
   else
     return !type_cast_drop_helper(owner->template_options.on_error,
-                                  str->str, "double");
+                                  str->str, -1, "double");
   return TRUE;
 }
 
@@ -349,25 +353,39 @@ riemann_worker_flush(LogThreadedDestWorker *s, LogThreadedFlushMode mode)
                                                  MAX(1, owner->super.batch_lines));
   if (!r)
     {
+      msg_error("riemann: error calling riemann_communicate()",
+                evt_tag_str("server", owner->server),
+                evt_tag_int("port", owner->port),
+                evt_tag_int("batch_size", self->event.n),
+                evt_tag_str("errno", g_strerror(errno)),
+                evt_tag_str("driver", owner->super.super.super.id),
+                log_pipe_location_tag(&owner->super.super.super.super));
       return LTR_ERROR;
     }
 
-  msg_trace("riemann: flushing messages to Riemann server",
-            evt_tag_str("server", owner->server),
-            evt_tag_int("port", owner->port),
-            evt_tag_int("batch_size", self->event.n),
-            evt_tag_int("ok", r->ok),
-            evt_tag_str("error", r->error),
-            evt_tag_str("driver", owner->super.super.super.id),
-            log_pipe_location_tag(&owner->super.super.super.super));
-
   if ((r->error) || (r->has_ok && !r->ok))
     {
+      msg_error("riemann: flushing messages to Riemann server failed",
+                evt_tag_str("server", owner->server),
+                evt_tag_int("port", owner->port),
+                evt_tag_int("batch_size", self->event.n),
+                evt_tag_int("ok", r->ok),
+                evt_tag_str("error", r->error),
+                evt_tag_str("driver", owner->super.super.super.id),
+                log_pipe_location_tag(&owner->super.super.super.super));
       riemann_message_free(r);
       return LTR_ERROR;
     }
   else
     {
+      msg_debug("riemann: flushing messages to Riemann server successful",
+                evt_tag_str("server", owner->server),
+                evt_tag_int("port", owner->port),
+                evt_tag_int("batch_size", self->event.n),
+                evt_tag_int("ok", r->ok),
+                evt_tag_str("error", r->error),
+                evt_tag_str("driver", owner->super.super.super.id),
+                log_pipe_location_tag(&owner->super.super.super.super));
       riemann_message_free(r);
       return LTR_SUCCESS;
     }

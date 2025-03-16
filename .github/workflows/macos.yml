@@ -8,15 +8,35 @@ on:
 
 jobs:
   general:
-    runs-on: macOS-latest
+    strategy:
+      matrix:
+        # https://docs.github.com/en/actions/using-github-hosted-runners/using-github-hosted-runners/about-github-hosted-runners
+        # 13 - X86_64
+        # 14 or latest - Arm64 M1
+        version: [13, 14]
+        build-tool: [ autotools, cmake ]
+        compiler: [ {cpp: clang++, c: clang}, {cpp: g++, c: gcc} ]
+        exclude:
+          - version: 14
+            compiler: {cpp: clang++, c: clang}
+      fail-fast: false
+
+    runs-on: macOS-${{ matrix.version }}
+
     steps:
       - name: Checkout syslog-ng source
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4.1.7
 
-      - name: Unlinking preinstalled Python 2 (workaround)
-        # The python@3 brew package has to be installed and linked system-wide (it's a dependency of glib and syslog-ng)
-        # The macos-latest GitHub runner has Python 2.7 preinstalled as a pkg, this prevents linking the python@3
-        # brew package, even when linking is forced.
+      - name: Set xcode version
+        if: matrix.version == 14
+        run: |
+          sudo xcode-select -s /Applications/Xcode_15.2.app
+
+      - name: Unlinking preinstalled Python (workaround)
+              # The python@3 brew package has to be installed and linked system-wide (it's a dependency of glib and syslog-ng)
+              # The macos-13 GitHub runner has Python preinstalled as a pkg, this prevents linking the python@3
+              # brew package, even when linking is forced. `brew "python@3", link: true, force: true`
+              # also, brew cannot update the links even these cretated by itself for an earlier python version
         run : |
           find /usr/local/bin/ -lname "*Python.framework*" -delete
 
@@ -24,49 +44,109 @@ jobs:
         run: |
           brew update --preinstall
           brew bundle --file=contrib/Brewfile
-          pip3 install --user -r requirements.txt
+
+          OS_NAME=$([[ ${{ matrix.version }} -eq 13 ]] && echo "Ventura" || echo "Sonoma")
+          MACPORTS_PKG_NAME=MacPorts-2.10.1-${{ matrix.version }}-${OS_NAME}.pkg
+          MACPORTS_URL=https://github.com/macports/macports-base/releases/download/v2.10.1/${MACPORTS_PKG_NAME}
+          wget ${MACPORTS_URL}
+          sudo installer -pkg ./${MACPORTS_PKG_NAME} -target /
+          sudo /opt/local/bin/port install libesmtp
 
       - name: Set ENV variables
+        env:
+          CC: ${{ matrix.compiler.c }}
+          CXX: ${{ matrix.compiler.cpp }}
+
         run: |
           . .github/workflows/gh-tools.sh
 
+          HOMEBREW_PREFIX="$(brew --prefix)"
+          MACPORTS_PREFIX=/opt/local
+          SYSLOG_NG_INSTALL_DIR="${HOME}/install/syslog-ng"
           PYTHONUSERBASE="${HOME}/python_packages"
-          PKG_CONFIG_PATH="$(brew --prefix)/opt/openssl@1.1/lib/pkgconfig:$PKG_CONFIG_PATH"
           THREADS="$(sysctl -n hw.physicalcpu)"
+          CFLAGS="-I${HOMEBREW_PREFIX}/include/ -I${MACPORTS_PREFIX}/include -Werror -Wno-unused-command-line-argument"
+          CXXFLAGS="${CFLAGS}"
+          LDFLAGS="-L${HOMEBREW_PREFIX}/lib -L${MACPORTS_PREFIX}/lib"
           CONFIGURE_FLAGS="
-            --with-ivykis=system
-            --disable-sun-streams
-            --disable-systemd
-            --disable-pacct
-            --disable-smtp
-            --disable-mqtt
+            `[ $CC = clang ] && echo '--enable-force-gnu99' || true`
+            --enable-extra-warnings
+            --enable-debug
+            --prefix=${SYSLOG_NG_INSTALL_DIR}
+            --enable-tests
             --enable-all-modules
             --with-python=3
+            --with-ivykis=system
+            --with-systemd-journal=no
+            --disable-java
+            --disable-java-modules
           "
+          # -DIVYKIS_SOURCE=internal is switched to system temporally as of https://github.com/buytenh/ivykis/pulls
+          CMAKE_CONFIGURE_FLAGS="
+            `[ $CC = clang ] && echo '-DENABLE_FORCE_GNU99=ON' || true`
+            -DSUMMARY_VERBOSE=ON
+            -DCMAKE_BUILD_TYPE=Debug
+            -DCMAKE_INSTALL_PREFIX=${SYSLOG_NG_INSTALL_DIR}
+            -DBUILD_TESTING=ON
+            -DPYTHON_VERSION=3
+            -DIVYKIS_SOURCE=system
+            -DENABLE_JOURNALD=OFF
+            -DENABLE_JAVA=OFF
+            -DENABLE_JAVA_MODULES=OFF
+          "
+          PKG_CONFIG_PATH="${HOMEBREW_PREFIX}/opt/openssl@3/lib/pkgconfig:${HOMEBREW_PREFIX}/opt/net-snmp/lib/pkgconfig:${HOMEBREW_PREFIX}/lib/pkgconfig:${MACPORTS_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH}"
+          PATH="${HOMEBREW_PREFIX}/opt/bison/bin:${HOMEBREW_PREFIX}/opt/libnet/bin:${HOMEBREW_PREFIX}/opt/net-snmp/bin:${HOMEBREW_PREFIX}/bin:${HOMEBREW_PREFIX}/sbin:${PYTHONUSERBASE}/bin:${MACPORTS_PREFIX}/bin:${MACPORTS_PREFIX}/sbin:${PATH}"
 
-          gh_export PYTHONUSERBASE PKG_CONFIG_PATH THREADS CONFIGURE_FLAGS
-          gh_path "/usr/local/opt/bison/bin:/usr/local/opt/libnet/bin:${PYTHONUSERBASE}/bin"
+          gh_export HOMEBREW_PREFIX MACPORTS_PREFIX SYSLOG_NG_INSTALL_DIR PYTHONUSERBASE CC CXX PKG_CONFIG_PATH THREADS CONFIGURE_FLAGS CFLAGS CXXFLAGS LDFLAGS CMAKE_CONFIGURE_FLAGS PATH
+          gh_path "${PATH}"
+
+          echo "ARCH: " $(arch)
+          echo "xcode:" $(xcode-select -p)
+          env | sort
 
       - name: autogen.sh
+        if: matrix.build-tool == 'autotools'
         run: |
           ./autogen.sh
 
       - name: configure
+        if: matrix.build-tool == 'autotools'
         run: |
           ./configure ${CONFIGURE_FLAGS}
 
-      - name: make
+      - name: cmake configure
+        if: matrix.build-tool == 'cmake'
+        run: |
+          cmake --install-prefix "${SYSLOG_NG_INSTALL_DIR}" -B build . ${CMAKE_CONFIGURE_FLAGS}
+
+      - name: cmake install
+        if: matrix.build-tool == 'cmake'
+        run: |
+          cmake --build ./build -j ${THREADS} --target install
+          "${SYSLOG_NG_INSTALL_DIR}/sbin/syslog-ng" -V
+
+      - name: cmake check
+        # FIXME: Some of our checks still do not run correctly on silicon yet (and probably never will)
+        if: matrix.build-tool == 'cmake' && matrix.version != 14
+        run: |
+          cmake --build ./build -j ${THREADS} --target check
+
+      - name: make install
+        if: matrix.build-tool == 'autotools'
         run: |
           set -e
 
-          make --keep-going -j ${THREADS} || \
+          make --keep-going install -j ${THREADS} || \
             { \
               S=$?; \
               make V=1; \
               return $S; \
             }
+          "${SYSLOG_NG_INSTALL_DIR}/sbin/syslog-ng" -V
 
       - name: make check
+        # FIXME: Some of our checks still do not run correctly on silicon yet (and probably never will)
+        if: matrix.build-tool == 'autotools' && matrix.version != 14
         run: |
           set -e
 

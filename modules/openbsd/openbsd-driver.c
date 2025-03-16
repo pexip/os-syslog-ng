@@ -34,6 +34,7 @@
 #include "poll-fd-events.h"
 #include "logproto/logproto-dgram-server.h"
 #include "transport/transport-socket.h"
+#include "stats/stats-cluster-key-builder.h"
 
 #define OPENBSD_LOG_DEV  "/dev/klog"
 
@@ -101,6 +102,13 @@ openbsd_close_newsyslog_socket(OpenBSDDriver *self)
   self->klog    = -1;
 }
 
+static void
+_openbsd_sd_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options)
+{
+  log_msg_set_value_to_string(msg, LM_V_TRANSPORT, "local+openbsd");
+  log_src_driver_queue_method(s, msg, path_options);
+}
+
 static gboolean
 _openbsd_sd_init(LogPipe *s)
 {
@@ -121,15 +129,19 @@ _openbsd_sd_init(LogPipe *s)
     }
 
   self->reader = log_reader_new(cfg);
+  log_pipe_set_options(&self->reader->super.super, &self->super.super.super.options);
   log_reader_open(self->reader, log_proto_dgram_server_new(log_transport_stream_socket_new(syslog_fd),
                                                            &self->reader_options.proto_options.super),
                   poll_fd_events_new(syslog_fd));
 
+  StatsClusterKeyBuilder *kb = stats_cluster_key_builder_new();
+  stats_cluster_key_builder_add_label(kb, stats_cluster_label("driver", "openbsd"));
+  stats_cluster_key_builder_add_legacy_label(kb, stats_cluster_label("filename", OPENBSD_LOG_DEV));
   log_reader_set_options(self->reader,
                          s,
                          &self->reader_options,
                          self->super.super.id,
-                         OPENBSD_LOG_DEV);
+                         kb);
   log_pipe_append((LogPipe *) self->reader, s);
 
   if (!log_pipe_init((LogPipe *) self->reader))
@@ -179,6 +191,7 @@ openbsd_sd_new(GlobalConfig *cfg)
   self->super.super.super.init    = _openbsd_sd_init;
   self->super.super.super.deinit  = _openbsd_sd_deinit;
   self->super.super.super.free_fn = _openbsd_sd_free;
+  self->super.super.super.queue   = _openbsd_sd_queue;
   log_reader_options_defaults(&self->reader_options);
   self->reader_options.parse_options.flags |= LP_LOCAL;
   self->reader_options.parse_options.flags &= ~LP_EXPECT_HOSTNAME;

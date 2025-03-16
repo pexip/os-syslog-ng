@@ -23,7 +23,7 @@
 
 #include "syslog-ng.h"
 #include "logqueue.h"
-#include "template/templates.h"
+#include "template/globals.h"
 #include "logmsg/logmsg.h"
 #include "messages.h"
 #include "logpipe.h"
@@ -50,6 +50,7 @@ gchar *assign_persist_name;
 gboolean relocate_all;
 gboolean display_version;
 gboolean assign_help;
+gboolean truncate_confirm;
 
 static GOptionEntry cat_options[] =
 {
@@ -62,6 +63,12 @@ static GOptionEntry cat_options[] =
 
 static GOptionEntry info_options[] =
 {
+  { NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL }
+};
+
+static GOptionEntry truncate_options[] =
+{
+  { "force", 'f', 0, G_OPTION_ARG_NONE, &truncate_confirm },
   { NULL, 0, 0, G_OPTION_ARG_NONE, NULL, NULL }
 };
 
@@ -100,9 +107,9 @@ static GOptionEntry assign_options[] =
 };
 
 static gboolean
-open_queue(char *filename, LogQueue **lq, DiskQueueOptions *options)
+open_queue(char *filename, LogQueue **lq, DiskQueueOptions *options, gboolean read_only)
 {
-  options->read_only = TRUE;
+  options->read_only = read_only;
   options->reliable = FALSE;
   FILE *f = fopen(filename, "rb");
   if (f)
@@ -123,25 +130,68 @@ open_queue(char *filename, LogQueue **lq, DiskQueueOptions *options)
 
   if (options->reliable)
     {
-      options->disk_buf_size = 128;
-      options->mem_buf_size = 1024 * 1024;
-      *lq = log_queue_disk_reliable_new(options, NULL);
+      options->flow_control_window_bytes = 1024 * 1024;
+      *lq = log_queue_disk_reliable_new(options, filename, NULL, STATS_LEVEL0, NULL, NULL);
     }
   else
     {
-      options->disk_buf_size = 1;
-      options->mem_buf_size = 128;
-      options->qout_size = 1000;
-      *lq = log_queue_disk_non_reliable_new(options, NULL);
+      options->flow_control_window_bytes = 128;
+      options->front_cache_size = 1000;
+      *lq = log_queue_disk_non_reliable_new(options, filename, NULL, STATS_LEVEL0, NULL, NULL);
     }
 
-  if (!log_queue_disk_load_queue(*lq, filename))
+  if (!log_queue_disk_start(*lq))
     {
       fprintf(stderr, "Error restoring disk buffer file.\n");
       return FALSE;
     }
 
   return TRUE;
+}
+
+static inline off_t
+get_file_size(const char *path)
+{
+  struct stat s;
+  if (stat(path, &s) != 0)
+    return 0;
+
+  return s.st_size;
+}
+
+static gint
+dqtool_truncate(int argc, char *argv[])
+{
+  if (!truncate_confirm)
+    {
+      printf("Truncating disk-buffer files is not recommended in case they are actively used by syslog-ng.\n"
+             "Repeat this command with the --force flag if you are sure you want to truncate them.\n");
+      return 1;
+    }
+
+  for (gint i = optind; i < argc; i++)
+    {
+      LogQueue *lq;
+      DiskQueueOptions options = {0};
+      disk_queue_options_set_default_options(&options);
+
+      options.truncate_size_ratio = 0;
+      off_t orig_size = get_file_size(argv[i]);
+
+      if (!open_queue(argv[i], &lq, &options, FALSE))
+        continue;
+
+      gboolean persistent;
+      log_queue_disk_stop(lq, &persistent);
+      log_queue_unref(lq);
+
+      off_t truncated_size = get_file_size(argv[i]);
+
+      double reclaimed_gib = (orig_size - truncated_size) / 1024.0 / 1024.0 / 1024.0;
+      printf("Disk-buffer %s has been truncated, reclaimed space: %f GiB\n", argv[i], reclaimed_gib);
+    }
+
+  return 0;
 }
 
 static gint
@@ -152,6 +202,7 @@ dqtool_cat(int argc, char *argv[])
   GError *error = NULL;
   LogTemplate *template = NULL;
   DiskQueueOptions options = {0};
+  disk_queue_options_set_default_options(&options);
   gint i;
 
   if (template_string)
@@ -160,7 +211,7 @@ dqtool_cat(int argc, char *argv[])
       template = log_template_new(configuration, NULL);
       if (!log_template_compile(template, template_string, &error))
         {
-          fprintf(stderr, "Error compiling template: %s, error: %s\n", template->template, error->message);
+          fprintf(stderr, "Error compiling template: %s, error: %s\n", template->template_str, error->message);
           g_clear_error(&error);
           return 1;
         }
@@ -176,16 +227,15 @@ dqtool_cat(int argc, char *argv[])
   msg = g_string_sized_new(128);
   for (i = optind; i < argc; i++)
     {
-      LogPathOptions local_options = LOG_PATH_OPTIONS_INIT;
+      LogPathOptions local_path_options = LOG_PATH_OPTIONS_INIT;
       LogQueue *lq;
 
-      if (!open_queue(argv[i], &lq, &options))
+      if (!open_queue(argv[i], &lq, &options, TRUE))
         continue;
 
-      log_queue_set_use_backlog(lq, TRUE);
       log_queue_rewind_backlog_all(lq);
 
-      while ((log_msg = log_queue_pop_head(lq, &local_options)) != NULL)
+      while ((log_msg = log_queue_pop_head(lq, &local_path_options)) != NULL)
         {
           /* format log */
           LogTemplateEvalOptions eval_options = {&configuration->template_options, LTZ_LOCAL, 0, NULL, LM_VT_STRING};
@@ -196,11 +246,12 @@ dqtool_cat(int argc, char *argv[])
           printf("%s", msg->str);
         }
 
+      gboolean persistent;
+      log_queue_disk_stop(lq, &persistent);
       log_queue_unref(lq);
     }
   g_string_free(msg, TRUE);
   return 0;
-
 }
 
 static gint
@@ -211,9 +262,13 @@ dqtool_info(int argc, char *argv[])
     {
       LogQueue *lq;
       DiskQueueOptions options = {0};
+      disk_queue_options_set_default_options(&options);
 
-      if (!open_queue(argv[i], &lq, &options))
+      if (!open_queue(argv[i], &lq, &options, TRUE))
         continue;
+
+      gboolean persistent;
+      log_queue_disk_stop(lq, &persistent);
       log_queue_unref(lq);
     }
   return 0;
@@ -526,9 +581,9 @@ dqtool_relocate(int argc, char *argv[])
 }
 
 static gboolean
-_assign_validate_options(void)
+_assign_validate_options(const gchar *persist_file, const gchar *diskq_file)
 {
-  return _validate_persist_file_path(persist_file_path) && _file_is_diskq(persist_file_path);
+  return _validate_persist_file_path(persist_file) && _file_is_diskq(diskq_file);
 }
 
 static void
@@ -548,14 +603,18 @@ _assign_print_help(void)
 static gint
 dqtool_assign(int argc, char *argv[])
 {
-  if (assign_help)
+  if (optind >= argc || assign_help)
     {
       _assign_print_help();
       return 0;
     }
 
-  if (!_assign_validate_options())
-    return 1;
+  const gchar *diskq_file = argv[optind];
+
+  gchar *diskq_full_path = g_canonicalize_filename(diskq_file, NULL);
+
+  if (!_assign_validate_options(persist_file_path, diskq_full_path))
+    goto error;
 
   main_thread_handle = get_thread_id();
 
@@ -563,17 +622,14 @@ dqtool_assign(int argc, char *argv[])
   if (!state)
     {
       fprintf(stderr, "Failed to create PersistState from file %s\n", persist_file_path);
-      return 1;
+      goto error;
     }
 
   if (!persist_state_start_edit(state))
     {
       fprintf(stderr, "Failed to load persist file for editing.");
-      return 1;
+      goto error;
     }
-
-  const gchar *diskq_file = argv[optind];
-  gchar *diskq_full_path = g_canonicalize_filename(diskq_file, NULL);
 
   gchar *old_entry = persist_state_lookup_string(state, assign_persist_name, NULL, NULL);
   if (old_entry)
@@ -589,6 +645,10 @@ dqtool_assign(int argc, char *argv[])
   persist_state_free(state);
 
   return 0;
+
+error:
+  g_free(diskq_full_path);
+  return 1;
 }
 
 static GOptionEntry dqtool_options[] =
@@ -620,6 +680,7 @@ static struct
   { "info", info_options, "Print infos about the given disk queue file", dqtool_info },
   { "relocate", relocate_options, "Relocate(rename) diskq file. Note that this option modifies the persist file.", dqtool_relocate },
   { "assign", assign_options, "Assign diskq file to the given persist file with the given persist name.", dqtool_assign },
+  { "truncate", truncate_options, "Truncate unused space in abandoned disk queues", dqtool_truncate },
   { NULL, NULL },
 };
 
@@ -720,10 +781,9 @@ main(int argc, char *argv[])
   scratch_buffers_global_init();
   scratch_buffers_allocator_init();
   log_template_global_init();
-  log_msg_registry_init();
-  log_tags_global_init();
+  log_msg_global_init();
   modes[mode].main(argc, argv);
-  log_tags_global_deinit();
+  log_msg_global_deinit();
   scratch_buffers_allocator_deinit();
   scratch_buffers_global_deinit();
   stats_destroy();

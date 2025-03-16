@@ -96,9 +96,12 @@ Test(wildcard_source, test_option_inheritance_multiline)
                                                              "multi-line-prefix('\\d+')"
                                                              "multi-line-garbage(garbage)");
   cr_assert_eq(driver->file_reader_options.follow_freq, 10000);
-  cr_assert_eq(file_reader_options_get_log_proto_options(&driver->file_reader_options)->super.mode, MLM_PREFIX_GARBAGE);
-  cr_assert(file_reader_options_get_log_proto_options(&driver->file_reader_options)->super.prefix != NULL);
-  cr_assert(file_reader_options_get_log_proto_options(&driver->file_reader_options)->super.garbage != NULL);
+  cr_assert_eq(file_reader_options_get_log_proto_options(&driver->file_reader_options)->multi_line_options.mode,
+               MLM_REGEXP_PREFIX_GARBAGE);
+  cr_assert(file_reader_options_get_log_proto_options(&driver->file_reader_options)->multi_line_options.regexp.prefix !=
+            NULL);
+  cr_assert(file_reader_options_get_log_proto_options(&driver->file_reader_options)->multi_line_options.regexp.garbage !=
+            NULL);
 }
 
 Test(wildcard_source, test_option_inheritance_padded)
@@ -127,7 +130,7 @@ Test(wildcard_source, test_filename_pattern_required_options)
   cr_assert(_parse_config("base-dir(/tmp)"));
   cr_assert(!cfg_init(configuration), "Config initialization should be failed");
   stop_grabbing_messages();
-  assert_grabbed_log_contains("filename-pattern option is required");
+  assert_grabbed_log_contains("filename-pattern() option is required");
   reset_grabbed_messages();
 }
 
@@ -137,7 +140,7 @@ Test(wildcard_source, test_base_dir_required_options)
   cr_assert(_parse_config("filename-pattern(/tmp)"));
   cr_assert(!cfg_init(configuration), "Config initialization should be failed");
   stop_grabbing_messages();
-  assert_grabbed_log_contains("base-dir option is required");
+  assert_grabbed_log_contains("base-dir() option is required");
   reset_grabbed_messages();
 }
 
@@ -146,7 +149,7 @@ Test(wildcard_source, test_invalid_monitor_method)
   start_grabbing_messages();
   cr_assert(!_parse_config("monitor-method(\"something else\""));
   stop_grabbing_messages();
-  assert_grabbed_log_contains("Invalid monitor-method");
+  assert_grabbed_log_contains("Invalid value for monitor-method()");
   reset_grabbed_messages();
 }
 
