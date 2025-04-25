@@ -2,6 +2,7 @@ lib_tests_TESTS		= \
 	lib/tests/test_cfg_lexer_subst	\
 	lib/tests/test_lexer_block	\
 	lib/tests/test_cfg_tree		\
+	lib/tests/test_cfg_helpers	\
 	lib/tests/test_parse_number	\
 	lib/tests/test_generic_number	\
 	lib/tests/test_reloc		\
@@ -33,7 +34,8 @@ lib_tests_TESTS		= \
 	lib/tests/test_hostid		   \
 	lib/tests/test_zone		   \
 	lib/tests/test_logwriter	\
-	lib/tests/test_thread_wakeup
+	lib/tests/test_thread_wakeup	\
+	lib/tests/test_logscheduler
 
 EXTRA_DIST += lib/tests/CMakeLists.txt
 
@@ -62,6 +64,11 @@ lib_tests_test_lexer_block_LDADD	=	\
 lib_tests_test_cfg_tree_CFLAGS		=	\
 	$(TEST_CFLAGS)
 lib_tests_test_cfg_tree_LDADD		=	\
+	$(TEST_LDADD)
+
+lib_tests_test_cfg_helpers_CFLAGS		=	\
+	$(TEST_CFLAGS)
+lib_tests_test_cfg_helpers_LDADD		=	\
 	$(TEST_LDADD)
 
 
@@ -156,6 +163,9 @@ lib_tests_test_logqueue_LDADD = $(TEST_LDADD)
 lib_tests_test_logsource_CFLAGS = $(TEST_CFLAGS)
 lib_tests_test_logsource_LDADD = $(TEST_LDADD)
 
+lib_tests_test_logscheduler_CFLAGS = $(TEST_CFLAGS)
+lib_tests_test_logscheduler_LDADD = $(TEST_LDADD)
+
 lib_tests_test_persist_state_CFLAGS = $(TEST_CFLAGS)
 lib_tests_test_persist_state_LDADD = $(TEST_LDADD)
 
@@ -165,6 +175,7 @@ CLEANFILES				+= \
 	test_run_id.persist		   \
 	test_run_id.persist-
 
+lib_tests_test_userdb_CFLAGS = $(TEST_CFLAGS)
 lib_tests_test_userdb_LDADD	= \
 	$(TEST_LDADD)
 

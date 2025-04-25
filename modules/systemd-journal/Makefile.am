@@ -11,12 +11,13 @@ modules_systemd_journal_libsdjournal_la_SOURCES = \
 	modules/systemd-journal/journal-reader.h \
 	modules/systemd-journal/journald-subsystem.c \
 	modules/systemd-journal/journald-subsystem.h \
+	modules/systemd-journal/journald-helper.h \
 	modules/systemd-journal/journald-helper.c
 
 modules_systemd_journal_libsdjournal_la_CPPFLAGS = $(AM_CPPFLAGS) $(libsystemd_CFLAGS) -I$(top_srcdir)/modules/systemd-journal -I$(top_builddir)/modules/systemd-journal
 modules_systemd_journal_libsdjournal_la_LIBADD = $(MODULE_DEPS_LIBS) $(libsystemd_LIBS)
 modules_systemd_journal_libsdjournal_la_LDFLAGS = $(MODULE_LDFLAGS)
-modules_systemd_journal_libsdjournal_la_DEPENDENCIES = $(MODULE_DEPS_LIBS)
+EXTRA_modules_systemd_journal_libsdjournal_la_DEPENDENCIES = $(MODULE_DEPS_LIBS)
 
 modules/systemd-journal mod-systemd-journal: modules/systemd-journal/libsdjournal.la
 else

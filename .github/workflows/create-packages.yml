@@ -14,17 +14,20 @@ on:
         required: false
         type: string
         default: '[
-          "debian-stretch",
-          "debian-buster",
           "debian-testing",
           "debian-sid",
-          "ubuntu-xenial",
-          "ubuntu-bionic",
           "debian-bullseye",
+          "debian-bookworm",
           "ubuntu-focal",
           "ubuntu-jammy",
-          "centos-7",
-          "fedora-35"
+          "ubuntu-noble",
+          "ubuntu-lunar",
+          "ubuntu-mantic",
+          "almalinux-8",
+          "almalinux-9",
+          "centos-stream9",
+          "fedora-latest",
+          "fedora-rawhide"
         ]'
 
 
@@ -41,7 +44,7 @@ jobs:
 
     steps:
       - name: Download source tarball artifact
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4.1.7
         with:
           name: ${{ inputs.source-tarball-artifact-name }}
 
@@ -79,7 +82,7 @@ jobs:
           cp -r syslog-ng/dbld/build/${{ matrix.distro }} package/
 
       - name: Store package as artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4.4.0
         with:
           name: package-${{ matrix.distro }}
           path: package/*

@@ -31,7 +31,6 @@ struct _TestSource
   LogPipe super;
   JournalReaderOptions options;
   JournalReader *reader;
-  Journald *journald_mock;
   GList *tests;
   GList *current_test;
   TestCase *current_test_case;
@@ -47,14 +46,14 @@ __init(LogPipe *s)
   TestSource *self = (TestSource *)s;
   GlobalConfig *cfg = log_pipe_get_config(s);
 
-  self->reader = journal_reader_new(cfg, self->journald_mock);
+  self->reader = journal_reader_new(cfg);
   journal_reader_options_defaults(&self->options);
   if (self->current_test_case && self->current_test_case->init)
     {
-      self->current_test_case->init(self->current_test_case, self, self->journald_mock, self->reader, &self->options);
+      self->current_test_case->init(self->current_test_case, self, self->reader, &self->options);
     }
   journal_reader_options_init(&self->options, cfg, "test");
-  journal_reader_set_options((LogPipe *)self->reader, &self->super, &self->options, "test", "1");
+  journal_reader_set_options((LogPipe *)self->reader, &self->super, &self->options, "test", NULL);
   log_pipe_append((LogPipe *)self->reader, &self->super);
   cr_assert(log_pipe_init((LogPipe *)self->reader), "%s", "Can't initialize reader");
   return TRUE;
@@ -64,9 +63,9 @@ static gboolean
 __deinit(LogPipe *s)
 {
   TestSource *self = (TestSource *)s;
-  journal_reader_options_destroy(&self->options);
   log_pipe_deinit((LogPipe *)self->reader);
   log_pipe_unref((LogPipe *)self->reader);
+  journal_reader_options_destroy(&self->options);
   return TRUE;
 }
 
@@ -74,7 +73,6 @@ static void
 __free(LogPipe *s)
 {
   TestSource *self = (TestSource *)s;
-  journald_free(self->journald_mock);
   g_list_free(self->tests);
 }
 
@@ -117,7 +115,6 @@ test_source_new(GlobalConfig *cfg)
   self->super.deinit = __deinit;
   self->super.free_fn = __free;
   self->super.queue = __queue;
-  self->journald_mock = journald_mock_new();
   journal_reader_options_defaults(&self->options);
 
   IV_TASK_INIT(&self->start);
@@ -159,4 +156,38 @@ test_source_finish_tc(TestSource *self)
   iv_task_register(&self->stop);
 }
 
+void *
+journal_reader_test_prepare_with_namespace(const gchar *namespace, GlobalConfig *cfg)
+{
+  TestSource *test = g_new0(TestSource, 1);
 
+  test->reader = journal_reader_new(cfg);
+  log_pipe_init_instance(&test->super, cfg);
+  journal_reader_options_defaults(&test->options);
+  journal_reader_options_init(&test->options, cfg, "namespace_test");
+  journal_reader_set_options((LogPipe *)test->reader, &test->super, &test->options, "namespace_test", NULL);
+  log_pipe_append((LogPipe *)test->reader, &test->super);
+
+  if (test->options.namespace) g_free(test->options.namespace);
+  test->options.namespace = g_strdup(namespace);
+
+  return test;
+}
+
+gboolean
+journal_reader_test_allocate_namespace(void *test)
+{
+  TestSource *self = (TestSource *)test;
+  return log_pipe_init((LogPipe *)self->reader);
+}
+
+void
+journal_reader_test_destroy(void *test)
+{
+  TestSource *self = (TestSource *)test;
+  log_pipe_deinit((LogPipe *)self->reader);
+  log_pipe_unref((LogPipe *)self->reader);
+  journal_reader_options_destroy(&self->options);
+  g_free(test);
+  test = NULL;
+}

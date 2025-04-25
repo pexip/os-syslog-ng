@@ -8,7 +8,7 @@ on:
 
 jobs:
   general:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-latest
     container:
       image: ghcr.io/syslog-ng/dbld-devshell:latest
       options: --privileged --ulimit core=-1
@@ -21,7 +21,10 @@ jobs:
 
     steps:
       - name: Checkout syslog-ng source
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4.1.7
+
+      - name: Setup Git safedir
+        run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
       - name: Setup environment
         run: |
@@ -36,23 +39,36 @@ jobs:
           # Setup build time environment variables
           PYTHONUSERBASE="${HOME}/python_packages"
           CC="${{ matrix.cc }}"
+          CXX=`[ $CC = gcc ] && echo g++ || echo clang++`
+          CFLAGS="-Werror -Wno-unused-command-line-argument"
+          CXXFLAGS="${CFLAGS}"
           SYSLOG_NG_INSTALL_DIR=${HOME}/install/syslog-ng
           CONFIGURE_FLAGS="
-            --prefix=${SYSLOG_NG_INSTALL_DIR}
+            `[ $CC = clang ] && echo '--enable-force-gnu99' || true`
+            --enable-extra-warnings
             --enable-debug
+            --prefix=${SYSLOG_NG_INSTALL_DIR}
+            --enable-tests
             --enable-all-modules
+            --with-python=3
+            --with-ivykis=internal
             --disable-java
             --disable-java-modules
-            --with-python=3
-            `[ $CC = clang ] && echo '--enable-force-gnu99' || true`
+            --enable-ebpf
           "
-          CMAKE_FLAGS="
+          CMAKE_CONFIGURE_FLAGS="
+            `[ $CC = clang ] && echo '-DENABLE_FORCE_GNU99=ON' || true`
+            -DSUMMARY_VERBOSE=ON
             -DCMAKE_BUILD_TYPE=Debug
-            -DCMAKE_C_FLAGS=-Werror
-            -DCMAKE_INSTALL_PREFIX=${HOME}/install/syslog-ng
+            -DCMAKE_INSTALL_PREFIX=${SYSLOG_NG_INSTALL_DIR}
+            -DBUILD_TESTING=ON
             -DPYTHON_VERSION=3
+            -DIVYKIS_SOURCE=internal
+            -DENABLE_JAVA=OFF
+            -DENABLE_JAVA_MODULES=OFF
+            -DENABLE_EBPF=ON
           "
-          gh_export COREFILES_DIR PYTHONUSERBASE CC SYSLOG_NG_INSTALL_DIR CONFIGURE_FLAGS CMAKE_FLAGS
+          gh_export COREFILES_DIR PYTHONUSERBASE CC CXX SYSLOG_NG_INSTALL_DIR CFLAGS CXXFLAGS CONFIGURE_FLAGS CMAKE_CONFIGURE_FLAGS
           gh_path "${PYTHONUSERBASE}"
 
       - name: autogen.sh
@@ -71,7 +87,7 @@ jobs:
         run: |
           mkdir build
           cd build
-          cmake ${CMAKE_FLAGS} ..
+          cmake ${CMAKE_CONFIGURE_FLAGS} ..
 
       - name: make
         working-directory: ./build
@@ -84,7 +100,12 @@ jobs:
 
       - name: make install
         working-directory: ./build
-        run: make install
+        run: |
+          make install
+          "${SYSLOG_NG_INSTALL_DIR}/sbin/syslog-ng" -V
+
+      - name: Python virtualenv for syslog-ng runtime
+        run: ${SYSLOG_NG_INSTALL_DIR}/bin/syslog-ng-update-virtualenv -y
 
       - name: Light
         id: light
@@ -98,7 +119,7 @@ jobs:
         run: make VERBOSE=1 func-test
 
       - name: "Artifact: test-suite.log"
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4.4.0
         if: always() && steps.make_check.outcome == 'failure'
         with:
           name: test-suite-${{ matrix.build-tool }}-${{ matrix.cc }}
@@ -108,26 +129,17 @@ jobs:
         id: prepare-light-reports
         if: always() && steps.light.outcome == 'failure'
         run: |
-          if [ ${{ matrix.build-tool }} = 'autotools' ]
-          then
-            REPORTS_DIR=build/reports
-          elif [ ${{ matrix.build-tool }} = 'cmake' ]
-          then
-            REPORTS_DIR=build/tests/light/reports
-          else
-            echo Unrecognized build tool: ${{ matrix.build-tool }}.
-            exit 1
-          fi
-
+          REPORTS_DIR=tests/light/reports
           cp -r ${REPORTS_DIR} /tmp/light-reports
-          rm -f `find /tmp/light-reports -type p,s`
+          find /tmp/light-reports -type p,s -print0 | xargs -0 rm -f
+          tar -cz -f /tmp/light-reports.tar.gz /tmp/light-reports
 
       - name: "Artifact: light-reports"
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4.4.0
         if: always() && steps.prepare-light-reports.outcome == 'success'
         with:
           name: light-reports-${{ matrix.build-tool }}-${{ matrix.cc }}
-          path: /tmp/light-reports
+          path: /tmp/light-reports.tar.gz
 
       - name: Dump corefile backtrace
         working-directory: ${{ env.COREFILES_DIR }}
@@ -137,21 +149,24 @@ jobs:
             gdb --ex="thread apply all bt full" --ex="quit" ${SYSLOG_NG_INSTALL_DIR}/sbin/syslog-ng --core {} \;
 
       - name: "Artifact: corefiles"
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4.4.0
         if: failure()
         with:
           name: corefiles-${{ matrix.build-tool }}-${{ matrix.cc }}
           path: ${{ env.COREFILES_DIR }}
 
   distcheck:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-latest
     container:
       image: ghcr.io/syslog-ng/dbld-devshell:latest
       options: --security-opt seccomp=unconfined --ulimit core=-1
 
     steps:
       - name: Checkout syslog-ng source
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4.1.7
+
+      - name: Setup Git safedir
+        run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
       - name: Set ENV variables
         run: |
@@ -159,6 +174,7 @@ jobs:
 
           DISTCHECK_CONFIGURE_FLAGS="
             CFLAGS=-Werror
+            CXXFLAGS=-Werror
             --prefix=${HOME}/install/syslog-ng
             --with-ivykis=internal
             --with-jsonc=system
@@ -185,13 +201,16 @@ jobs:
           exec_prop_check "make distcheck -j 3 V=1"
 
   style-check:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-latest
     container:
       image: ghcr.io/syslog-ng/dbld-devshell:latest
 
     steps:
       - name: Checkout syslog-ng source
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4.1.7
+
+      - name: Setup Git safedir
+        run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
       - name: Prepare
         run: |
@@ -209,9 +228,8 @@ jobs:
       - name: Style check (pylib)
         if: always()
         working-directory: ./build
-        continue-on-error: true # Fix errors from pylint
         run: |
-          make python-pep8 && make python-pylint || (git reset --hard HEAD && exit 1)
+          make pymodules-linters || (git reset --hard HEAD && exit 1)
 
       - name: Style check (Light)
         id: light-style-check
@@ -219,29 +237,25 @@ jobs:
         working-directory: ./build
         shell: bash
         run: |
-          python3.11 -m venv venv
-          source venv/bin/activate
-          python -m pip install -r "${GITHUB_WORKSPACE}/requirements.txt"
           make light-linters || \
             (git diff > ../light-style-problems.diff ; git reset --hard HEAD && exit 1)
-          deactivate
 
       - name: "Artifact: c-style-problems"
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4.4.0
         if: always() && steps.c-style-check.outcome == 'failure'
         with:
           name: c-style-problems
           path: c-style-problems.diff
 
       - name: "Artifact: light-style-problems"
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4.4.0
         if: always() && steps.light-style-check.outcome == 'failure'
         with:
           name: light-style-problems
           path: light-style-problems.diff
 
   copyright-check:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-latest
     container:
       image: ghcr.io/syslog-ng/dbld-devshell:latest
       env:
@@ -249,28 +263,34 @@ jobs:
 
     steps:
       - name: Checkout syslog-ng source
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4.1.7
+
+      - name: Setup Git safedir
+        run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
       - name: Copyright check
         run: tests/copyright/check.sh . .
 
       - name: "Artifact: copyright-run.log"
-        uses: actions/upload-artifact@v1
+        uses: actions/upload-artifact@v4.4.0
         if: failure()
         with:
           name: copyright-run.log
           path: copyright-run.log
 
   commits-check:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-latest
     container:
       image: ghcr.io/syslog-ng/dbld-devshell:latest
 
     steps:
       - name: Checkout syslog-ng source
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4.1.7
         with:
           fetch-depth: 0
+
+      - name: Setup Git safedir
+        run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
       - name: Commits check (Pull request)
         if: github.event_name == 'pull_request'

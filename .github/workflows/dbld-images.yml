@@ -29,24 +29,27 @@ jobs:
     strategy:
       matrix:
         image:
-          - centos-7
-          - fedora-35
+          - almalinux-8
+          - almalinux-9
+          - centos-stream9
+          - fedora-latest
+          - fedora-rawhide
           - debian-bullseye
-          - debian-buster
+          - debian-bookworm
           - debian-sid
-          - debian-stretch
           - debian-testing
-          - ubuntu-bionic
           - ubuntu-focal
           - ubuntu-jammy
-          - ubuntu-xenial
+          - ubuntu-noble
+          - ubuntu-lunar
+          - ubuntu-mantic
           - devshell
           - kira
           - tarball
       fail-fast: false
     steps:
       - name: Checkout source code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4.1.7
 
       - name: Set container registry
         run: |

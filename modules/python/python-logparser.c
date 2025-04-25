@@ -31,11 +31,7 @@ typedef struct
 {
   LogParser super;
 
-  gchar *class;
-  GList *loaders;
-
-  GHashTable *options;
-
+  PythonBinding binding;
   struct
   {
     PyObject *class;
@@ -44,48 +40,44 @@ typedef struct
   } py;
 } PythonParser;
 
-void
-python_parser_set_class(LogParser *d, gchar *class)
+typedef struct _PyLogParser
 {
-  PythonParser *self = (PythonParser *)d;
+  PyObject_HEAD
+} PyLogParser;
 
-  g_free(self->class);
-  self->class = g_strdup(class);
+static PyTypeObject py_log_parser_type;
+
+static gboolean
+_py_is_log_parser(PyObject *obj)
+{
+  return PyType_IsSubtype(Py_TYPE(obj), &py_log_parser_type);
 }
 
-void
-python_parser_set_option(LogParser *d, gchar *key, gchar *value)
-{
-  PythonParser *self = (PythonParser *)d;
-  gchar *normalized_key = __normalize_key(key);
-  g_hash_table_insert(self->options, normalized_key, g_strdup(value));
-}
-
-void
-python_parser_set_loaders(LogParser *d, GList *loaders)
+PythonBinding *
+python_parser_get_binding(LogParser *d)
 {
   PythonParser *self = (PythonParser *)d;
 
-  string_list_free(self->loaders);
-  self->loaders = loaders;
+  return &self->binding;
 }
 
 static gboolean
 _pp_py_invoke_bool_function(PythonParser *self, PyObject *func, PyObject *arg)
 {
-  return _py_invoke_bool_function(func, arg, self->class, self->super.name);
+  return _py_invoke_bool_function(func, arg, self->binding.class, self->super.name);
 }
 
 static void
 _pp_py_invoke_void_method_by_name(PythonParser *self, PyObject *instance, const gchar *method_name)
 {
-  return _py_invoke_void_method_by_name(instance, method_name, self->class, self->super.name);
+  return _py_invoke_void_method_by_name(instance, method_name, self->binding.class, self->super.name);
 }
 
 static gboolean
-_pp_py_invoke_bool_method_by_name_with_args(PythonParser *self, PyObject *instance, const gchar *method_name)
+_pp_py_invoke_bool_method_by_name_with_options(PythonParser *self, PyObject *instance, const gchar *method_name)
 {
-  return _py_invoke_bool_method_by_name_with_args(instance, method_name, self->options, self->class, self->super.name);
+  return _py_invoke_bool_method_by_name_with_options(instance, method_name, self->binding.options,
+                                                     self->binding.class, self->super.name);
 }
 
 static gboolean
@@ -99,7 +91,7 @@ _py_invoke_init(PythonParser *self)
 {
   if (_py_get_attr_or_null(self->py.instance, "init") == NULL)
     return TRUE;
-  return _pp_py_invoke_bool_method_by_name_with_args(self, self->py.instance, "init");
+  return _pp_py_invoke_bool_method_by_name_with_options(self, self->py.instance, "init");
 }
 
 static void
@@ -112,33 +104,56 @@ _py_invoke_deinit(PythonParser *self)
 static gboolean
 _py_init_bindings(PythonParser *self)
 {
-  self->py.class = _py_resolve_qualified_name(self->class);
+  GlobalConfig *cfg = log_pipe_get_config(&self->super.super);
+
+
+  self->py.class = _py_resolve_qualified_name(self->binding.class);
   if (!self->py.class)
     {
       gchar buf[256];
-      _py_format_exception_text(buf, sizeof(buf));
 
       msg_error("Error looking Python parser class",
                 evt_tag_str("parser", self->super.name),
-                evt_tag_str("class", self->class),
-                evt_tag_str("exception", buf));
+                evt_tag_str("class", self->binding.class),
+                evt_tag_str("exception", _py_format_exception_text(buf, sizeof(buf))));
       _py_finish_exception_handling();
       return FALSE;
     }
 
-  self->py.instance = _py_invoke_function(self->py.class, NULL, self->class, self->super.name);
+  self->py.instance = _py_invoke_function(self->py.class, NULL, self->binding.class, self->super.name);
   if (!self->py.instance)
     {
       gchar buf[256];
-      _py_format_exception_text(buf, sizeof(buf));
 
       msg_error("Error instantiating Python parser class",
                 evt_tag_str("parser", self->super.name),
-                evt_tag_str("class", self->class),
-                evt_tag_str("exception", buf));
+                evt_tag_str("class", self->binding.class),
+                evt_tag_str("exception", _py_format_exception_text(buf, sizeof(buf))));
       _py_finish_exception_handling();
       return FALSE;
     }
+
+  if (!_py_is_log_parser(self->py.instance))
+    {
+      gchar buf[256];
+
+      if (!cfg_is_config_version_older(cfg, VERSION_VALUE_4_0))
+        {
+          msg_error("python-parser: Error initializing Python parser, class is not a subclass of LogParser",
+                    evt_tag_str("parser", self->super.name),
+                    evt_tag_str("class", self->binding.class),
+                    evt_tag_str("class-repr", _py_object_repr(self->py.class, buf, sizeof(buf))));
+          return FALSE;
+        }
+      msg_warning("WARNING: " VERSION_4_0 " requires that your python() parser class derives "
+                  "from syslogng.LogParser. Please change the class declaration to explicitly "
+                  "inherit from syslogng.LogParser. syslog-ng now operates in compatibility mode",
+                  evt_tag_str("parser", self->super.name),
+                  evt_tag_str("class", self->binding.class),
+                  evt_tag_str("class-repr", _py_object_repr(self->py.class, buf, sizeof(buf))));
+
+    }
+
 
   /* these are fast paths, store references to be faster */
   self->py.parser_process = _py_get_attr_or_null(self->py.instance, "parse");
@@ -146,7 +161,7 @@ _py_init_bindings(PythonParser *self)
     {
       msg_error("Error initializing Python parser, class does not have a parse() method",
                 evt_tag_str("parser", self->super.name),
-                evt_tag_str("class", self->class));
+                evt_tag_str("class", self->binding.class));
     }
   return self->py.parser_process != NULL;
 }
@@ -166,7 +181,7 @@ _py_init_object(PythonParser *self)
     {
       msg_error("Error initializing Python parser object, init() returned FALSE",
                 evt_tag_str("parser", self->super.name),
-                evt_tag_str("class", self->class));
+                evt_tag_str("class", self->binding.class));
       return FALSE;
     }
   return TRUE;
@@ -177,6 +192,7 @@ python_parser_process(LogParser *s, LogMessage **pmsg, const LogPathOptions *pat
                       gsize input_len)
 {
   PythonParser *self = (PythonParser *)s;
+  GlobalConfig *cfg = log_pipe_get_config(&s->super);
   PyGILState_STATE gstate;
   gboolean result;
 
@@ -187,10 +203,10 @@ python_parser_process(LogParser *s, LogMessage **pmsg, const LogPathOptions *pat
     msg_trace("python-parser message processing started",
               evt_tag_str("input", input),
               evt_tag_str("parser", self->super.name),
-              evt_tag_str("class", self->class),
+              evt_tag_str("class", self->binding.class),
               evt_tag_msg_reference(msg));
 
-    PyObject *msg_object = py_log_message_new(msg);
+    PyObject *msg_object = py_log_message_new(msg, cfg);
     result = _py_invoke_parser_process(self, msg_object);
     Py_DECREF(msg_object);
   }
@@ -203,21 +219,17 @@ static gboolean
 python_parser_init(LogPipe *s)
 {
   PythonParser *self = (PythonParser *)s;
+  GlobalConfig *cfg = log_pipe_get_config(s);
   PyGILState_STATE gstate;
-
-  if (!self->class)
-    {
-      msg_error("Error initializing Python parser: no script specified!",
-                evt_tag_str("parser", self->super.name));
-      return FALSE;
-    }
 
   if (!log_parser_init_method(s))
     return FALSE;
 
+  if (!python_binding_init(&self->binding, cfg, self->super.name))
+    return FALSE;
+
   gstate = PyGILState_Ensure();
 
-  _py_perform_imports(self->loaders);
   if (!_py_init_bindings(self) ||
       !_py_init_object(self))
     goto fail;
@@ -226,7 +238,7 @@ python_parser_init(LogPipe *s)
 
   msg_verbose("Python parser initialized",
               evt_tag_str("parser", self->super.name),
-              evt_tag_str("class", self->class));
+              evt_tag_str("class", self->binding.class));
 
   return TRUE;
 fail:
@@ -244,6 +256,7 @@ python_parser_deinit(LogPipe *d)
   _py_invoke_deinit(self);
   PyGILState_Release(gstate);
 
+  python_binding_deinit(&self->binding);
   return log_parser_deinit_method(d);
 }
 
@@ -257,13 +270,7 @@ python_parser_free(LogPipe *d)
   _py_free_bindings(self);
   PyGILState_Release(gstate);
 
-  g_free(self->class);
-
-  if (self->options)
-    g_hash_table_unref(self->options);
-
-  string_list_free(self->loaders);
-
+  python_binding_clear(&self->binding);
   log_parser_free_method(d);
 }
 
@@ -272,11 +279,8 @@ python_parser_clone(LogPipe *s)
 {
   PythonParser *self = (PythonParser *) s;
   PythonParser *cloned = (PythonParser *) python_parser_new(log_pipe_get_config(s));
-  g_hash_table_unref(cloned->options);
-  python_parser_set_class(&cloned->super, self->class);
-  cloned->loaders = string_list_clone(self->loaders);
-  cloned->options = g_hash_table_ref(self->options);
-
+  log_parser_clone_settings(&self->super, &cloned->super);
+  python_binding_clone(&self->binding, &cloned->binding);
   return &cloned->super.super;
 }
 
@@ -293,7 +297,26 @@ python_parser_new(GlobalConfig *cfg)
   self->super.process = python_parser_process;
   self->py.class = self->py.instance = self->py.parser_process = NULL;
 
-  self->options = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+  python_binding_init_instance(&self->binding);
 
   return (LogParser *)self;
+}
+
+static PyTypeObject py_log_parser_type =
+{
+  PyVarObject_HEAD_INIT(&PyType_Type, 0)
+  .tp_name = "LogDestination",
+  .tp_basicsize = sizeof(PyLogParser),
+  .tp_dealloc = py_slng_generic_dealloc,
+  .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+  .tp_doc = "The LogDestination class is a base class for custom Python sources.",
+  .tp_new = PyType_GenericNew,
+  0,
+};
+
+void
+py_log_parser_global_init(void)
+{
+  PyType_Ready(&py_log_parser_type);
+  PyModule_AddObject(PyImport_AddModule("_syslogng"), "LogParser", (PyObject *) &py_log_parser_type);
 }

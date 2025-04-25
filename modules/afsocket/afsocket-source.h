@@ -31,6 +31,7 @@
 #include "logreader.h"
 #include "dynamic-window-pool.h"
 #include "atomic-gssize.h"
+#include "stats/stats-counter.h"
 
 #include <iv.h>
 
@@ -40,7 +41,8 @@ struct _AFSocketSourceDriver
 {
   LogSrcDriver super;
   guint32 connections_kept_alive_across_reloads:1,
-          window_size_initialized:1;
+          window_size_initialized:1,
+          activate_listener:1;
   struct iv_fd listen_fd;
   struct iv_timer dynamic_window_timer;
   gsize dynamic_window_size;
@@ -51,8 +53,18 @@ struct _AFSocketSourceDriver
   LogReaderOptions reader_options;
   DynamicWindowPool *dynamic_window_pool;
   LogProtoServerFactory *proto_factory;
+
+  struct
+  {
+    struct iv_timer packet_stats_timer;
+    StatsCounterItem *socket_dropped_packets;
+    StatsCounterItem *socket_receive_buffer_max;
+    StatsCounterItem *socket_receive_buffer_used;
+    StatsCounterItem *rejected_connections;
+  } metrics;
+
   GSockAddr *bind_addr;
-  gint max_connections;
+  atomic_gssize max_connections;
   atomic_gssize num_connections;
   gint listen_backlog;
   GList *connections;

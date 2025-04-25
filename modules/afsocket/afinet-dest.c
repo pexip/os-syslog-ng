@@ -27,6 +27,7 @@
 #include "messages.h"
 #include "gprocess.h"
 #include "compat/openssl_support.h"
+#include "afsocket-signals.h"
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -42,7 +43,10 @@
 #endif
 
 #if SYSLOG_NG_ENABLE_SPOOF_SOURCE
+#pragma GCC diagnostic push "-Wundef"
+#pragma GCC diagnostic ignored "-Wundef"
 #include <libnet.h>
+#pragma GCC diagnostic pop "-Wundef"
 #endif
 
 #if _GNU_SOURCE_DEFINED
@@ -56,6 +60,7 @@ typedef struct _AFInetDestDriverTLSVerifyData
 {
   TLSContext *tls_context;
   gchar *hostname;
+  SignalSlotConnector *signal_connector;
 } AFInetDestDriverTLSVerifyData;
 
 void
@@ -139,22 +144,32 @@ afinet_dd_verify_callback(gint ok, X509_STORE_CTX *ctx, gpointer user_data)
   X509 *current_cert = X509_STORE_CTX_get_current_cert(ctx);
   X509 *cert = X509_STORE_CTX_get0_cert(ctx);
 
-  if (ok && current_cert == cert && self->hostname
-      && (tls_context_get_verify_mode(self->tls_context) & TVM_TRUSTED))
+  if (ok && current_cert == cert)
     {
-      ok = tls_verify_certificate_name(cert, self->hostname);
+      ok = tls_context_verify_peer(self->tls_context, cert, self->hostname);
+      if (ok)
+        {
+          AFSocketTLSCertificateValidationSignalData signal_data = {0};
+          signal_data.ctx = ctx;
+          signal_data.tls_context = self->tls_context;
+
+          EMIT(self->signal_connector, signal_afsocket_tls_certificate_validation,
+               &signal_data);
+          ok = !signal_data.failure;
+        }
     }
 
   return ok;
 }
 
 static AFInetDestDriverTLSVerifyData *
-afinet_dd_tls_verify_data_new(TLSContext *ctx, const gchar *hostname)
+afinet_dd_tls_verify_data_new(TLSContext *ctx, const gchar *hostname, SignalSlotConnector *signal_connector)
 {
   AFInetDestDriverTLSVerifyData *self = g_new0(AFInetDestDriverTLSVerifyData, 1);
 
   self->tls_context = tls_context_ref(ctx);
   self->hostname = g_strdup(hostname);
+  self->signal_connector = signal_slot_connector_ref(signal_connector);
   return self;
 }
 
@@ -168,6 +183,7 @@ afinet_dd_tls_verify_data_free(gpointer s)
   if (self)
     {
       tls_context_unref(self->tls_context);
+      signal_slot_connector_unref(self->signal_connector);
       g_free(self->hostname);
       g_free(self);
     }
@@ -207,9 +223,10 @@ void
 afinet_dd_setup_tls_verifier(AFInetDestDriver *self)
 {
   TransportMapperInet *transport_mapper_inet = (TransportMapperInet *) self->super.transport_mapper;
-
-  AFInetDestDriverTLSVerifyData *verify_data;
-  verify_data = afinet_dd_tls_verify_data_new(transport_mapper_inet->tls_context, _afinet_dd_get_hostname(self));
+  SignalSlotConnector *slot_connector = self->super.super.super.super.signal_slot_connector;
+  AFInetDestDriverTLSVerifyData *verify_data = afinet_dd_tls_verify_data_new(transport_mapper_inet->tls_context,
+                                               _afinet_dd_get_hostname(self),
+                                               slot_connector);
   TLSVerifier *verifier = tls_verifier_new(afinet_dd_verify_callback, verify_data, afinet_dd_tls_verify_data_free);
 
   transport_mapper_inet_set_tls_verifier(transport_mapper_inet, verifier);
@@ -314,8 +331,17 @@ _setup_bind_addr(AFInetDestDriver *self)
 }
 
 static gboolean
+_already_connected_to_destination(AFInetDestDriver *self)
+{
+  return log_writer_opened(self->super.writer);
+}
+
+static gboolean
 _setup_dest_addr(AFInetDestDriver *self)
 {
+  if (_already_connected_to_destination(self))
+    return TRUE;
+
   g_sockaddr_unref(self->super.dest_addr);
   self->super.dest_addr = NULL;
 

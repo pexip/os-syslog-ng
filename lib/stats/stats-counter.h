@@ -27,6 +27,8 @@
 #include "syslog-ng.h"
 #include "atomic-gssize.h"
 
+#define STATS_COUNTER_MAX_VALUE G_MAXSIZE
+
 typedef struct _StatsCounterItem
 {
   union
@@ -110,6 +112,13 @@ stats_counter_get(StatsCounterItem *counter)
   return result;
 }
 
+/* Can only store positive values. Fixes overflow on 32 bit machines until 2106 if using seconds. */
+static inline void
+stats_counter_set_time(StatsCounterItem *counter, gint64 value)
+{
+  stats_counter_set(counter, (gsize) MAX(0, value));
+}
+
 static inline gchar *
 stats_counter_get_name(StatsCounterItem *counter)
 {
@@ -119,9 +128,10 @@ stats_counter_get_name(StatsCounterItem *counter)
 }
 
 static inline void
-stats_counter_free(StatsCounterItem *counter)
+stats_counter_clear(StatsCounterItem *counter)
 {
   g_free(counter->name);
+  memset(counter, 0, sizeof(*counter));
 }
 
 #endif

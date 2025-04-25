@@ -38,12 +38,14 @@
 #include "plugin.h"
 #include "cfg-grammar-internal.h"
 #include "stdin.h"
+#include "stdout.h"
 #include "named-pipe.h"
 
 #include <string.h>
 
 FileReaderOptions *last_file_reader_options;
 LogProtoFileReaderOptions *last_log_proto_options;
+MultiLineOptions *last_multi_line_options;
 WildcardSourceDriver *last_legacy_wildcard_src_driver;
 
 static void
@@ -54,6 +56,7 @@ affile_grammar_set_file_source_driver(AFFileSourceDriver *sd)
   last_reader_options = &last_file_reader_options->reader_options;
   last_file_perm_options = &sd->file_opener_options.file_perm_options;
   last_log_proto_options = file_reader_options_get_log_proto_options(last_file_reader_options);
+  last_multi_line_options = &last_log_proto_options->multi_line_options;
 }
 
 static void
@@ -64,6 +67,7 @@ affile_grammar_set_wildcard_file_source_driver(WildcardSourceDriver *sd)
   last_reader_options = &last_file_reader_options->reader_options;
   last_file_perm_options = &sd->file_opener_options.file_perm_options;
   last_log_proto_options = file_reader_options_get_log_proto_options(last_file_reader_options);
+  last_multi_line_options = &last_log_proto_options->multi_line_options;
 }
 
 }
@@ -85,11 +89,9 @@ affile_grammar_set_wildcard_file_source_driver(WildcardSourceDriver *sd)
 
 %token KW_FSYNC
 %token KW_FOLLOW_FREQ
+%token KW_MONITOR_FREQ
 %token KW_OVERWRITE_IF_OLDER
 %token KW_SYMLINK_AS
-%token KW_MULTI_LINE_MODE
-%token KW_MULTI_LINE_PREFIX
-%token KW_MULTI_LINE_GARBAGE
 %token KW_MULTI_LINE_TIMEOUT
 %token KW_TIME_REAP
 
@@ -102,6 +104,7 @@ affile_grammar_set_wildcard_file_source_driver(WildcardSourceDriver *sd)
 %token KW_FORCE_DIRECTORY_POLLING
 
 %token KW_STDIN
+%token KW_STDOUT
 
 %type	<ptr> source_affile
 %type	<ptr> source_affile_params
@@ -110,6 +113,7 @@ affile_grammar_set_wildcard_file_source_driver(WildcardSourceDriver *sd)
 %type   <ptr> dest_affile
 %type	<ptr> dest_affile_params
 %type   <ptr> dest_afpipe_params
+%type   <ptr> dest_stdout_params
 
 %%
 
@@ -176,8 +180,8 @@ source_affile_options
         ;
 
 source_affile_option
-	: KW_FOLLOW_FREQ '(' nonnegative_float ')'		{ file_reader_options_set_follow_freq(last_file_reader_options, (long) ($3 * 1000)); }
-	| KW_PAD_SIZE '(' nonnegative_integer ')'	{ last_log_proto_options->pad_size = $3; }
+	: KW_FOLLOW_FREQ '(' nonnegative_float ')' { file_reader_options_set_follow_freq(last_file_reader_options, (gint) ($3 * 1000)); }
+	| KW_PAD_SIZE '(' nonnegative_integer ')' { last_log_proto_options->pad_size = $3; }
 	| multi_line_option
 	| multi_line_timeout
 	| file_perm_option
@@ -186,15 +190,16 @@ source_affile_option
         ;
 
 source_wildcard_option
-        : KW_BASE_DIR '(' string ')' { wildcard_sd_set_base_dir(last_driver, $3); free($3); }
-        | KW_FILENAME_PATTERN '(' string ')'
-          {
-	    wildcard_sd_set_filename_pattern(last_driver, $3);
-	    free($3);
-          }
+  : KW_BASE_DIR '(' string ')' { wildcard_sd_set_base_dir(last_driver, $3); free($3); }
+  | KW_FILENAME_PATTERN '(' string ')'
+    {
+      wildcard_sd_set_filename_pattern(last_driver, $3);
+      free($3);
+    }
 	| KW_RECURSIVE '(' yesno ')' { wildcard_sd_set_recursive(last_driver, $3); }
 	| KW_MAX_FILES '(' positive_integer ')' { wildcard_sd_set_max_files(last_driver, $3); }
 	| KW_MONITOR_METHOD '(' string ')' { CHECK_ERROR(wildcard_sd_set_monitor_method(last_driver, $3), @3, "Invalid monitor-method"); free($3); }
+	| KW_MONITOR_FREQ '(' nonnegative_float ')' { wildcard_sd_set_monitor_freq(last_driver, (gint) ($3 * 1000)); }
 	| source_affile_option
 	;
 
@@ -236,41 +241,17 @@ source_afpipe_option
 	| source_driver_option
 	;
 
-/* NOTE: don't copy this to other drivers blindly, but make it general and
- * move it to cfg-grammar.y instead */
-
-multi_line_option
-	: KW_MULTI_LINE_MODE '(' string ')'
-          {
-            CHECK_ERROR(log_proto_multi_line_server_options_set_mode(&last_log_proto_options->super, $3), @3, "Invalid multi-line mode");
-	    free($3);
-          }
-	| KW_MULTI_LINE_PREFIX '(' string ')'
-          {
-            GError *error = NULL;
-
-            CHECK_ERROR_GERROR(log_proto_multi_line_server_options_set_prefix(&last_log_proto_options->super, $3, &error), @3, error, "error compiling multi-line regexp");
-            free($3);
-          }
-	| KW_MULTI_LINE_GARBAGE '(' string ')'
-	  {
-            GError *error = NULL;
-
-	    	CHECK_ERROR_GERROR(log_proto_multi_line_server_options_set_garbage(&last_log_proto_options->super, $3, &error), @3, error, "error compiling multi-line regexp");
-	    	free($3);
-	  }
-	;
-
 multi_line_timeout
-	: KW_MULTI_LINE_TIMEOUT '(' nonnegative_integer ')'
+	: KW_MULTI_LINE_TIMEOUT '(' nonnegative_float ')'
 	  {
-	    	file_reader_options_set_multi_line_timeout(last_file_reader_options, ($3 * 1000));
+		file_reader_options_set_multi_line_timeout(last_file_reader_options, (gint) ($3 * 1000));
 	  }
 	;
 
 dest_affile
 	: KW_FILE '(' _inner_dest_context_push dest_affile_params _inner_dest_context_pop ')'	{ $$ = $4; }
 	| KW_PIPE '(' _inner_dest_context_push dest_afpipe_params _inner_dest_context_pop ')'   { $$ = $4; }
+	| KW_STDOUT '(' _inner_dest_context_push dest_stdout_params _inner_dest_context_pop ')'	{ $$ = $4; }
 	;
 
 dest_affile_params
@@ -326,6 +307,24 @@ dest_affile_common_option
 	| KW_CREATE_DIRS '(' yesno ')'		{ affile_dd_set_create_dirs(last_driver, $3); }
         ;
 
+dest_stdout_params
+	:
+          {
+            last_driver = *instance = stdout_dd_new(configuration);
+            last_writer_options = &((AFFileDestDriver *) last_driver)->writer_options;
+            last_file_perm_options = &((AFFileDestDriver *) last_driver)->file_opener_options.file_perm_options;
+          } dest_stdout_options
+	;
+
+dest_stdout_options
+        : dest_stdout_option dest_stdout_options
+        |
+        ;
+
+dest_stdout_option
+	: dest_writer_option
+	| dest_driver_option
+        ;
 
 /* INCLUDE_RULES */
 

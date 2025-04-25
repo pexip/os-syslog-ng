@@ -23,61 +23,60 @@
  */
 
 #include "syslog-names.h"
-#include "syslog-ng.h"
 #include <string.h>
 
 struct sl_name sl_severities[] =
 {
-  {"emerg",     SEVERITY_CODE(0) },
-  {"emergency", SEVERITY_CODE(0) },
-  {"panic",     SEVERITY_CODE(0) },
-  {"alert",     SEVERITY_CODE(1) },
-  {"crit",      SEVERITY_CODE(2) },
-  {"critical",  SEVERITY_CODE(2) },
-  {"err",       SEVERITY_CODE(3) },
-  {"error",     SEVERITY_CODE(3) },
-  {"warning",   SEVERITY_CODE(4) },
-  {"warn",      SEVERITY_CODE(4) },
-  {"notice",    SEVERITY_CODE(5) },
-  {"info",      SEVERITY_CODE(6) },
-  {"informational", SEVERITY_CODE(6) },
-  {"debug",     SEVERITY_CODE(7) },
+  {"emerg",     SYSLOG_SEVERITY_CODE(0) },
+  {"emergency", SYSLOG_SEVERITY_CODE(0) },
+  {"panic",     SYSLOG_SEVERITY_CODE(0) },
+  {"alert",     SYSLOG_SEVERITY_CODE(1) },
+  {"crit",      SYSLOG_SEVERITY_CODE(2) },
+  {"critical",  SYSLOG_SEVERITY_CODE(2) },
+  {"err",       SYSLOG_SEVERITY_CODE(3) },
+  {"error",     SYSLOG_SEVERITY_CODE(3) },
+  {"warning",   SYSLOG_SEVERITY_CODE(4) },
+  {"warn",      SYSLOG_SEVERITY_CODE(4) },
+  {"notice",    SYSLOG_SEVERITY_CODE(5) },
+  {"info",      SYSLOG_SEVERITY_CODE(6) },
+  {"informational", SYSLOG_SEVERITY_CODE(6) },
+  {"debug",     SYSLOG_SEVERITY_CODE(7) },
   {NULL, -1}
 };
 
 
 struct sl_name sl_facilities[] =
 {
-  {"kern",      FACILITY_CODE(0)  },
-  {"user",      FACILITY_CODE(1)  },
-  {"mail",      FACILITY_CODE(2)  },
-  {"daemon",    FACILITY_CODE(3)  },
-  {"auth",      FACILITY_CODE(4)  },
-  {"syslog",    FACILITY_CODE(5)  },
-  {"lpr",       FACILITY_CODE(6)  },
-  {"news",      FACILITY_CODE(7)  },
-  {"uucp",      FACILITY_CODE(8)  },
-  {"cron",      FACILITY_CODE(9)  },
-  {"authpriv",  FACILITY_CODE(10) },
-  {"megasafe",  FACILITY_CODE(10) }, /* DEC UNIX AdvFS logging */
-  {"ftp",       FACILITY_CODE(11) },
-  {"ntp",       FACILITY_CODE(12) },
-  {"security",  FACILITY_CODE(13) },
-  {"console",   FACILITY_CODE(14) },
-  {"solaris-cron",  FACILITY_CODE(15) },
+  {"kern",      SYSLOG_FACILITY_CODE(0)  },
+  {"user",      SYSLOG_FACILITY_CODE(1)  },
+  {"mail",      SYSLOG_FACILITY_CODE(2)  },
+  {"daemon",    SYSLOG_FACILITY_CODE(3)  },
+  {"auth",      SYSLOG_FACILITY_CODE(4)  },
+  {"syslog",    SYSLOG_FACILITY_CODE(5)  },
+  {"lpr",       SYSLOG_FACILITY_CODE(6)  },
+  {"news",      SYSLOG_FACILITY_CODE(7)  },
+  {"uucp",      SYSLOG_FACILITY_CODE(8)  },
+  {"cron",      SYSLOG_FACILITY_CODE(9)  },
+  {"authpriv",  SYSLOG_FACILITY_CODE(10) },
+  {"megasafe",  SYSLOG_FACILITY_CODE(10) }, /* DEC UNIX AdvFS logging */
+  {"ftp",       SYSLOG_FACILITY_CODE(11) },
+  {"ntp",       SYSLOG_FACILITY_CODE(12) },
+  {"security",  SYSLOG_FACILITY_CODE(13) },
+  {"console",   SYSLOG_FACILITY_CODE(14) },
+  {"solaris-cron",  SYSLOG_FACILITY_CODE(15) },
 
-  {"local0",    FACILITY_CODE(16) },
-  {"local1",    FACILITY_CODE(17) },
-  {"local2",    FACILITY_CODE(18) },
-  {"local3",    FACILITY_CODE(19) },
-  {"local4",    FACILITY_CODE(20) },
-  {"local5",    FACILITY_CODE(21) },
-  {"local6",    FACILITY_CODE(22) },
-  {"local7",    FACILITY_CODE(23) },
+  {"local0",    SYSLOG_FACILITY_CODE(16) },
+  {"local1",    SYSLOG_FACILITY_CODE(17) },
+  {"local2",    SYSLOG_FACILITY_CODE(18) },
+  {"local3",    SYSLOG_FACILITY_CODE(19) },
+  {"local4",    SYSLOG_FACILITY_CODE(20) },
+  {"local5",    SYSLOG_FACILITY_CODE(21) },
+  {"local6",    SYSLOG_FACILITY_CODE(22) },
+  {"local7",    SYSLOG_FACILITY_CODE(23) },
   {NULL, -1}
 };
 
-static inline int
+static inline gint
 syslog_name_find_name(const char *name, struct sl_name names[])
 {
   int i;
@@ -92,13 +91,13 @@ syslog_name_find_name(const char *name, struct sl_name names[])
   return -1;
 }
 
-int
+gint
 syslog_name_lookup_id_by_name(const char *name, struct sl_name names[])
 {
   return syslog_name_find_name(name, names);
 }
 
-int
+gint
 syslog_name_lookup_value_by_name(const char *name, struct sl_name names[])
 {
   int i;
@@ -138,4 +137,18 @@ syslog_make_range(guint32 value1, guint32 value2)
       value1 = x;
     }
   return ((1 << (value2 + 1)) - 1) & ~((1 << value1) - 1);
+}
+
+#if (defined(__clang__) && __clang_major__ >= 15)
+#pragma GCC diagnostic ignored "-Wdeprecated-non-prototype"
+#endif
+#include "severity-aliases.h"
+
+gint
+syslog_name_lookup_severity_by_name_alias(const gchar *name, gssize name_len)
+{
+  const struct severity_alias *sa = gperf_lookup_severity_alias(name, name_len < 0 ? strlen(name) : name_len);
+  if (sa)
+    return sa->severity;
+  return -1;
 }

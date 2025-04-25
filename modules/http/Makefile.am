@@ -18,7 +18,9 @@ modules_http_libhttp_la_SOURCES = \
   modules/http/http-parser.c        \
   modules/http/http-parser.h        \
   modules/http/http-plugin.c        \
-  modules/http/http-signals.h
+  modules/http/http-signals.h       \
+  modules/http/compression.c \
+  modules/http/compression.h
 
 modules_http_libhttp_ladir = ${pkgincludedir}/modules/http
 
@@ -35,7 +37,7 @@ modules_http_libhttp_la_LIBADD  = $(MODULE_DEPS_LIBS) $(LIBCURL_LIBS)
 
 modules_http_libhttp_la_LDFLAGS = $(MODULE_LDFLAGS)
 
-modules_http_libhttp_la_DEPENDENCIES= $(MODULE_DEPS_LIBS)
+EXTRA_modules_http_libhttp_la_DEPENDENCIES= $(MODULE_DEPS_LIBS)
 
 modules/http modules/http/ mod-http: modules/http/libhttp.la
 else

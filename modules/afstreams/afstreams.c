@@ -29,6 +29,7 @@
 #include "stats/stats-registry.h"
 #include "poll-fd-events.h"
 #include "logproto/logproto-dgram-server.h"
+#include "stats/stats-cluster-key-builder.h"
 
 typedef struct _AFStreamsSourceDriver
 {
@@ -155,6 +156,13 @@ afstreams_init_door(int hook_type G_GNUC_UNUSED, gpointer user_data)
     }
 }
 
+static void
+afstreams_sd_queue(LogPipe *s, LogMessage *msg, const LogPathOptions *path_options)
+{
+  log_msg_set_value_to_string(msg, LM_V_TRANSPORT, "local+sunstreams");
+  log_src_driver_queue_method(s, msg, path_options);
+}
+
 static gboolean
 afstreams_sd_init(LogPipe *s)
 {
@@ -185,13 +193,18 @@ afstreams_sd_init(LogPipe *s)
         }
       g_fd_set_nonblock(fd, TRUE);
       self->reader = log_reader_new(cfg);
+      log_pipe_set_options(&self->reader->super.super, &self->super.super.super.options);
       log_reader_open(self->reader, log_proto_dgram_server_new(log_transport_streams_new(fd),
                                                                &self->reader_options.proto_options.super), poll_fd_events_new(fd));
+
+      StatsClusterKeyBuilder *kb = stats_cluster_key_builder_new();
+      stats_cluster_key_builder_add_label(kb, stats_cluster_label("driver", "sun-streams"));
+      stats_cluster_key_builder_add_legacy_label(kb, stats_cluster_label("filename", self->dev_filename->str));
       log_reader_set_options(self->reader,
                              s,
                              &self->reader_options,
                              self->super.super.id,
-                             self->dev_filename->str);
+                             kb);
       log_pipe_append((LogPipe *) self->reader, s);
 
       if (self->door_filename)
@@ -272,6 +285,7 @@ afstreams_sd_new(gchar *filename, GlobalConfig *cfg)
   self->super.super.super.init = afstreams_sd_init;
   self->super.super.super.deinit = afstreams_sd_deinit;
   self->super.super.super.free_fn = afstreams_sd_free;
+  self->super.super.super.queue = afstreams_sd_queue;
   log_reader_options_defaults(&self->reader_options);
   self->reader_options.parse_options.flags |= LP_LOCAL;
   self->reader_options.parse_options.flags &= ~LP_EXPECT_HOSTNAME;

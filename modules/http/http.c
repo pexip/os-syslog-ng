@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2022 One Identity LLC.
  * Copyright (c) 2016 Marc Falzon
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -22,6 +23,7 @@
 
 #include "http.h"
 #include "http-worker.h"
+#include "compression.h"
 
 /* HTTPDestinationDriver */
 void
@@ -31,8 +33,14 @@ http_dd_insert_response_handler(LogDriver *d, HttpResponseHandler *response_hand
   http_response_handlers_insert(self->response_handlers, response_handler);
 }
 
-void
-http_dd_set_urls(LogDriver *d, GList *url_strings)
+static gboolean
+_is_url_templated(const gchar *url)
+{
+  return strchr(url, '$') != NULL;
+}
+
+gboolean
+http_dd_set_urls(LogDriver *d, GList *url_strings, GError **error)
 {
   HTTPDestinationDriver *self = (HTTPDestinationDriver *) d;
 
@@ -40,14 +48,28 @@ http_dd_set_urls(LogDriver *d, GList *url_strings)
   for (GList *l = url_strings; l; l = l->next)
     {
       const gchar *url_string = (const gchar *) l->data;
-      gchar **urls = g_strsplit(url_string, " ", -1);
 
+      if (_is_url_templated(url_string))
+        {
+          /* Templated URLs might contain spaces, so we should handle the string as one URL. */
+          if (!http_load_balancer_add_target(self->load_balancer, url_string, error))
+            return FALSE;
+          continue;
+        }
+
+      gchar **urls = g_strsplit(url_string, " ", -1);
       for (gint url = 0; urls[url]; url++)
         {
-          http_load_balancer_add_target(self->load_balancer, urls[url]);
+          if (!http_load_balancer_add_target(self->load_balancer, urls[url], error))
+            {
+              g_strfreev(urls);
+              return FALSE;
+            }
         }
       g_strfreev(urls);
     }
+
+  return TRUE;
 }
 
 void
@@ -97,7 +119,7 @@ http_dd_set_method(LogDriver *d, const gchar *method)
     self->method_type = METHOD_TYPE_PUT;
   else
     {
-      msg_warning("Unsupported method is set(Only POST and PUT are supported), default method POST will be used",
+      msg_warning("http: Unsupported method is set(Only POST and PUT are supported), default method POST will be used",
                   evt_tag_str("method", method));
       self->method_type = METHOD_TYPE_POST;
     }
@@ -201,7 +223,7 @@ http_dd_set_ssl_version(LogDriver *d, const gchar *value)
 {
   HTTPDestinationDriver *self = (HTTPDestinationDriver *) d;
 
-  if (strcmp(value, "default") == 0)
+  if (strcasecmp(value, "default") == 0)
     {
       /*
        * Negotiate the version based on what the remote server supports.
@@ -211,45 +233,45 @@ http_dd_set_ssl_version(LogDriver *d, const gchar *value)
       self->ssl_version = CURL_SSLVERSION_DEFAULT;
 
     }
-  else if (strcmp(value, "tlsv1") == 0)
+  else if (strcasecmp(value, "tlsv1") == 0)
     {
       /* TLS 1.x */
       self->ssl_version = CURL_SSLVERSION_TLSv1;
     }
-  else if (strcmp(value, "sslv2") == 0)
+  else if (strcasecmp(value, "sslv2") == 0)
     {
       /* SSL 2 only */
       self->ssl_version = CURL_SSLVERSION_SSLv2;
 
     }
-  else if (strcmp(value, "sslv3") == 0)
+  else if (strcasecmp(value, "sslv3") == 0)
     {
       /* SSL 3 only */
       self->ssl_version = CURL_SSLVERSION_SSLv3;
     }
 #if SYSLOG_NG_HAVE_DECL_CURL_SSLVERSION_TLSV1_0
-  else if (strcmp(value, "tlsv1_0") == 0)
+  else if (strcasecmp(value, "tlsv1_0") == 0)
     {
       /* TLS 1.0 only */
       self->ssl_version = CURL_SSLVERSION_TLSv1_0;
     }
 #endif
 #if SYSLOG_NG_HAVE_DECL_CURL_SSLVERSION_TLSV1_1
-  else if (strcmp(value, "tlsv1_1") == 0)
+  else if (strcasecmp(value, "tlsv1_1") == 0)
     {
       /* TLS 1.1 only */
       self->ssl_version = CURL_SSLVERSION_TLSv1_1;
     }
 #endif
 #if SYSLOG_NG_HAVE_DECL_CURL_SSLVERSION_TLSV1_2
-  else if (strcmp(value, "tlsv1_2") == 0)
+  else if (strcasecmp(value, "tlsv1_2") == 0)
     {
       /* TLS 1.2 only */
       self->ssl_version = CURL_SSLVERSION_TLSv1_2;
     }
 #endif
 #if SYSLOG_NG_HAVE_DECL_CURL_SSLVERSION_TLSV1_3
-  else if (strcmp(value, "tlsv1_3") == 0)
+  else if (strcasecmp(value, "tlsv1_3") == 0)
     {
       /* TLS 1.3 only */
       self->ssl_version = CURL_SSLVERSION_TLSv1_3;
@@ -262,11 +284,53 @@ http_dd_set_ssl_version(LogDriver *d, const gchar *value)
 }
 
 void
+http_dd_set_accept_encoding(LogDriver *d, const gchar *encoding)
+{
+  HTTPDestinationDriver *self = (HTTPDestinationDriver *) d;
+
+  if (self->accept_encoding != NULL)
+    g_string_free(self->accept_encoding, TRUE);
+#if SYSLOG_NG_HTTP_COMPRESSION_ENABLED
+  if (strcmp(encoding, CURL_COMPRESSION_LITERAL_ALL) == 0)
+    self->accept_encoding = g_string_new("");
+  else
+    self->accept_encoding = g_string_new(encoding);
+#else
+  self->accept_encoding = NULL;
+  msg_warning("http: libcurl has been compiled without compression support. accept-encoding() not supported",
+              evt_tag_str("encoding", encoding));
+#endif
+}
+
+gboolean
+http_dd_set_content_compression(LogDriver *d, const gchar *encoding)
+{
+  HTTPDestinationDriver *self = (HTTPDestinationDriver *) d;
+
+  self->content_compression = compressor_lookup_type(encoding);
+  return self->content_compression != CURL_COMPRESSION_UNKNOWN;
+}
+
+
+void
 http_dd_set_peer_verify(LogDriver *d, gboolean verify)
 {
   HTTPDestinationDriver *self = (HTTPDestinationDriver *) d;
 
   self->peer_verify = verify;
+}
+
+gboolean
+http_dd_set_ocsp_stapling_verify(LogDriver *d, gboolean verify)
+{
+#if SYSLOG_NG_HAVE_DECL_CURLOPT_SSL_VERIFYSTATUS
+  HTTPDestinationDriver *self = (HTTPDestinationDriver *) d;
+
+  self->ocsp_stapling_verify = verify;
+  return TRUE;
+#else
+  return FALSE;
+#endif
 }
 
 void
@@ -324,15 +388,14 @@ _format_persist_name(const LogPipe *s)
 }
 
 static const gchar *
-_format_stats_instance(LogThreadedDestDriver *s)
+_format_stats_key(LogThreadedDestDriver *s, StatsClusterKeyBuilder *kb)
 {
-  static gchar stats[1024];
-
   HTTPDestinationDriver *self = (HTTPDestinationDriver *) s;
 
-  g_snprintf(stats, sizeof(stats), "http,%s", self->url);
+  stats_cluster_key_builder_add_legacy_label(kb, stats_cluster_label("driver", "http"));
+  stats_cluster_key_builder_add_legacy_label(kb, stats_cluster_label("url", self->url));
 
-  return stats;
+  return NULL;
 }
 
 gboolean
@@ -350,7 +413,10 @@ http_dd_init(LogPipe *s)
   GlobalConfig *cfg = log_pipe_get_config(s);
 
   if (self->load_balancer->num_targets == 0)
-    http_load_balancer_add_target(self->load_balancer, HTTP_DEFAULT_URL);
+    {
+      GError *error = NULL;
+      g_assert(http_load_balancer_add_target(self->load_balancer, HTTP_DEFAULT_URL, &error));
+    }
 
   if (self->load_balancer->num_targets > 1 && s->persist_name == NULL)
     {
@@ -358,7 +424,7 @@ http_dd_init(LogPipe *s)
                   "It is recommended that you set persist-name() in this case as syslog-ng will be "
                   "using the first URL in urls() to register persistent data, such as the disk queue "
                   "name, which might change",
-                  evt_tag_str("url", self->load_balancer->targets[0].url),
+                  evt_tag_str("url", self->load_balancer->targets[0].url_template->template_str),
                   log_pipe_location_tag(&self->super.super.super.super));
     }
   if (self->load_balancer->num_targets > self->super.num_workers)
@@ -371,10 +437,21 @@ http_dd_init(LogPipe *s)
                   log_pipe_location_tag(&self->super.super.super.super));
     }
   /* we need to set up url before we call the inherited init method, so our stats key is correct */
-  self->url = self->load_balancer->targets[0].url;
+  self->url = self->load_balancer->targets[0].url_template->template_str;
 
   if (!log_threaded_dest_driver_init_method(s))
     return FALSE;
+
+  if ((self->super.batch_lines || self->batch_bytes) && http_load_balancer_is_url_templated(self->load_balancer) &&
+      self->super.num_workers > 1 && !self->super.worker_partition_key)
+    {
+      msg_error("http: worker-partition-key() must be set if using templates in the url() option "
+                "while batching is enabled and multiple workers are configured. "
+                "Make sure to set worker-partition-key() with a template that contains all the templates "
+                "used in the url() option",
+                log_pipe_location_tag(&self->super.super.super.super));
+      return FALSE;
+    }
 
   log_template_options_init(&self->template_options, cfg);
 
@@ -394,6 +471,7 @@ http_dd_free(LogPipe *s)
   g_string_free(self->delimiter, TRUE);
   g_string_free(self->body_prefix, TRUE);
   g_string_free(self->body_suffix, TRUE);
+  g_string_free(self->accept_encoding, TRUE);
   log_template_unref(self->body_template);
 
   curl_global_cleanup();
@@ -427,9 +505,12 @@ http_dd_new(GlobalConfig *cfg)
   self->super.super.super.super.deinit = http_dd_deinit;
   self->super.super.super.super.free_fn = http_dd_free;
   self->super.super.super.super.generate_persist_name = _format_persist_name;
-  self->super.format_stats_instance = _format_stats_instance;
+  self->super.format_stats_key = _format_stats_key;
+  self->super.metrics.raw_bytes_enabled = TRUE;
   self->super.stats_source = stats_register_type("http");
   self->super.worker.construct = http_dw_new;
+
+  log_threaded_dest_driver_set_flush_on_worker_key_change(&self->super.super.super, TRUE);
 
   curl_global_init(CURL_GLOBAL_ALL);
 
@@ -441,6 +522,7 @@ http_dd_new(GlobalConfig *cfg)
   self->body_prefix = g_string_new("");
   self->body_suffix = g_string_new("");
   self->delimiter = g_string_new("\n");
+  self->accept_encoding = g_string_new("");
   self->load_balancer = http_load_balancer_new();
   curl_version_info_data *curl_info = curl_version_info(CURLVERSION_NOW);
   if (!self->user_agent)
@@ -448,6 +530,7 @@ http_dd_new(GlobalConfig *cfg)
                                        SYSLOG_NG_VERSION, curl_info->version);
 
   self->response_handlers = http_response_handlers_new();
+  self->content_compression = CURL_COMPRESSION_DEFAULT;
 
   return &self->super.super.super;
 }

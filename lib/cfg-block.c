@@ -138,7 +138,7 @@ _validate_spurious_args(CfgArgs *self, CfgArgs *defs, const gchar *reference)
 static gboolean
 _validate_args(CfgArgs *self, CfgArgs *defs, const gchar *reference)
 {
-  return _validate_mandatory_options(defs, self, reference) && _validate_spurious_args(self, defs, reference);
+  return defs && _validate_mandatory_options(defs, self, reference) && _validate_spurious_args(self, defs, reference);
 }
 
 /*
@@ -177,8 +177,10 @@ cfg_block_generate(CfgBlockGenerator *s, GlobalConfig *cfg, gpointer args, GStri
       g_clear_error(&error);
       return FALSE;
     }
-
+  if (cfg->lexer && !cfg->lexer->ignore_pragma)
+    g_string_append_printf(result, "@line \"%s\" %d %d\n", self->filename, self->line, self->column);
   g_string_append_len(result, value, length);
+
   g_free(value);
   return TRUE;
 }
@@ -212,7 +214,7 @@ cfg_block_new(gint context, const gchar *name, const gchar *content, CfgArgs *ar
   self->super.format_name = cfg_block_format_name;
   self->super.suppress_backticks = TRUE;
   self->content = g_strdup(content);
-  self->filename = g_strdup(lloc->level->name);
+  self->filename = g_strdup(lloc->name);
   self->line = lloc->first_line;
   self->column = lloc->first_column;
   self->arg_defs = arg_defs;

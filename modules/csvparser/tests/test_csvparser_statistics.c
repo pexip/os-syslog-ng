@@ -36,16 +36,15 @@ static LogParser *
 _create_parser(GlobalConfig *cfg)
 {
   LogParser *p = csv_parser_new(cfg);
-  const gchar *column_array[] = { "header1", NULL };
 
   stats_lock();
   StatsClusterKey sc_key;
-  stats_cluster_logpipe_key_set(&sc_key, SCS_PARSER, p->name, NULL );
+  stats_cluster_logpipe_key_legacy_set(&sc_key, SCS_PARSER, p->name, NULL );
   stats_register_counter(1, &sc_key, SC_TYPE_DISCARDED, &p->super.discarded_messages);
   stats_unlock();
 
   csv_scanner_options_set_delimiters(csv_parser_get_scanner_options(p), ",");
-  csv_scanner_options_set_columns(csv_parser_get_scanner_options(p), string_array_to_list(column_array));
+  csv_scanner_options_set_expected_columns(csv_parser_get_scanner_options(p), 1);
   csv_parser_set_drop_invalid(p, TRUE);
 
   return p;
@@ -56,7 +55,7 @@ _unregister_statistics(LogParser *p)
 {
   stats_lock();
   StatsClusterKey sc_key;
-  stats_cluster_logpipe_key_set(&sc_key, SCS_PARSER, p->name, NULL );
+  stats_cluster_logpipe_key_legacy_set(&sc_key, SCS_PARSER, p->name, NULL );
   stats_unregister_counter(&sc_key, SC_TYPE_DISCARDED, &p->super.discarded_messages);
   stats_unlock();
 

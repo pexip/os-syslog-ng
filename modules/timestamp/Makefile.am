@@ -17,14 +17,16 @@ modules_timestamp_libtimestamp_la_SOURCES	 = \
 	modules/timestamp/rewrite-guess-timezone.c   \
 	modules/timestamp/rewrite-guess-timezone.h   \
 	modules/timestamp/date-parser.c		   \
-	modules/timestamp/date-parser.h
+	modules/timestamp/date-parser.h	           \
+	modules/timestamp/tf-format-date.h	\
+	modules/timestamp/tf-format-date.c
 
 modules_timestamp_libtimestamp_la_LIBADD = \
 	$(MODULE_DEPS_LIBS)
 
 modules_timestamp_libtimestamp_la_LDFLAGS	 = \
 	$(MODULE_LDFLAGS)
-modules_timestamp_libtimestamp_la_DEPENDENCIES	=  \
+EXTRA_modules_timestamp_libtimestamp_la_DEPENDENCIES	=  \
 	$(MODULE_DEPS_LIBS)
 
 BUILT_SOURCES				+= \

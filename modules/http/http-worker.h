@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018 One Identity
+ * Copyright (c) 2018-2022 One Identity LLC.
  * Copyright (c) 2018 Balazs Scheidler
  * Copyright (c) 2016 Marc Falzon
  *
@@ -28,6 +28,8 @@
 #include "logthrdest/logthrdestdrv.h"
 #include "http-loadbalancer.h"
 #include "http-curl-header-list.h"
+#include "compression.h"
+#include "metrics/dyn-metrics-store.h"
 
 typedef struct _HTTPDestinationWorker
 {
@@ -35,7 +37,17 @@ typedef struct _HTTPDestinationWorker
   HTTPLoadBalancerClient lbc;
   CURL *curl;
   GString *request_body;
+  GString *request_body_compressed;
+  Compressor *compressor;
   List *request_headers;
+  GString *url_buffer;
+  LogMessage *msg_for_templated_url;
+
+  struct
+  {
+    DynMetricsStore *cache;
+    gchar requests_response_code_str_buffer[4];
+  } metrics;
 } HTTPDestinationWorker;
 
 LogThreadedResult default_map_http_status_to_worker_status(HTTPDestinationWorker *self, const gchar *url,

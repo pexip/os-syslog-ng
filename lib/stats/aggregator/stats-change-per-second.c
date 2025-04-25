@@ -36,9 +36,9 @@
 typedef struct
 {
   StatsCounterItem *output_counter;
-  atomic_gssize average;
-  atomic_gssize sum;
-  atomic_gssize last_count;
+  gsize average;
+  gsize sum;
+  gsize last_count;
 
   gssize duration; /* if the duration equals -1, thats mean, it count since syslog start */
   gchar *name;
@@ -61,60 +61,15 @@ typedef struct
   CPSLogic start;
 } StatsAggregatorCPS;
 
-static inline gsize
-_get_count(StatsAggregatorCPS *self)
-{
-  return stats_counter_get(self->input_counter);
-}
-
-static inline void
-_set_sum(CPSLogic *self, gsize set)
-{
-  atomic_gssize_set(&self->sum, set);
-}
-
-static inline void
-_add_to_sum(CPSLogic *self, gsize value)
-{
-  atomic_gssize_add(&self->sum, value);
-}
-
-static inline gsize
-_get_sum(CPSLogic *self)
-{
-  return atomic_gssize_get_unsigned(&self->sum);
-}
-
-static inline void
-_set_average(CPSLogic *self, gsize set)
-{
-  atomic_gssize_set(&self->average, set);
-}
-
-static inline gsize
-_get_average(CPSLogic *self)
-{
-  return atomic_gssize_get_unsigned(&self->average);
-}
-
-static inline void
-_set_last_count(CPSLogic *self, gsize set)
-{
-  atomic_gssize_set(&self->last_count, set);
-}
-
-static inline gsize
-_get_last_count(CPSLogic *self)
-{
-  return atomic_gssize_get_unsigned(&self->last_count);
-}
 
 static void
 _reset_CPS_logic_values(CPSLogic *self)
 {
-  _set_average(self, 0);
-  _set_sum(self, 0);
-  _set_last_count(self, 0);
+  /* Both aggregate() and reset() is running in the main thread */
+
+  self->average = 0;
+  self->sum = 0;
+  self->last_count = 0;
   stats_counter_set(self->output_counter, 0);
 }
 
@@ -149,18 +104,21 @@ _register_CPSs(StatsAggregatorCPS *self)
   StatsClusterKey sc_key;
 
   self->hour.name = g_strconcat(self->super.key.counter_group_init.counter.name, "_last_1h", NULL);
-  stats_cluster_single_key_set_with_name(&sc_key, self->super.key.component, self->super.key.id, self->super.key.instance,
-                                         self->hour.name);
+  stats_cluster_single_key_legacy_set_with_name(&sc_key, self->super.key.legacy.component, self->super.key.legacy.id,
+                                                self->super.key.legacy.instance,
+                                                self->hour.name);
   _register_CPS(&self->hour, &sc_key, self->super.stats_level, SC_TYPE_SINGLE_VALUE);
 
   self->day.name = g_strconcat(self->super.key.counter_group_init.counter.name, "_last_24h", NULL);
-  stats_cluster_single_key_set_with_name(&sc_key, self->super.key.component, self->super.key.id, self->super.key.instance,
-                                         self->day.name);
+  stats_cluster_single_key_legacy_set_with_name(&sc_key, self->super.key.legacy.component, self->super.key.legacy.id,
+                                                self->super.key.legacy.instance,
+                                                self->day.name);
   _register_CPS(&self->day, &sc_key, self->super.stats_level, SC_TYPE_SINGLE_VALUE);
 
   self->start.name = g_strconcat(self->super.key.counter_group_init.counter.name, "_since_start", NULL);
-  stats_cluster_single_key_set_with_name(&sc_key, self->super.key.component, self->super.key.id, self->super.key.instance,
-                                         self->start.name);
+  stats_cluster_single_key_legacy_set_with_name(&sc_key, self->super.key.legacy.component, self->super.key.legacy.id,
+                                                self->super.key.legacy.instance,
+                                                self->start.name);
   _register_CPS(&self->start, &sc_key, self->super.stats_level, SC_TYPE_SINGLE_VALUE);
 
   stats_unlock();
@@ -192,20 +150,23 @@ _unregister_CPSs(StatsAggregatorCPS *self)
   stats_lock();
   StatsClusterKey sc_key;
 
-  stats_cluster_single_key_set_with_name(&sc_key, self->super.key.component, self->super.key.id, self->super.key.instance,
-                                         self->hour.name);
+  stats_cluster_single_key_legacy_set_with_name(&sc_key, self->super.key.legacy.component, self->super.key.legacy.id,
+                                                self->super.key.legacy.instance,
+                                                self->hour.name);
   _unregister_CPS(&self->hour, &sc_key, SC_TYPE_SINGLE_VALUE);
   g_free(self->hour.name);
   self->hour.name = NULL;
 
-  stats_cluster_single_key_set_with_name(&sc_key, self->super.key.component, self->super.key.id, self->super.key.instance,
-                                         self->day.name);
+  stats_cluster_single_key_legacy_set_with_name(&sc_key, self->super.key.legacy.component, self->super.key.legacy.id,
+                                                self->super.key.legacy.instance,
+                                                self->day.name);
   _unregister_CPS(&self->day, &sc_key, SC_TYPE_SINGLE_VALUE);
   g_free(self->day.name);
   self->day.name = NULL;
 
-  stats_cluster_single_key_set_with_name(&sc_key, self->super.key.component, self->super.key.id, self->super.key.instance,
-                                         self->start.name);
+  stats_cluster_single_key_legacy_set_with_name(&sc_key, self->super.key.legacy.component, self->super.key.legacy.id,
+                                                self->super.key.legacy.instance,
+                                                self->start.name);
   _unregister_CPS(&self->start, &sc_key, SC_TYPE_SINGLE_VALUE);
   g_free(self->start.name);
   self->start.name = NULL;
@@ -246,15 +207,16 @@ _is_less_then_duration(StatsAggregatorCPS *self, CPSLogic *logic, time_t *now)
 static void
 _calc_sum(StatsAggregatorCPS *self, CPSLogic *logic, time_t *now)
 {
-  gsize diff = _get_count(self) - _get_last_count(logic);
-  _set_last_count(logic, _get_count(self));
+  gsize count = stats_counter_get(self->input_counter);
+  gsize diff = count - logic->last_count;
+  logic->last_count = count;
 
   if (!_is_less_then_duration(self, logic, now))
     {
-      diff -= _get_average(logic) * _calc_sec_between_time(&self->last_add_time, now);
+      diff -= logic->average * _calc_sec_between_time(&self->last_add_time, now);
     }
 
-  _add_to_sum(logic, diff);
+  logic->sum += diff;
   self->last_add_time = *now;
 }
 
@@ -267,13 +229,12 @@ _calc_average(StatsAggregatorCPS *self, CPSLogic *logic, time_t *now)
   elapsed_time = _calc_sec_between_time(&self->init_time, now);
   divisor = (_is_less_then_duration(self, logic, now)) ? elapsed_time : logic->duration;
   if (divisor <= 0) divisor = 1;
-  gsize sum = _get_sum(logic);
+  gsize sum = logic->sum;
 
-  _set_average(logic, (sum / divisor));
+  logic->average = (sum / divisor);
 
   msg_trace("stats-aggregator-cps",
-            evt_tag_printf("name", "%s_%s_%s", self->super.key.id, (self->super.key.instance) ? self->super.key.instance : "",
-                           logic->name),
+            evt_tag_printf("name", "%s_%s", self->super.key.legacy.id, logic->name),
             evt_tag_long("sum", sum),
             evt_tag_long("divisor", divisor),
             evt_tag_long("cps", (sum/divisor)),
@@ -285,7 +246,7 @@ _aggregate_CPS_logic(StatsAggregatorCPS *self, CPSLogic *logic, time_t *now)
 {
   _calc_sum(self, logic, now);
   _calc_average(self, logic, now);
-  stats_counter_set(logic->output_counter, _get_average(logic));
+  stats_counter_set(logic->output_counter, logic->average);
 }
 
 static void
@@ -293,19 +254,18 @@ _aggregate(StatsAggregator *s)
 {
   StatsAggregatorCPS *self = (StatsAggregatorCPS *)s;
 
-  time_t now = cached_g_current_time_sec();
+  iv_validate_now();
+  time_t now = iv_now.tv_sec;
   _aggregate_CPS_logic(self, &self->hour, &now);
   _aggregate_CPS_logic(self, &self->day, &now);
   _aggregate_CPS_logic(self, &self->start, &now);
-
-  if (stats_aggregator_is_orphaned(&self->super))
-    _unregister(s);
 }
 
 static void
 _reset_time(StatsAggregatorCPS *self)
 {
-  self->init_time = cached_g_current_time_sec();
+  iv_validate_now();
+  self->init_time = iv_now.tv_sec;
   self->last_add_time = 0;
 }
 
@@ -361,6 +321,7 @@ stats_aggregator_cps_new(gint level, StatsClusterKey *sc_key, StatsClusterKey *s
   self->hour.duration = HOUR_IN_SEC;
   self->day.duration = DAY_IN_SEC;
   self->start.duration = -1;
+  self->super.timer_period = 60;
 
   return &self->super;
 }
