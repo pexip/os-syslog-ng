@@ -1,5 +1,5 @@
---- a/lib/tlscontext.c
-+++ b/lib/tlscontext.c
+--- a/lib/transport/tls-session.c
++++ b/lib/transport/tls-session.c
 @@ -308,7 +308,11 @@
    TLSSession *self = (TLSSession *)SSL_get_app_data(ssl);
    if( !self->peer_info.found && where == (SSL_ST_ACCEPT|SSL_CB_LOOP) )
