@@ -39,12 +39,12 @@ unix_time_unset(UnixTime *self)
 void
 unix_time_set_now(UnixTime *self)
 {
-  GTimeVal tv;
+  struct timespec now;
 
-  cached_g_current_time(&tv);
-  self->ut_sec = tv.tv_sec;
-  self->ut_usec = tv.tv_usec;
-  self->ut_gmtoff = get_local_timezone_ofs(self->ut_sec);
+  get_cached_realtime(&now);
+  self->ut_sec = now.tv_sec;
+  self->ut_usec = now.tv_nsec / 1000;
+  self->ut_gmtoff = get_local_timezone_ofs(now.tv_sec);
 }
 
 static glong
@@ -133,9 +133,9 @@ _is_gmtoff_valid(long gmtoff)
 static glong
 _guess_recv_timezone_offset_based_on_time_difference(UnixTime *self)
 {
-  GTimeVal now;
+  struct timespec now;
 
-  cached_g_current_time(&now);
+  get_cached_realtime(&now);
 
   glong diff_in_sec = now.tv_sec - self->ut_sec;
 
@@ -307,4 +307,64 @@ unix_time_eq(const UnixTime *a, const UnixTime *b)
   return a->ut_sec == b->ut_sec &&
          a->ut_usec == b->ut_usec &&
          a->ut_gmtoff == b->ut_gmtoff;
+}
+
+/* NOTE: returns sec */
+gint64
+unix_time_diff_in_seconds(const UnixTime *a, const UnixTime *b)
+{
+  gint64 diff_sec = a->ut_sec - b->ut_sec;
+  gint64 diff_usec = (gint64) a->ut_usec - (gint64) b->ut_usec;
+
+  if (diff_usec > -500000 && diff_usec < 500000)
+    ;
+  else if (diff_usec <= -500000)
+    diff_sec--;
+  else
+    diff_sec++;
+  return diff_sec;
+}
+
+gint64
+unix_time_diff_in_msec(const UnixTime *a, const UnixTime *b)
+{
+  gint64 diff_msec = (a->ut_sec - b->ut_sec) * 1000 + ((gint64) a->ut_usec - (gint64) b->ut_usec) / 1000;
+  gint64 diff_usec = ((gint64) a->ut_usec - (gint64) b->ut_usec) % 1000;
+
+  if (diff_usec > -500 && diff_usec < 500)
+    ;
+  else if (diff_usec <= -500)
+    diff_msec--;
+  else
+    diff_msec++;
+  return diff_msec;
+}
+
+struct timeval
+timeval_from_unix_time(UnixTime *ut)
+{
+#ifdef __APPLE__
+  struct timeval tv = {ut->ut_sec, (__darwin_suseconds_t)ut->ut_usec};
+#else
+  struct timeval tv = {ut->ut_sec, ut->ut_usec};
+#endif
+  return tv;
+}
+
+UnixTime
+unix_time_from_unix_epoch(guint64 unix_epoch)
+{
+  UnixTime ut =
+  {
+    .ut_sec = (int64_t)(unix_epoch / USEC_PER_SEC),
+    .ut_usec = (guint32)(unix_epoch % USEC_PER_SEC),
+    .ut_gmtoff = 0,
+  };
+  return ut;
+}
+
+guint64
+unix_time_to_unix_epoch(const UnixTime ut)
+{
+  return (guint64)((ut.ut_sec + ut.ut_gmtoff) * USEC_PER_SEC + ut.ut_usec);
 }

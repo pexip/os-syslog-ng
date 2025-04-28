@@ -40,13 +40,13 @@ jobs:
       CURRENT_RUN_URL: https://github.com/${{ github.repository_owner }}/syslog-ng/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout syslog-ng source
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4.1.7
         with:
           fetch-depth: 0
 
       - name: Check existing PR
         run: |
-          EXISTS=$(hub pr list --state=open --head=${VERSION_BUMP_BRANCH} | wc -l)
+          EXISTS=$(gh pr list --state open --head "${VERSION_BUMP_BRANCH}" --json "number" --jq ". | length")
 
           if [ ${EXISTS} -ne 0 ]
           then
@@ -57,7 +57,7 @@ jobs:
       - name: Configure git user
         run: |
           git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
+          git config user.email "41898282+github-actions@users.noreply.github.com"
 
       - name: Create git branch
         run: |
@@ -78,7 +78,7 @@ jobs:
           ./dbld/rules release VERSION=${RELEASE_VERSION}
 
       - name: Upload tarball
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4.4.0
         with:
           name: syslog-ng-${{ env.RELEASE_VERSION }}
           path: dbld/release/${{ env.RELEASE_VERSION }}/syslog-ng-${{ env.RELEASE_VERSION }}.tar.gz
@@ -87,10 +87,10 @@ jobs:
         run: |
           TITLE="Version: ${RELEASE_VERSION}"
           DESCRIPTION="Tarball is available at: ${CURRENT_RUN_URL}"
-          echo -e "${TITLE}\n\n${DESCRIPTION}" > /tmp/message
 
           git push --force origin ${VERSION_BUMP_BRANCH}
-          hub pull-request \
-            --base ${GITHUB_REF} \
-            --file /tmp/message \
-            --labels "version-bump"
+          gh pr create \
+            --base "${GITHUB_REF}" \
+            --title "${TITLE}" \
+            --body "${DESCRIPTION}" \
+            --label "version-bump"

@@ -26,10 +26,35 @@
 #include "thread-utils.h"
 #include "apphook.h"
 #include "messages.h"
+#include "timeutils/misc.h"
 
 #include <stdio.h>
 
 #define PUBLISH_TIMEOUT    10000L
+#define YIELD_INTERVAL_MSEC 500
+
+static void
+_start_yield_timer(MQTTDestinationWorker *self)
+{
+  if (iv_timer_registered(&self->yield_timer))
+    iv_timer_unregister(&self->yield_timer);
+
+  iv_validate_now();
+  self->yield_timer.expires = iv_now;
+  timespec_add_msec(&self->yield_timer.expires, YIELD_INTERVAL_MSEC);
+
+  iv_timer_register(&self->yield_timer);
+}
+
+static void
+_yield_mqtt(void *cookie)
+{
+  MQTTDestinationWorker *self = cookie;
+
+  MQTTClient_yield();
+
+  _start_yield_timer(self);
+}
 
 static LogThreadedResult
 _publish_result_evaluation (LogThreadedDestWorker *self, gint result)
@@ -66,7 +91,7 @@ _publish_result_evaluation (LogThreadedDestWorker *self, gint result)
     case MQTTCLIENT_NULL_PARAMETER:
     case MQTTCLIENT_BAD_UTF8_STRING:
       msg_error("An unrecoverable error occurred during publish, dropping message.",
-                evt_tag_str("error code", MQTTClient_strerror(result)),
+                evt_tag_str("error_code", MQTTClient_strerror(result)),
                 log_pipe_location_tag(&self->owner->super.super.super));
       return LTR_DROP;
     }
@@ -88,7 +113,7 @@ _wait_result_evaluation(LogThreadedDestWorker *self, gint result)
     case MQTTCLIENT_FAILURE:
     default:
       msg_error("Error while waiting the response!",
-                evt_tag_str("error code", MQTTClient_strerror(result)),
+                evt_tag_str("error_code", MQTTClient_strerror(result)),
                 log_pipe_location_tag(&self->owner->super.super.super));
       return LTR_ERROR;
     }
@@ -112,7 +137,7 @@ mqtt_dest_worker_resolve_template_topic_name(MQTTDestinationWorker *self, LogMes
   msg_error("Error constructing topic", evt_tag_str("topic_name", self->topic_name_buffer->str),
             evt_tag_str("driver", owner->super.super.super.id),
             log_pipe_location_tag(&owner->super.super.super.super),
-            evt_tag_str("error message", error->message));
+            evt_tag_str("error_message", error->message));
 
   g_error_free(error);
 
@@ -197,7 +222,7 @@ _connect(LogThreadedDestWorker *s)
   if ((rc = MQTTClient_connect(self->client, &conn_opts)) != MQTTCLIENT_SUCCESS)
     {
       msg_error("Error connecting mqtt client",
-                evt_tag_str("error code", MQTTClient_strerror(rc)),
+                evt_tag_str("error_code", MQTTClient_strerror(rc)),
                 evt_tag_str("client_id", mqtt_client_options_get_client_id(&owner->options)),
                 log_pipe_location_tag(&owner->super.super.super.super));
       return FALSE;
@@ -228,11 +253,17 @@ _init(LogThreadedDestWorker *s)
     {
       msg_error("Error creating mqtt client",
                 evt_tag_str("address", mqtt_client_options_get_address(&owner->options)),
-                evt_tag_str("error code", MQTTClient_strerror(rc)),
+                evt_tag_str("error_code", MQTTClient_strerror(rc)),
                 evt_tag_str("client_id", mqtt_client_options_get_client_id(&owner->options)),
                 log_pipe_location_tag(&owner->super.super.super.super));
       return FALSE;
     }
+
+  IV_TIMER_INIT(&self->yield_timer);
+  self->yield_timer.cookie = self;
+  self->yield_timer.handler = _yield_mqtt;
+
+  _start_yield_timer(self);
 
   return log_threaded_dest_worker_init_method(s);
 }
@@ -241,6 +272,9 @@ static void
 _deinit(LogThreadedDestWorker *s)
 {
   MQTTDestinationWorker *self = (MQTTDestinationWorker *)s;
+
+  if (iv_timer_registered(&self->yield_timer))
+    iv_timer_unregister(&self->yield_timer);
 
   MQTTClient_destroy(&self->client);
 

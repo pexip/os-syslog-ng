@@ -65,7 +65,7 @@ log_reader_set_immediate_check(LogReader *s)
 
 void
 log_reader_set_options(LogReader *s, LogPipe *control, LogReaderOptions *options,
-                       const gchar *stats_id, const gchar *stats_instance)
+                       const gchar *stats_id, StatsClusterKeyBuilder *kb)
 {
   LogReader *self = (LogReader *) s;
 
@@ -76,7 +76,7 @@ log_reader_set_options(LogReader *s, LogPipe *control, LogReaderOptions *options
 
   g_assert(self->proto != NULL);
 
-  log_source_set_options(&self->super, &options->super, stats_id, stats_instance,
+  log_source_set_options(&self->super, &options->super, stats_id, kb,
                          (options->flags & LR_THREADED), control->expr_node);
   AckTrackerFactory *factory = log_proto_server_get_ack_tracker_factory(self->proto);
   log_source_set_ack_tracker_factory(&self->super, ack_tracker_factory_ref(factory));
@@ -283,7 +283,7 @@ log_reader_open(LogReader *self, LogProtoServer *proto, PollEvents *poll_events)
   log_reader_apply_proto_and_poll_events(self, proto, poll_events);
 }
 
-static gboolean
+gboolean
 log_reader_is_opened(LogReader *self)
 {
   return self->proto && self->poll_events;
@@ -335,6 +335,7 @@ log_reader_update_watches(LogReader *self)
   switch (prepare_action)
     {
     case LPPA_POLL_IO:
+      self->suspended = FALSE;
       poll_events_update_watches(self->poll_events, cond);
       break;
     case LPPA_FORCE_SCHEDULE_FETCH:
@@ -349,22 +350,52 @@ log_reader_update_watches(LogReader *self)
     }
 }
 
+static inline gboolean
+log_reader_work_in_progress(LogReader *self)
+{
+  main_loop_assert_main_thread();
+
+  return self->io_job.working;
+}
+
+static inline void
+log_reader_set_work_in_progress(LogReader *self, gboolean state)
+{
+  if ((self->options->flags & LR_THREADED) == 0)
+    {
+      main_loop_assert_main_thread();
+      self->io_job.working = state;
+    }
+}
+
+/* NOTE: See file-reader, file_reader_notify_method() why this is needed */
+inline void
+log_reader_trigger_one_check(LogReader *self)
+{
+  if (FALSE == log_reader_work_in_progress(self))
+    log_reader_force_check_in_next_poll(self);
+}
+
 /*****************************************************************************
  * Glue into MainLoopIOWorker
  *****************************************************************************/
 
 static void
-log_reader_work_perform(void *s, GIOCondition cond)
+log_reader_work_perform(void *s, gpointer arg)
 {
   LogReader *self = (LogReader *) s;
+
+  log_reader_set_work_in_progress(self, TRUE);
 
   self->notify_code = log_reader_fetch_log(self);
 }
 
 static void
-log_reader_work_finished(void *s)
+log_reader_work_finished(void *s, gpointer arg)
 {
   LogReader *self = (LogReader *) s;
+
+  log_reader_set_work_in_progress(self, FALSE);
 
   if (self->pending_close)
     {
@@ -389,7 +420,8 @@ log_reader_work_finished(void *s)
       self->notify_code = 0;
       log_pipe_notify(self->control, notify_code, self);
     }
-  if (self->super.super.flags & PIF_INITIALIZED)
+
+  if ((self->super.super.flags & PIF_INITIALIZED) && self->proto)
     {
       /* reenable polling the source assuming that we're still in
        * business (e.g. the reader hasn't been uninitialized) */
@@ -440,8 +472,8 @@ log_reader_process_handshake(LogReader *self)
 static void
 _log_reader_insert_msg_length_stats(LogReader *self, gsize len)
 {
-  stats_aggregator_insert_data(self->max_message_size, len);
-  stats_aggregator_insert_data(self->average_messages_size, len);
+  stats_aggregator_add_data_point(self->max_message_size, len);
+  stats_aggregator_add_data_point(self->average_messages_size, len);
 }
 
 static gboolean
@@ -457,10 +489,20 @@ log_reader_handle_line(LogReader *self, const guchar *line, gint length, LogTran
   msg_format_parse_into(&self->options->parse_options, m, line, length);
 
   _log_reader_insert_msg_length_stats(self, length);
+
+  log_msg_set_recvd_rawmsg_size(m, length);
+
   if (aux)
     {
       log_msg_set_saddr(m, aux->peer_addr ? : self->peer_addr);
       log_msg_set_daddr(m, aux->local_addr ? : self->local_addr);
+      if (aux->timestamp.tv_sec)
+        {
+          /* accurate timestamp was received from the transport layer, use
+           * that instead of the one we generated */
+          m->timestamps[LM_TS_RECVD].ut_sec = aux->timestamp.tv_sec;
+          m->timestamps[LM_TS_RECVD].ut_usec = aux->timestamp.tv_nsec / 1000;
+        }
       m->proto = aux->proto;
     }
   log_msg_refcache_start_producer(m);
@@ -557,9 +599,10 @@ log_reader_io_handle_in(gpointer s)
   LogReader *self = (LogReader *) s;
 
   log_reader_disable_watches(self);
+
   if ((self->options->flags & LR_THREADED))
     {
-      main_loop_io_worker_job_submit(&self->io_job, G_IO_IN);
+      main_loop_io_worker_job_submit(&self->io_job, NULL);
     }
   else
     {
@@ -574,8 +617,8 @@ log_reader_io_handle_in(gpointer s)
       if (!main_loop_worker_job_quit())
         {
           log_pipe_ref(&self->super.super);
-          log_reader_work_perform(s, G_IO_IN);
-          log_reader_work_finished(s);
+          log_reader_work_perform(s, NULL);
+          log_reader_work_finished(s, NULL);
           log_pipe_unref(&self->super.super);
         }
     }
@@ -584,25 +627,35 @@ log_reader_io_handle_in(gpointer s)
 static void
 _register_aggregated_stats(LogReader *self)
 {
+  gint level = log_pipe_is_internal(&self->super.super) ? STATS_LEVEL3 : self->super.options->stats_level;
+
+  gchar stats_instance[1024];
+  const gchar *instance_name = stats_cluster_key_builder_format_legacy_stats_instance(self->super.metrics.stats_kb,
+                               stats_instance, sizeof(stats_instance));
+
   StatsClusterKey sc_key_eps_input;
-  stats_cluster_logpipe_key_set(&sc_key_eps_input, self->super.options->stats_source | SCS_SOURCE, self->super.stats_id,
-                                self->super.stats_instance);
+  stats_cluster_single_key_legacy_set_with_name(&sc_key_eps_input, self->super.options->stats_source | SCS_SOURCE,
+                                                self->super.stats_id,
+                                                instance_name, "processed");
 
   stats_aggregator_lock();
   StatsClusterKey sc_key;
 
-  stats_cluster_single_key_set_with_name(&sc_key, self->super.options->stats_source | SCS_SOURCE, self->super.stats_id,
-                                         self->super.stats_instance, "msg_size_max");
-  stats_register_aggregator_maximum(self->super.options->stats_level, &sc_key, &self->max_message_size);
+  stats_cluster_single_key_legacy_set_with_name(&sc_key, self->super.options->stats_source | SCS_SOURCE,
+                                                self->super.stats_id,
+                                                instance_name, "msg_size_max");
+  stats_register_aggregator_maximum(level, &sc_key, &self->max_message_size);
 
-  stats_cluster_single_key_set_with_name(&sc_key, self->super.options->stats_source | SCS_SOURCE, self->super.stats_id,
-                                         self->super.stats_instance, "msg_size_avg");
-  stats_register_aggregator_average(self->super.options->stats_level, &sc_key, &self->average_messages_size);
+  stats_cluster_single_key_legacy_set_with_name(&sc_key, self->super.options->stats_source | SCS_SOURCE,
+                                                self->super.stats_id,
+                                                instance_name, "msg_size_avg");
+  stats_register_aggregator_average(level, &sc_key, &self->average_messages_size);
 
-  stats_cluster_single_key_set_with_name(&sc_key, self->super.options->stats_source | SCS_SOURCE, self->super.stats_id,
-                                         self->super.stats_instance, "eps");
-  stats_register_aggregator_cps(self->super.options->stats_level, &sc_key, &sc_key_eps_input, SC_TYPE_PROCESSED,
-                                &self->CPS);
+  stats_cluster_single_key_legacy_set_with_name(&sc_key, self->super.options->stats_source | SCS_SOURCE,
+                                                self->super.stats_id,
+                                                instance_name, "eps");
+
+  stats_register_aggregator_cps(level, &sc_key, &sc_key_eps_input, SC_TYPE_SINGLE_VALUE, &self->CPS);
 
   stats_aggregator_unlock();
 }
@@ -612,9 +665,9 @@ _unregister_aggregated_stats(LogReader *self)
 {
   stats_aggregator_lock();
 
-  stats_unregister_aggregator_maximum(&self->max_message_size);
-  stats_unregister_aggregator_average(&self->average_messages_size);
-  stats_unregister_aggregator_cps(&self->CPS);
+  stats_unregister_aggregator(&self->max_message_size);
+  stats_unregister_aggregator(&self->average_messages_size);
+  stats_unregister_aggregator(&self->CPS);
 
   stats_aggregator_unlock();
 }
@@ -691,10 +744,10 @@ log_reader_init_watches(LogReader *self)
 
   main_loop_io_worker_job_init(&self->io_job);
   self->io_job.user_data = self;
-  self->io_job.work = (void (*)(void *, GIOCondition)) log_reader_work_perform;
-  self->io_job.completion = (void (*)(void *)) log_reader_work_finished;
-  self->io_job.engage = (void (*)(void *)) log_pipe_ref;
-  self->io_job.release = (void (*)(void *)) log_pipe_unref;
+  self->io_job.work = log_reader_work_perform;
+  self->io_job.completion = log_reader_work_finished;
+  self->io_job.engage = (void (*)(gpointer)) log_pipe_ref;
+  self->io_job.release = (void (*)(gpointer)) log_pipe_unref;
 }
 
 static void
@@ -746,6 +799,7 @@ log_reader_new(GlobalConfig *cfg)
   self->super.super.free_fn = log_reader_free;
   self->super.wakeup = log_reader_wakeup;
   self->super.schedule_dynamic_window_realloc = _schedule_dynamic_window_realloc;
+  self->super.metrics.raw_bytes_enabled = TRUE;
   self->immediate_check = FALSE;
   log_reader_init_watches(self);
   g_mutex_init(&self->pending_close_lock);

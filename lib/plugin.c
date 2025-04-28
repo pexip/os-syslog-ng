@@ -384,7 +384,7 @@ plugin_load_module(PluginContext *context, const gchar *module_name, CfgArgs *ar
   g_module_make_resident(mod);
   module_info = _get_module_info(mod);
 
-  if (module_info->canonical_name)
+  if (module_info && module_info->canonical_name)
     {
       g_free(module_init_func);
       module_init_func = _format_module_init_name(module_info->canonical_name ? : module_name);
@@ -574,7 +574,7 @@ void
 plugin_context_init_instance(PluginContext *context)
 {
   memset(context, 0, sizeof(*context));
-  plugin_context_set_module_path(context, resolvedConfigurablePaths.initial_module_path);
+  plugin_context_set_module_path(context, resolved_configurable_paths.initial_module_path);
 }
 
 void
@@ -596,7 +596,7 @@ plugin_list_modules(FILE *out, gboolean verbose)
   gint i, j, k;
   gboolean first = TRUE;
 
-  mod_paths = g_strsplit(resolvedConfigurablePaths.initial_module_path, ":", 0);
+  mod_paths = g_strsplit(resolved_configurable_paths.initial_module_path, ":", 0);
   for (i = 0; mod_paths[i]; i++)
     {
       GDir *dir;

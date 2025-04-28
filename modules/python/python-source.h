@@ -25,13 +25,13 @@
 #define SNG_PYTHON_SOURCE_H
 
 #include "python-module.h"
+#include "python-options.h"
+#include "python-binding.h"
 #include "driver.h"
 
 LogDriver *python_sd_new(GlobalConfig *cfg);
-void python_sd_set_loaders(LogDriver *d, GList *loaders);
-void python_sd_set_class(LogDriver *d, gchar *class_name);
-void python_sd_set_option(LogDriver *d, gchar *key, gchar *value);
+PythonBinding *python_sd_get_binding(LogDriver *d);
 
-void py_log_source_init(void);
+void py_log_source_global_init(void);
 
 #endif

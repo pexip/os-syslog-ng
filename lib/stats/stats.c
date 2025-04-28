@@ -30,6 +30,7 @@
 #include "stats/stats.h"
 #include "timeutils/cache.h"
 #include "timeutils/misc.h"
+#include "cfg-parser.h"
 
 #include <string.h>
 #include <iv.h>
@@ -108,7 +109,7 @@ stats_cluster_is_expired(StatsOptions *options, StatsCluster *sc, time_t now)
 
 typedef struct _StatsTimerState
 {
-  GTimeVal now;
+  struct timespec now;
   time_t oldest_counter;
   gint dropped_counters;
   EVTREC *stats_event;
@@ -147,11 +148,13 @@ stats_publish_and_prune_counters(StatsOptions *options)
   StatsTimerState st;
   gboolean publish = (options->log_freq > 0);
 
+  iv_validate_now();
+
   st.oldest_counter = 0;
   st.dropped_counters = 0;
   st.stats_event = NULL;
   st.options = options;
-  cached_g_current_time(&st.now);
+  st.now = iv_now;
 
   if (publish)
     st.stats_event = msg_event_create(EVT_PRI_INFO, "Log statistics", NULL);
@@ -240,13 +243,11 @@ stats_init(void)
   stats_cluster_init();
   stats_registry_init();
   stats_aggregator_registry_init();
-  stats_query_init();
 }
 
 void
 stats_destroy(void)
 {
-  stats_query_deinit();
   stats_aggregator_registry_deinit();
   stats_registry_deinit();
   stats_cluster_deinit();
@@ -259,6 +260,7 @@ stats_options_defaults(StatsOptions *options)
   options->log_freq = 600;
   options->lifetime = 600;
   options->max_dynamic = -1;
+  options->syslog_stats = CYNA_AUTO;
 }
 
 gboolean
@@ -286,4 +288,12 @@ stats_number_of_dynamic_clusters_limit(void)
   if (!stats_options)
     return -1;
   return stats_options->max_dynamic;
+}
+
+CfgYesNoAuto
+stats_syslog_stats(void)
+{
+  if (stats_options)
+    return (stats_options->syslog_stats);
+  return CYNA_AUTO;
 }

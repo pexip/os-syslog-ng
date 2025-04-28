@@ -1,3 +1,95 @@
+syslog-ng (4.8.1-4) unstable; urgency=medium
+
+  [ SZALAY Attila ]
+  * Install smart-multi-line.fsm to enable smart multi line support
+    (closes: #1091616).
+  * Extending autopkgtest tests about config warnings.
+  * Update configuration and eliminate warnings.
+  * Incorporate latest changes into the copyright file.
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.org>  Sun, 16 Mar 2025 08:59:59 +0100
+
+syslog-ng (4.8.1-3) unstable; urgency=medium
+
+  [ Luca Boccassi <bluca@debian.org> ]
+  * autopkgtest: fix testinitscript to remove correctly systemd-
+    sysv/runit-init with the new protected flags (closes: #1099718).
+
+  [ Laszlo Boszormenyi (GCS) ]
+  * Backport upstream fix for EINVAL complaints seeking /dev/kmsg
+    (closes: #1099729).
+  * Readd PatternDB support library to syslog-ng-core.
+  * Add required python3-setuptools as build dependency.
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.org>  Fri, 07 Mar 2025 17:32:24 +0100
+
+syslog-ng (4.8.1-2) unstable; urgency=medium
+
+  * Fix arch-indepenendent-only build
+
+ -- SZALAY Attila <sasa@debian.org>  Wed, 11 Dec 2024 20:16:33 +0000
+
+syslog-ng (4.8.1-1) unstable; urgency=medium
+
+  * New upstream version 4.8.1
+  * Drop patches already applied upstream
+  * Adding gperf as a build-time dependency
+  * Disable cloud-auth for now
+  * Add new scl files
+
+ -- SZALAY Attila <sasa@debian.org>  Sun, 01 Dec 2024 19:15:26 +0000
+
+syslog-ng (4.4.0-3) unstable; urgency=medium
+
+  * Backport upstream fix for variable type for g_io_channel_write_chars()
+    (closes: #1077249).
+  * Disable SMTP destination plugin for now.
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.org>  Sun, 18 Aug 2024 09:01:57 +0200
+
+syslog-ng (4.4.0-2) unstable; urgency=medium
+
+  [ Chris Hofstaedtler <zeha@debian.org> ]
+  * Let configure autodetect systemdsystemunitdir, add systemd-dev for
+    systemd.pc.
+  * Use dh_installsystemd to install Debian-specific systemd unit
+    (closes: #1073766).
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.org>  Sat, 27 Jul 2024 08:46:33 +0000
+
+syslog-ng (4.4.0-1) unstable; urgency=medium
+
+  [ Attila Szalay ]
+  * New upstream version 4.4.0
+
+  [ SZALAY Attila ]
+  * Make plugin dependencies binNMU safe.
+    Thanks to Steve Langasek <vorlon@debian.org> whose patch was the base
+    (Closes: #1063077)
+  * Fix install exclude list
+
+ -- SZALAY Attila <sasa@debian.org>  Sat, 04 May 2024 16:23:54 +0100
+
+syslog-ng (4.3.1-2) unstable; urgency=medium
+
+  [ Attila Szalay ]
+  * Change libpcre dependency (Closes: #99946)
+
+ -- SZALAY Attila <sasa@debian.org>  Sat, 26 Aug 2023 15:05:12 +0100
+
+syslog-ng (4.3.1-1) unstable; urgency=medium
+
+  [ Attila Szalay ]
+  * New upstream version 4.3.1
+  * Dropping patches merged upstream
+  * Drop python venv creation
+  * Remove files from package definition which does not generated in the new release
+  * Add the new scl files to scl package
+  * Ignore the new modules for now
+  * Adapt packaging to that upstream moved the scl.conf out from /etc/syslog-ng
+
+ -- SZALAY Attila <sasa@debian.org>  Sun, 20 Aug 2023 16:51:02 +0100
+
 syslog-ng (3.38.1-5+pexip24u2) pexip-bookworm; urgency=medium
 
   * Initial bookworm build

@@ -45,6 +45,8 @@
 #include "afsnmp-parser.h"
 #include "logthrdest/logthrdestdrv.h"
 
+#include <stdlib.h>
+
 const gchar *s_v2c = "v2c";
 const gchar *s_v3 = "v3";
 const gchar *s_sha = "SHA";
@@ -138,7 +140,7 @@ snmpdest_dd_set_port(LogDriver *d, gint port)
 static gint
 snmp_dd_compare_object_ids(gconstpointer a, gconstpointer b)
 {
-  return strcmp((gchar *) a, (gchar *) b);
+  return strcmp((const gchar *) a, (const gchar *) b);
 }
 
 gboolean
@@ -155,7 +157,7 @@ snmpdest_dd_set_snmp_obj(LogDriver *d, GlobalConfig *cfg, const gchar *objectid,
       return FALSE;
     }
 
-  gchar *s_objectid = "objectid";
+  const gchar *s_objectid = "objectid";
 
   /* check the multiple 'objectid' types - only one type='objectid' is allowed */
   if (!strcmp(type, s_objectid) && self->snmp_objs)
@@ -453,7 +455,7 @@ snmpdest_worker_insert(LogThreadedDestDriver *s, LogMessage *msg)
 static const gchar *
 snmpdest_dd_format_persist_name(const LogPipe *s)
 {
-  SNMPDestDriver *self = (SNMPDestDriver *) s;
+  const SNMPDestDriver *self = (const SNMPDestDriver *) s;
   static gchar persist_name[1024];
 
   g_snprintf(persist_name, sizeof(persist_name), "snmpdest(%s,%u)", self->host, self->port);
@@ -461,14 +463,18 @@ snmpdest_dd_format_persist_name(const LogPipe *s)
 }
 
 static const gchar *
-snmpdest_dd_format_stats_instance(LogThreadedDestDriver *s)
+snmpdest_dd_format_stats_key(LogThreadedDestDriver *s, StatsClusterKeyBuilder *kb)
 {
   SNMPDestDriver *self = (SNMPDestDriver *)s;
 
-  static gchar persist_name[1024];
+  stats_cluster_key_builder_add_legacy_label(kb, stats_cluster_label("driver", "snmpdest"));
+  stats_cluster_key_builder_add_legacy_label(kb, stats_cluster_label("host", self->host));
 
-  g_snprintf(persist_name, sizeof(persist_name), "snmpdest,%s,%u", self->host, self->port);
-  return persist_name;
+  gchar num[64];
+  g_snprintf(num, sizeof(num), "%u", self->port);
+  stats_cluster_key_builder_add_legacy_label(kb, stats_cluster_label("port", num));
+
+  return NULL;
 }
 
 static gboolean
@@ -477,7 +483,7 @@ snmpdest_dd_session_init(SNMPDestDriver *self)
   /* SNMP session setup */
   memset(&self->session, 0, sizeof(self->session));
 
-  putenv("POSIXLY_CORRECT=1");
+  setenv("POSIXLY_CORRECT", "1", 1);
   gchar *args[24];
   gint argc = 0;
   gint i;
@@ -720,8 +726,6 @@ snmpdest_worker_thread_init(LogThreadedDestDriver *d)
   if (!tz && time_zone)
     snmpdest_dd_set_time_zone((LogDriver *)self, time_zone);
 
-  log_template_options_init(&self->template_options, cfg);
-
   snmpdest_dd_session_init(self);
 }
 
@@ -739,7 +743,7 @@ snmpdest_dd_new(GlobalConfig *cfg)
   self->super.worker.thread_deinit = snmpdest_worker_thread_deinit;
   self->super.worker.insert = snmpdest_worker_insert;
 
-  self->super.format_stats_instance = snmpdest_dd_format_stats_instance;
+  self->super.format_stats_key = snmpdest_dd_format_stats_key;
   self->super.stats_source = stats_register_type("snmp");
 
   if (snmp_dest_counter == 0)
@@ -807,6 +811,14 @@ gchar *snmpdest_dd_get_version(LogDriver *d)
   SNMPDestDriver *self = (SNMPDestDriver *)d;
 
   return self->version;
+}
+
+const LogTemplateOptions *
+snmpdest_dd_get_template_options(LogDriver *d)
+{
+  SNMPDestDriver *self = (SNMPDestDriver *) d;
+
+  return &self->template_options;
 }
 
 gboolean snmpdest_dd_check_auth_algorithm(gchar *algo)

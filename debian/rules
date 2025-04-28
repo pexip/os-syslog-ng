@@ -99,6 +99,7 @@ override_dh_auto_configure:
 		--enable-json \
 		--enable-riemann \
 		--disable-java \
+		--disable-smtp \
 		--enable-manpages \
 		--disable-amqp \
 		$(PACCT_CONFIGURE_OPTS) \
@@ -106,12 +107,14 @@ override_dh_auto_configure:
 		--with-python=3 \
 		--enable-http \
 		--disable-kafka \
+		--disable-cloud-auth \
 		\
 		--with-ivykis=system \
 		--with-jsonc=system \
 		\
 		--with-module-dir='$${exec_prefix}/lib/syslog-ng/${UMAJOR}' \
-		--with-systemdsystemunitdir="/lib/systemd/system" \
+		\
+		--with-python-packages=none \
 		\
 		SOURCE_REVISION="$${SOURCE_REVISION}" \
 		${SYSTEMD_CONFIGURE_OPTS} \

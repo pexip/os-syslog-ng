@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2022 One Identity LLC.
  * Copyright (c) 2016 Marc Falzon
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -49,6 +50,7 @@ static CfgLexerKeyword http_keywords[] =
   { "use_system_cert_store", KW_USE_SYSTEM_CERT_STORE },
   { "ssl_version",      KW_SSL_VERSION },
   { "peer_verify",      KW_PEER_VERIFY },
+  { "ocsp_stapling_verify", KW_OCSP_STAPLING_VERIFY },
   { "accept_redirects", KW_ACCEPT_REDIRECTS },
   { "response_action",  KW_RESPONSE_ACTION },
   { "success",          KW_SUCCESS },
@@ -61,9 +63,12 @@ static CfgLexerKeyword http_keywords[] =
   { "batch_bytes",      KW_BATCH_BYTES },
   { "flush_lines",      KW_BATCH_LINES, KWS_OBSOLETE, "The flush-lines option is deprecated. Use batch-lines instead."},
   { "flush_timeout",    KW_BATCH_TIMEOUT, KWS_OBSOLETE, "The flush-timeout option is deprecated. Use batch-timeout instead."},
+  { "flush_on_worker_key_change", KW_FLUSH_ON_WORKER_KEY_CHANGE },
   { "body_prefix",      KW_BODY_PREFIX },
   { "body_suffix",      KW_BODY_SUFFIX },
   { "delimiter",        KW_DELIMITER },
+  { "accept_encoding",  KW_ACCEPT_ENCODING },
+  { "content_compression",    KW_CONTENT_COMPRESSION },
   { NULL }
 };
 

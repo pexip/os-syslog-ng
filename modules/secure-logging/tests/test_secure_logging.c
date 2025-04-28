@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2024 Gergo Ferenc Kovacs
  * Copyright (c) 2019 Airbus Commercial Aircraft
  *
  * This library is free software; you can redistribute it and/or
@@ -33,7 +34,7 @@
 #include "apphook.h"
 #include "cfg.h"
 #include "logmatcher.h"
-#include "timeutils/misc.h"
+#include "timeutils/cache.h"
 
 #include <errno.h>
 #include <string.h>
@@ -373,7 +374,7 @@ void corruptKey(TestData *testData)
 
   cr_assert(status == G_IO_STATUS_NORMAL, " Unable to set encoding for key file %s", testData->keyFile->str);
 
-  guint64 outlen = 0;
+  gsize outlen = 0;
 
   int buflen = KEY_LENGTH + CMAC_LENGTH + sizeof(guint64);
 
@@ -689,8 +690,8 @@ void test_slog_performance(void)
     {
       log_template_format(slog_templ, msg, &DEFAULT_TEMPLATE_EVAL_OPTIONS, res);
     }
-  stop_stopwatch_and_display_result(PERFORMANCE_COUNTER, "%-90.*s", (int)strlen(slog_templ->template) - 1,
-                                    slog_templ->template);
+  stop_stopwatch_and_display_result(PERFORMANCE_COUNTER, "%-90.*s", (int)strlen(slog_templ->template_str) - 1,
+                                    slog_templ->template_str);
 
   // Free resources
   log_template_unref(slog_templ);

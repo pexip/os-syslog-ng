@@ -1,3 +1,7 @@
+# The reason why the source directory is used here is that
+# when only architecture-independent packages are built (like syslog-ng-scl)
+# then no actual build happens and therefore these files will not be
+# installed to debian/tmp.
 scl/cee/adapter.conf usr/share/syslog-ng/include/scl/cee/
 scl/rewrite/cc-mask.conf usr/share/syslog-ng/include/scl/rewrite/
 scl/windowseventlog/plugin.conf usr/share/syslog-ng/include/scl/windowseventlog/
@@ -27,7 +31,6 @@ scl/syslogconf/README usr/share/syslog-ng/include/scl/syslogconf/
 scl/syslogconf/plugin.conf usr/share/syslog-ng/include/scl/syslogconf/
 scl/syslogconf/convert-syslogconf.awk usr/share/syslog-ng/include/scl/syslogconf/
 scl/ewmm/ewmm.conf usr/share/syslog-ng/include/scl/ewmm/
-scl/kubernetes/kubernetes.conf usr/share/syslog-ng/include/scl/kubernetes/
 scl/logmatic/logmatic.conf usr/share/syslog-ng/include/scl/logmatic/
 scl/hdfs/plugin.conf usr/share/syslog-ng/include/scl/hdfs/
 scl/osquery/plugin.conf usr/share/syslog-ng/include/scl/osquery/
@@ -46,3 +49,14 @@ scl/elasticsearch/elastic-http.conf usr/share/syslog-ng/include/scl/elasticsearc
 scl/graphite/README usr/share/syslog-ng/include/scl/graphite/
 scl/graphite/plugin.conf usr/share/syslog-ng/include/scl/graphite/
 scl/netskope/plugin.conf usr/share/syslog-ng/include/scl/netskope/
+scl/logscale/logscale.conf usr/share/syslog-ng/include/scl/logscale/
+scl/opensearch/opensearch.conf usr/share/syslog-ng/include/scl/opensearch/
+scl/python/python-modules.conf usr/share/syslog-ng/include/scl/python/
+scl/splunk/splunk.conf usr/share/syslog-ng/include/scl/splunk/
+scl/arr/arr.conf usr/share/syslog-ng/include/scl/arr/
+scl/elasticsearch/elastic-datastream.conf usr/share/syslog-ng/include/scl/elasticsearch/
+scl/jellyfin/jellyfin.conf usr/share/syslog-ng/include/scl/jellyfin/
+scl/openobserve/openobserve.conf usr/share/syslog-ng/include/scl/openobserve/
+scl/pgsql/pgsql.conf usr/share/syslog-ng/include/scl/pgsql/
+scl/pihole/pihole.conf usr/share/syslog-ng/include/scl/pihole/
+scl/qbittorrent/qbittorrent.conf usr/share/syslog-ng/include/scl/qbittorrent/

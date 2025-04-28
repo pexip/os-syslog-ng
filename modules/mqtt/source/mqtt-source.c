@@ -26,6 +26,8 @@
 
 #define RECEIVE_TIMEOUT 1000
 
+static NVHandle handle_mqtt_topic = 0;
+
 void
 mqtt_sd_set_topic(LogDriver *s, const gchar *topic)
 {
@@ -49,29 +51,15 @@ _format_persist_name(const LogPipe *s)
   return stats_instance;
 }
 
-static const gchar *
-_format_stats_instance(LogThreadedSourceDriver *s)
+static void
+_format_stats_key(LogThreadedSourceDriver *s, StatsClusterKeyBuilder *kb)
 {
   MQTTSourceDriver *self = (MQTTSourceDriver *) s;
-  LogPipe *p = &s->super.super.super;
-  static gchar persist_name[1024];
 
-  if (p->persist_name)
-    g_snprintf(persist_name, sizeof(persist_name), "mqtt-source.%s", p->persist_name);
-  else
-    g_snprintf(persist_name, sizeof(persist_name), "mqtt-source.(%s,%s)", mqtt_client_options_get_address(&self->options),
-               self->topic);
-
-  return persist_name;
-}
-
-static LogMessage *
-_create_message(MQTTSourceDriver *self, const gchar *message, gint length)
-{
-  LogMessage *msg = log_msg_new_empty();
-  log_msg_set_value(msg, LM_V_MESSAGE, message, length);
-
-  return msg;
+  stats_cluster_key_builder_add_legacy_label(kb, stats_cluster_label("driver", "mqtt-source"));
+  stats_cluster_key_builder_add_legacy_label(kb, stats_cluster_label("address",
+                                             mqtt_client_options_get_address(&self->options)));
+  stats_cluster_key_builder_add_legacy_label(kb, stats_cluster_label("topic", self->topic));
 }
 
 static gboolean
@@ -85,7 +73,7 @@ _client_init(MQTTSourceDriver *self)
     {
       msg_error("Error creating mqtt client",
                 evt_tag_str("address", mqtt_client_options_get_address(&self->options)),
-                evt_tag_str("error code", MQTTClient_strerror(rc)),
+                evt_tag_str("error_code", MQTTClient_strerror(rc)),
                 evt_tag_str("client_id", mqtt_client_options_get_client_id(&self->options)),
                 log_pipe_location_tag(&self->super.super.super.super.super));
       return FALSE;
@@ -113,7 +101,7 @@ _subscribe_topic(MQTTSourceDriver *self)
       msg_error("mqtt: Error while subscribing to topic",
                 evt_tag_str("topic", self->topic),
                 evt_tag_int("qos", mqtt_client_options_get_qos(&self->options)),
-                evt_tag_str("error code", MQTTClient_strerror(rc)),
+                evt_tag_str("error_code", MQTTClient_strerror(rc)),
                 evt_tag_str("driver", self->super.super.super.super.id),
                 log_pipe_location_tag(&self->super.super.super.super.super));
       return FALSE;
@@ -150,8 +138,8 @@ _connect(LogThreadedFetcherDriver *s)
 
   if ((rc = MQTTClient_connect(self->client, &conn_opts)) != MQTTCLIENT_SUCCESS)
     {
-      msg_error("Error connecting mqtt client",
-                evt_tag_str("error code", MQTTClient_strerror(rc)),
+      msg_error("Error connecting to mqtt server",
+                evt_tag_str("error_code", MQTTClient_strerror(rc)),
                 evt_tag_str("client_id", mqtt_client_options_get_client_id(&self->options)),
                 log_pipe_location_tag(&self->super.super.super.super.super));
       return FALSE;
@@ -202,7 +190,11 @@ _fetch(LogThreadedFetcherDriver *s)
 
   if (result == THREADED_FETCH_SUCCESS)
     {
-      msg = _create_message(self, (gchar *)message->payload, message->payloadlen);
+      msg = log_msg_new_empty();
+      log_msg_set_value(msg, LM_V_MESSAGE, (gchar *)message->payload, message->payloadlen);
+      log_msg_set_value(msg, handle_mqtt_topic, topicName, topicLen);
+      log_msg_set_value_to_string(msg, LM_V_TRANSPORT, "mqtt");
+
       MQTTClient_freeMessage(&message);
       MQTTClient_free(topicName);
     }
@@ -210,7 +202,7 @@ _fetch(LogThreadedFetcherDriver *s)
   if (result == THREADED_FETCH_ERROR)
     {
       msg_error("Error while receiving msg",
-                evt_tag_str("error code", MQTTClient_strerror(rc)),
+                evt_tag_str("error_code", MQTTClient_strerror(rc)),
                 evt_tag_str("client_id", mqtt_client_options_get_client_id(&self->options)),
                 log_pipe_location_tag(&self->super.super.super.super.super));
     }
@@ -226,6 +218,7 @@ _init(LogPipe *s)
 {
   MQTTSourceDriver *self = (MQTTSourceDriver *)s;
 
+  handle_mqtt_topic = log_msg_get_value_handle("MQTT_TOPIC");
   if (!self->topic)
     {
       msg_error("mqtt: the topic() argument is required for mqtt source",
@@ -274,6 +267,7 @@ mqtt_sd_new(GlobalConfig *cfg)
   MQTTSourceDriver *self = g_new0(MQTTSourceDriver, 1);
 
   log_threaded_fetcher_driver_init_instance(&self->super, cfg);
+  log_threaded_source_driver_set_transport_name(&self->super.super, "mqtt");
 
   mqtt_client_options_defaults(&self->options);
   mqtt_client_options_set_log_ssl_error_fn(&self->options, self, _log_ssl_errors);
@@ -289,7 +283,7 @@ mqtt_sd_new(GlobalConfig *cfg)
   self->super.thread_deinit = _thread_deinit;
 
   self->super.super.super.super.super.generate_persist_name = _format_persist_name;
-  self->super.super.format_stats_instance = _format_stats_instance;
+  self->super.super.format_stats_key = _format_stats_key;
   return &self->super.super.super.super;
 }
 

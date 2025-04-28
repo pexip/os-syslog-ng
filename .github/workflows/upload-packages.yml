@@ -11,15 +11,15 @@ on:
         required: false
         type: string
         default: '[
-          "debian-stretch",
-          "debian-buster",
           "debian-testing",
           "debian-sid",
-          "ubuntu-xenial",
-          "ubuntu-bionic",
           "debian-bullseye",
+          "debian-bookworm",
           "ubuntu-focal",
-          "ubuntu-jammy"
+          "ubuntu-jammy",
+          "ubuntu-noble",
+          "ubuntu-lunar",
+          "ubuntu-mantic"
         ]'
     secrets:
       azure-sas-token:
@@ -41,7 +41,7 @@ jobs:
 
     steps:
       - name: Download package artifact
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4.1.7
         with:
           name: package-${{ matrix.distro }}
           path: package

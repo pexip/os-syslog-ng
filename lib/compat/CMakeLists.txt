@@ -14,6 +14,11 @@ set(COMPAT_HEADERS
     compat/getent-openbsd.h
     compat/getent-generic.h
     compat/un.h
+    compat/cpp-start.h
+    compat/cpp-end.h
+    compat/curl.h
+    compat/json.h
+    compat/inttypes.h
     PARENT_SCOPE)
 
 set(COMPAT_SOURCES
@@ -25,6 +30,7 @@ set(COMPAT_SOURCES
     compat/strcasestr.c
     compat/strtok_r.c
     compat/strnlen.c
+    compat/getline.c
     compat/time.c
     compat/openssl_support.c
     compat/getent-sun.c

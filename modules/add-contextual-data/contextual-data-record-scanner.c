@@ -43,8 +43,11 @@ _fetch_next(ContextualDataRecordScanner *self)
 {
   if (!csv_scanner_scan_next(&self->scanner))
     {
+      const gchar *columns[] = { "selector", "name", "value", NULL };
+      gint column_index = csv_scanner_get_current_column(&self->scanner);
+      const gchar *column_name = column_index < 3 ? columns[column_index] : "out-of-range";
       msg_error("add-contextual-data(): error parsing CSV file, expecting an additional column which was not found. Expecting (selector, name, value) triplets",
-                evt_tag_str("target", csv_scanner_get_current_name(&self->scanner)));
+                evt_tag_str("target", column_name));
       return FALSE;
     }
 
@@ -67,7 +70,7 @@ _fetch_selector(ContextualDataRecordScanner *self, ContextualDataRecord *record)
 {
   if (!_fetch_next(self))
     return FALSE;
-  record->selector = g_string_new(csv_scanner_get_current_value(&self->scanner));
+  record->selector = g_strdup(csv_scanner_get_current_value(&self->scanner));
   return TRUE;
 }
 
@@ -94,6 +97,10 @@ _fetch_value(ContextualDataRecordScanner *self, ContextualDataRecord *record)
 
   record->value = log_template_new(self->cfg, NULL);
 
+
+  GError *error = NULL;
+  gboolean success;
+
   if (cfg_is_config_version_older(self->cfg, VERSION_VALUE_3_21) &&
       strchr(value_template, '$') != NULL)
     {
@@ -103,25 +110,68 @@ _fetch_value(ContextualDataRecordScanner *self, ContextualDataRecord *record)
                   "to be escaped as '$$' once you change your @version declaration in the "
                   "configuration. This message means that this string is now assumed to be a "
                   "literal (non-template) string for compatibility",
-                  evt_tag_str("selector", record->selector->str),
+                  cfg_format_config_version_tag(self->cfg),
+                  evt_tag_str("selector", record->selector),
                   evt_tag_str("name", log_msg_get_value_name(record->value_handle, NULL)),
                   evt_tag_str("value", value_template));
       log_template_compile_literal_string(record->value, value_template);
+      success = TRUE;
+    }
+  else if (cfg_is_typing_feature_enabled(self->cfg))
+    {
+      /* typing feature is enabled */
+      if (cfg_is_config_version_older(self->cfg, VERSION_VALUE_4_0))
+        {
+          /* old @config, use compat mode but warn if the format would become incompatible */
+          if (strchr(value_template, '(') != NULL)
+            {
+              success = log_template_compile_with_type_hint(record->value, value_template, &error);
+              if (!success)
+                {
+                  log_template_set_type_hint(record->value, "string", NULL);
+                  msg_warning("WARNING: the value field in add-contextual-data() CSV files has been changed "
+                              "to support typing from " FEATURE_TYPING_VERSION ". You are using an older config "
+                              "version and your CSV file contains an unrecognized type-cast, probably a "
+                              "parenthesis in the value field. This will be interpreted in the `type(value)' "
+                              "format in future versions. Please add an "
+                              "explicit string() cast as shown in the 'fixed-value' tag of this log message "
+                              "or remove the parenthesis. The value column will be processed as a 'string' "
+                              "expression",
+                              cfg_format_config_version_tag(self->cfg),
+                              evt_tag_str("selector", record->selector),
+                              evt_tag_str("name", log_msg_get_value_name(record->value_handle, NULL)),
+                              evt_tag_str("value", value_template),
+                              evt_tag_printf("fixed-value", "string(%s)", value_template));
+                  g_clear_error(&error);
+                  success = log_template_compile(record->value, value_template, &error);
+                }
+            }
+          else
+            {
+              success = log_template_compile(record->value, value_template, &error);
+            }
+        }
+      else
+        {
+          /* new @config, use the new format with error handling */
+          success = log_template_compile_with_type_hint(record->value, value_template, &error);
+        }
     }
   else
     {
-      GError *error = NULL;
+      /* typing feature is disabled, use old format, no warnings */
+      success = log_template_compile(record->value, value_template, &error);
+    }
 
-      if (!log_template_compile_with_type_hint(record->value, value_template, &error))
-        {
-          msg_error("add-contextual-data(): error compiling template",
-                    evt_tag_str("selector", record->selector->str),
-                    evt_tag_str("name", log_msg_get_value_name(record->value_handle, NULL)),
-                    evt_tag_str("value", value_template),
-                    evt_tag_str("error", error->message));
-          g_clear_error(&error);
-          return FALSE;
-        }
+  if (!success)
+    {
+      msg_error("add-contextual-data(): error compiling template",
+                evt_tag_str("selector", record->selector),
+                evt_tag_str("name", log_msg_get_value_name(record->value_handle, NULL)),
+                evt_tag_str("value", value_template),
+                evt_tag_str("error", error->message));
+      g_clear_error(&error);
+      return FALSE;
     }
   return TRUE;
 }
@@ -188,9 +238,7 @@ contextual_data_record_scanner_new(GlobalConfig *cfg, const gchar *name_prefix)
 
   csv_scanner_options_set_delimiters(&self->options, ",");
   csv_scanner_options_set_quote_pairs(&self->options, "\"\"''");
-  const gchar *column_array[] = { "selector", "name", "value", NULL };
-  csv_scanner_options_set_columns(&self->options,
-                                  string_array_to_list(column_array));
+  csv_scanner_options_set_expected_columns(&self->options, 3);
   csv_scanner_options_set_flags(&self->options, CSV_SCANNER_STRIP_WHITESPACE);
   csv_scanner_options_set_dialect(&self->options, CSV_SCANNER_ESCAPE_DOUBLE_CHAR);
   self->name_prefix = g_strdup(name_prefix);

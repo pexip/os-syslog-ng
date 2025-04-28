@@ -24,8 +24,6 @@
 #include "logproto-dgram-server.h"
 #include "logproto-text-client.h"
 #include "logproto-text-server.h"
-#include "logproto-proxied-text-server.h"
-#include "logproto-indented-multiline-server.h"
 #include "logproto-framed-client.h"
 #include "logproto-framed-server.h"
 #include "plugin.h"
@@ -39,9 +37,6 @@ DEFINE_LOG_PROTO_SERVER(log_proto_dgram);
 DEFINE_LOG_PROTO_CLIENT(log_proto_text);
 DEFINE_LOG_PROTO_SERVER(log_proto_text);
 DEFINE_LOG_PROTO_SERVER(log_proto_text_with_nuls);
-DEFINE_LOG_PROTO_SERVER(log_proto_proxied_text);
-DEFINE_LOG_PROTO_SERVER(log_proto_proxied_text_tls_passthrough, .use_multitransport = TRUE);
-DEFINE_LOG_PROTO_SERVER(log_proto_indented_multiline);
 DEFINE_LOG_PROTO_CLIENT(log_proto_framed);
 DEFINE_LOG_PROTO_SERVER(log_proto_framed);
 
@@ -53,9 +48,6 @@ static Plugin framed_server_plugins[] =
   LOG_PROTO_CLIENT_PLUGIN(log_proto_text, "text"),
   LOG_PROTO_SERVER_PLUGIN(log_proto_text, "text"),
   LOG_PROTO_SERVER_PLUGIN(log_proto_text_with_nuls, "text-with-nuls"),
-  LOG_PROTO_SERVER_PLUGIN(log_proto_proxied_text, "proxied-tcp"),
-  LOG_PROTO_SERVER_PLUGIN(log_proto_proxied_text_tls_passthrough, "proxied-tls-passthrough"),
-  LOG_PROTO_SERVER_PLUGIN(log_proto_indented_multiline, "indented-multiline"),
   LOG_PROTO_CLIENT_PLUGIN(log_proto_framed, "framed"),
   LOG_PROTO_SERVER_PLUGIN(log_proto_framed, "framed"),
 };

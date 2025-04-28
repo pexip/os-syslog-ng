@@ -215,7 +215,7 @@ _detect_linux_proc_kmsg(void)
 static void
 system_sysblock_add_systemd_source(GString *sysblock)
 {
-  g_string_append(sysblock, "systemd-journal();\n");
+  g_string_append(sysblock, "systemd-journal(match-boot(yes));\n");
 }
 
 static void
@@ -259,6 +259,16 @@ system_sysblock_add_linux(GString *sysblock)
       system_sysblock_add_unix_dgram(sysblock, "/dev/log", NULL, "8192");
       system_sysblock_add_linux_kmsg(sysblock);
     }
+}
+
+static void
+system_sysblock_add_darwin(GString *sysblock, const gchar *release)
+{
+  /* macOS 10.15 Catalina, (Darwin version 19) the first that have OSLog */
+  if (release && atoi(release) >= 19)
+    g_string_append(sysblock, "darwin-oslog();");
+  else
+    system_sysblock_add_file(sysblock, "/var/log/system.log", 1, NULL, NULL, NULL, FALSE);
 }
 
 static gboolean
@@ -321,7 +331,7 @@ system_generate_system_transports(GString *sysblock, CfgArgs *args)
     }
   else if (strcmp(u.sysname, "Darwin") == 0)
     {
-      system_sysblock_add_file(sysblock, "/var/log/system.log", 1, NULL, NULL, NULL, FALSE);
+      system_sysblock_add_darwin(sysblock, u.release);
     }
   else
     {

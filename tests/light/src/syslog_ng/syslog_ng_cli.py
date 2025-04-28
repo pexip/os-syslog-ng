@@ -21,8 +21,7 @@
 #
 #############################################################################
 import logging
-
-from pathlib2 import Path
+from pathlib import Path
 
 from src.common.blocking import wait_until_false
 from src.common.blocking import wait_until_true
@@ -34,9 +33,9 @@ logger = logging.getLogger(__name__)
 
 
 class SyslogNgCli(object):
-    def __init__(self, instance_paths, testcase_parameters):
+    def __init__(self, instance_paths, testcase_parameters, teardown):
         self.__instance_paths = instance_paths
-        self.__console_log_reader = ConsoleLogReader(instance_paths)
+        self.__console_log_reader = ConsoleLogReader(instance_paths, teardown)
         self.__syslog_ng_executor = SyslogNgExecutor(instance_paths)
         self.__syslog_ng_ctl = SyslogNgCtl(instance_paths)
         self.__external_tool = testcase_parameters.get_external_tool()
@@ -81,7 +80,6 @@ class SyslogNgCli(object):
     def __wait_for_control_socket_alive(self):
         def is_alive(s):
             if not s.is_process_running():
-                self.__process = None
                 self.__error_handling("syslog-ng is not running")
             return s.__syslog_ng_ctl.is_control_socket_alive()
         return wait_until_true(is_alive, self)
@@ -168,6 +166,10 @@ class SyslogNgCli(object):
                 core_file.replace(Path(core_file))
             if core_file_found:
                 raise Exception("syslog-ng core file was found and processed")
+            if self.__process.returncode in [-6, -9, -11]:
+                ret_code = self.__process.returncode
+                self.__process = None
+                raise Exception("syslog-ng process crashed with signal {}".format(ret_code))
 
     def set_start_parameters(self, stderr, debug, trace, verbose, startup_debug, no_caps, config_path, persist_path, pid_path, control_socket_path):
         self.__stderr = stderr

@@ -46,6 +46,7 @@ typedef struct _plugin_option
   int  rate;
   int reconnect;
   gboolean proxied;
+  gint proxy_version;
   char *proxy_src_ip;
   char *proxy_dst_ip;
   char *proxy_src_port;
@@ -61,6 +62,10 @@ typedef struct _thread_data
   struct timeval last_throttle_check;
   long buckets;
   gboolean proxy_header_sent;
+
+  /* timestamp  cache for logline generator */
+  struct timeval ts_formatted;
+  char stamp[32];
 } ThreadData;
 
 typedef GOptionEntry *(*get_option_func)(void);

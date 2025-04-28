@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout syslog-ng source
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4.1.7
         with:
           fetch-depth: 0
 
@@ -22,7 +22,7 @@ jobs:
         run: ./dbld/rules pkg-tarball
 
       - name: Store source tarball as artifact
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4.4.0
         with:
           name: source-tarball
           path: dbld/build/*.tar.gz
@@ -34,9 +34,12 @@ jobs:
       source-tarball-artifact-name: source-tarball
       dbld-image-mode: cache
       distros: '[
-        "centos-7",
-        "debian-bullseye",
+        "almalinux-8",
+        "almalinux-9",
+        "centos-stream9",
+        "debian-bookworm",
         "debian-testing",
-        "fedora-35",
-        "ubuntu-jammy"
+        "fedora-latest",
+        "fedora-rawhide",
+        "ubuntu-noble"
       ]'

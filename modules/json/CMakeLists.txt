@@ -1,4 +1,6 @@
-external_or_find_package(JSONC)
+if (NOT DEFINED ENABLE_JSON OR ENABLE_JSON)
+  external_or_find_package(JSONC)
+endif()
 
 module_switch(ENABLE_JSON "Enable JSON plugin" JSONC_FOUND)
 if (NOT ENABLE_JSON)
@@ -14,6 +16,10 @@ set(JSON_SOURCES
     json-parser-parser.h
     dot-notation.c
     dot-notation.h
+    filterx-format-json.c
+    filterx-format-json.h
+    filterx-cache-json-file.c
+    filterx-cache-json-file.h
     json-plugin.c
 )
 

@@ -59,6 +59,7 @@ enum
   LP_GUESS_TIMEZONE = 0x1000,
   LP_NO_HEADER = 0x2000,
   LP_NO_RFC3164_FALLBACK = 0x4000,
+  LP_PIGGYBACK_ERRORS = 0x8000,
 };
 
 typedef struct _MsgFormatHandler MsgFormatHandler;
@@ -73,7 +74,10 @@ typedef struct _MsgFormatOptions
   gchar *recv_time_zone;
   TimeZoneInfo *recv_time_zone_info;
   regex_t *bad_hostname;
+  gchar *sdata_prefix;
+  gsize sdata_prefix_len;
   gint sdata_param_value_max;
+  gboolean use_fqdn;
 } MsgFormatOptions;
 
 struct _MsgFormatHandler
@@ -97,6 +101,8 @@ void msg_format_parse_into(MsgFormatOptions *options, LogMessage *msg,
 
 LogMessage *msg_format_construct_message(MsgFormatOptions *options, const guchar *data, gsize length);
 LogMessage *msg_format_parse(MsgFormatOptions *options, const guchar *data, gsize length);
+
+gboolean msg_format_options_set_sdata_prefix(MsgFormatOptions *options, const gchar *prefix);
 
 void msg_format_options_defaults(MsgFormatOptions *options);
 void msg_format_options_init(MsgFormatOptions *parse_options, GlobalConfig *cfg);

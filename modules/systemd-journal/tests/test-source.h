@@ -34,7 +34,7 @@ typedef struct _TestCase TestCase;
 
 struct _TestCase
 {
-  void (*init)(TestCase *self, TestSource *src, Journald *journal, JournalReader *reader, JournalReaderOptions *options);
+  void (*init)(TestCase *self, TestSource *src, JournalReader *reader, JournalReaderOptions *options);
   void (*checker)(TestCase *self, TestSource *src, LogMessage *msg);
   void (*finish)(TestCase *self);
   gpointer user_data;
@@ -47,5 +47,8 @@ void test_source_add_test_case(TestSource *s, TestCase *tc);
 void test_source_run_tests(TestSource *s);
 void test_source_finish_tc(TestSource *s);
 
+void *journal_reader_test_prepare_with_namespace(const gchar *namespace, GlobalConfig *cfg);
+gboolean journal_reader_test_allocate_namespace(void *test);
+void journal_reader_test_destroy(void *test);
 
 #endif /* TEST_SOURCE_H_ */

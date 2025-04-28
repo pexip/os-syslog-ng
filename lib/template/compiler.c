@@ -88,7 +88,7 @@ parse_msg_ref(LogTemplateCompiler *self)
           if ((*self->cursor) != '@')
             {
               msg_warning("Non-numeric correlation state ID found, assuming a literal '@' character. To avoid confusion when using a literal '@' after a macro or template function, write '@@' in the template.",
-                          evt_tag_str("Template", self->template->template));
+                          evt_tag_str("Template", self->template->template_str));
               self->cursor--;
             }
           self->msg_ref = 0;
@@ -176,7 +176,7 @@ log_template_compiler_process_braced_template(LogTemplateCompiler *self, GError 
 
   if (!end)
     {
-      log_template_compiler_fill_compile_error(error, "Invalid macro, '}' is missing", strlen(self->template->template));
+      log_template_compiler_fill_compile_error(error, "Invalid macro, '}' is missing", strlen(self->template->template_str));
       return FALSE;
     }
 
@@ -187,7 +187,7 @@ log_template_compiler_process_braced_template(LogTemplateCompiler *self, GError 
       default_value = log_template_compiler_get_default_value(self, token);
       if (!default_value)
         {
-          log_template_compiler_fill_compile_error(error, "Unknown substitution function", token - self->template->template);
+          log_template_compiler_fill_compile_error(error, "Unknown substitution function", token - self->template->template_str);
           return FALSE;
         }
     }
@@ -224,6 +224,7 @@ log_template_compiler_process_arg_list(LogTemplateCompiler *self, GPtrArray *res
 {
   GString *arg_buf = g_string_sized_new(32);
   gboolean arg_buf_has_a_value = FALSE;
+  gboolean kv_expr = FALSE;
   gint parens = 1;
   self->cursor++;
 
@@ -257,17 +258,35 @@ log_template_compiler_process_arg_list(LogTemplateCompiler *self, GPtrArray *res
               return FALSE;
             }
           arg_buf_has_a_value = TRUE;
+          kv_expr = FALSE;
           continue;
+        }
+      else if (*self->cursor == '=')
+        {
+          kv_expr = TRUE;
         }
       else if (parens == 1 && g_ascii_isspace(*self->cursor))
         {
-          g_ptr_array_add(result, g_strndup(arg_buf->str, arg_buf->len));
-          g_string_truncate(arg_buf, 0);
-          arg_buf_has_a_value = FALSE;
           while (*self->cursor && g_ascii_isspace(*self->cursor))
             self->cursor++;
-          continue;
+          if (*self->cursor == '=' || kv_expr)
+            {
+              if (kv_expr)
+                continue;
+              else
+                kv_expr = TRUE;
+            }
+          else
+            {
+              g_ptr_array_add(result, g_strndup(arg_buf->str, arg_buf->len));
+              g_string_truncate(arg_buf, 0);
+              arg_buf_has_a_value = FALSE;
+              kv_expr = FALSE;
+              continue;
+            }
         }
+      else
+        kv_expr = FALSE;
       log_template_compiler_append_and_increment(self, arg_buf);
       arg_buf_has_a_value = TRUE;
     }
@@ -289,7 +308,7 @@ log_template_compiler_process_template_function(LogTemplateCompiler *self, GErro
     {
       log_template_compiler_fill_compile_error(error,
                                                "Invalid template function reference, missing function name or imbalanced '('",
-                                               self->cursor - self->template->template);
+                                               self->cursor - self->template->template_str);
       goto error;
     }
   self->cursor++;
@@ -399,7 +418,7 @@ log_template_compiler_process_token(LogTemplateCompiler *self, GError **error)
                       "Use '$$' to specify a literal dollar sign instead of '\\$' and "
                       "remove the escaping of the backslash character when you upgrade "
                       "your configuration",
-                      evt_tag_str("Template", self->template->template));
+                      evt_tag_str("Template", self->template->template_str));
           self->cursor++;
         }
 
@@ -428,7 +447,7 @@ log_template_compiler_compile(LogTemplateCompiler *self, GList **compiled_templa
       if (!log_template_compiler_process_token(self, error))
         {
           log_template_compiler_free_result(self);
-          g_string_printf(self->text, "error in template: %s", self->template->template);
+          g_string_printf(self->text, "error in template: %s", self->template->template_str);
           log_template_add_macro_elem(self, M_NONE, NULL);
           goto error;
         }
@@ -450,7 +469,7 @@ log_template_compiler_init(LogTemplateCompiler *self, LogTemplate *template)
   memset(self, 0, sizeof(*self));
 
   self->template = log_template_ref(template);
-  self->cursor = self->template->template;
+  self->cursor = self->template->template_str;
   self->text = g_string_sized_new(32);
 }
 

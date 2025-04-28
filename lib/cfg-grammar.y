@@ -29,13 +29,10 @@
    with care. If you need additional headers, please look for a
    massive list of includes further below. */
 
-#pragma GCC diagnostic ignored "-Wswitch-default"
-#if (defined(__GNUC__) && __GNUC__ >= 6) || (defined(__clang__) && __clang_major__ >= 10)
-#  pragma GCC diagnostic ignored "-Wmisleading-indentation"
-#endif
 /* YYSTYPE and YYLTYPE is defined by the lexer */
 #include "cfg-lexer.h"
 #include "cfg-grammar-internal.h"
+#include "syslog-names.h"
 
 /* uses struct declarations instead of the typedefs to avoid having to
  * include logreader/logwriter/driver.h, which defines the typedefs.  This
@@ -61,11 +58,19 @@
 
 %code {
 
+#pragma GCC diagnostic ignored "-Wswitch-default"
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
+
+#if (defined(__GNUC__) && __GNUC__ >= 6) || (defined(__clang__) && __clang_major__ >= 10)
+#  pragma GCC diagnostic ignored "-Wmisleading-indentation"
+#endif
+
+
 # define YYLLOC_DEFAULT(Current, Rhs, N)                                \
   do {                                                                  \
     if (N)                                                              \
       {                                                                 \
-        (Current).level = YYRHSLOC(Rhs, 1).level;                       \
+        (Current).name         = YYRHSLOC(Rhs, 1).name;                 \
         (Current).first_line   = YYRHSLOC (Rhs, 1).first_line;          \
         (Current).first_column = YYRHSLOC (Rhs, 1).first_column;        \
         (Current).last_line    = YYRHSLOC (Rhs, N).last_line;           \
@@ -73,7 +78,7 @@
       }                                                                 \
     else                                                                \
       {                                                                 \
-        (Current).level = YYRHSLOC(Rhs, 0).level;                       \
+        (Current).name         = YYRHSLOC(Rhs, 0).name;                 \
         (Current).first_line   = (Current).last_line   =                \
           YYRHSLOC (Rhs, 0).last_line;                                  \
         (Current).first_column = (Current).last_column =                \
@@ -133,19 +138,40 @@
 %token LL_CONTEXT_BLOCK_REF           9
 %token LL_CONTEXT_BLOCK_CONTENT       10
 %token LL_CONTEXT_BLOCK_ARG           11
-%token LL_CONTEXT_PRAGMA              12
-%token LL_CONTEXT_FORMAT              13
-%token LL_CONTEXT_TEMPLATE_FUNC       14
-%token LL_CONTEXT_INNER_DEST          15
-%token LL_CONTEXT_INNER_SRC           16
-%token LL_CONTEXT_CLIENT_PROTO        17
-%token LL_CONTEXT_SERVER_PROTO        18
-%token LL_CONTEXT_OPTIONS             19
-%token LL_CONTEXT_CONFIG              20
+%token LL_CONTEXT_BLOCK_FUNCARG       12
+%token LL_CONTEXT_PRAGMA              13
+%token LL_CONTEXT_FORMAT              14
+%token LL_CONTEXT_TEMPLATE_FUNC       15
+%token LL_CONTEXT_INNER_DEST          16
+%token LL_CONTEXT_INNER_SRC           17
+%token LL_CONTEXT_CLIENT_PROTO        18
+%token LL_CONTEXT_SERVER_PROTO        19
+%token LL_CONTEXT_OPTIONS             20
+%token LL_CONTEXT_CONFIG              21
+%token LL_CONTEXT_TEMPLATE_REF        22
+%token LL_CONTEXT_FILTERX             23
+%token LL_CONTEXT_FILTERX_SIMPLE_FUNC 24
+%token LL_CONTEXT_FILTERX_ENUM        25
+%token LL_CONTEXT_FILTERX_FUNC        26
 
 /* this is a placeholder for unit tests, must be the latest & largest */
-%token LL_CONTEXT_MAX                 21
+%token LL_CONTEXT_MAX                 27
 
+%left ';'
+
+/* operators in the filter language, the order of this determines precedence */
+%right KW_ASSIGN 9000
+%right '?' ':'
+%left  KW_OR 9010
+%left  KW_AND 9020
+%left  KW_STR_EQ 9030 KW_STR_NE 9031, KW_TA_EQ 9032, KW_TA_NE 9033, KW_TAV_EQ 9034, KW_TAV_NE 9035
+%left  KW_STR_LT 9040, KW_STR_LE 9041, KW_STR_GE, 9042 KW_STR_GT, 9043, KW_TA_LT 9044, KW_TA_LE 9045, KW_TA_GE 9046, KW_TA_GT 9047
+%right KW_PLUS_ASSIGN 9050
+%left  KW_REGEXP_MATCH 9060
+
+%left  '+' '-'
+%left  '*'
+%left '.' '[' ']' KW_NOT 9049
 
 /* statements */
 %token KW_SOURCE                      10000
@@ -161,6 +187,7 @@
 %token KW_IF                          10010
 %token KW_ELSE                        10011
 %token KW_ELIF                        10012
+%token KW_FILTERX                     10013
 
 /* source & destination items */
 %token KW_INTERNAL                    10020
@@ -186,12 +213,21 @@
 %token KW_BATCH_LINES                 10087
 %token KW_BATCH_TIMEOUT               10088
 %token KW_TRIM_LARGE_MESSAGES         10089
+%token KW_STATS                       10400
+%token KW_FREQ                        10401
+%token KW_LEVEL                       10402
+%token KW_LIFETIME                    10403
+%token KW_MAX_DYNAMIC                 10404
+%token KW_SYSLOG_STATS                10405
+%token KW_HEALTHCHECK_FREQ            10406
+%token KW_WORKER_PARTITION_KEY        10407
 
 %token KW_CHAIN_HOSTNAMES             10090
 %token KW_NORMALIZE_HOSTNAMES         10091
 %token KW_KEEP_HOSTNAME               10092
 %token KW_CHECK_HOSTNAME              10093
 %token KW_BAD_HOSTNAME                10094
+%token KW_LOG_LEVEL                   10095
 
 %token KW_KEEP_TIMESTAMP              10100
 
@@ -223,12 +259,11 @@
 
 %token KW_THROTTLE                    10170
 %token KW_THREADED                    10171
-%token KW_PASS_UNIX_CREDENTIALS       10231
 
-%token KW_PERSIST_NAME                10302
-
-%token KW_READ_OLD_RECORDS            10304
-%token KW_USE_SYSLOGNG_PID            10305
+%token KW_PASS_UNIX_CREDENTIALS       10180
+%token KW_PERSIST_NAME                10181
+%token KW_READ_OLD_RECORDS            10182
+%token KW_USE_SYSLOGNG_PID            10183
 
 /* log statement options */
 %token KW_FLAGS                       10190
@@ -241,13 +276,22 @@
 %token KW_LOCAL_TIME_ZONE             10204
 %token KW_FORMAT                      10205
 
+/* multi-line options */
+%token KW_MULTI_LINE_MODE             10206
+%token KW_MULTI_LINE_PREFIX           10207
+%token KW_MULTI_LINE_GARBAGE          10208
+
 /* destination writer options */
-%token KW_TRUNCATE_SIZE               10206
+%token KW_TRUNCATE_SIZE               10209
 
 /* timers */
 %token KW_TIME_REOPEN                 10210
 %token KW_TIME_REAP                   10211
 %token KW_TIME_SLEEP                  10212
+
+%token KW_PARTITIONS                  10213
+%token KW_PARTITION_KEY               10214
+%token KW_PARALLELIZE                 10215
 
 /* destination options */
 %token KW_TMPL_ESCAPE                 10220
@@ -272,6 +316,7 @@
 
 %token KW_DEFAULT_FACILITY            10300
 %token KW_DEFAULT_SEVERITY            10301
+%token KW_SDATA_PREFIX                10302
 
 %token KW_PORT                        10323
 /* misc options */
@@ -299,6 +344,7 @@
 
 %token KW_YES                         10380
 %token KW_NO                          10381
+%token KW_AUTO                        10382
 
 %token KW_IFDEF                       10410
 %token KW_ENDIF                       10411
@@ -317,6 +363,8 @@
 %token <token> LL_TOKEN               10434
 %token <cptr> LL_BLOCK                10435
 %token <cptr> LL_PLUGIN	              10436
+%token <cptr> LL_TEMPLATE_REF         10437
+%token <cptr> LL_MESSAGE_REF          10438
 
 %destructor { free($$); } <cptr>
 
@@ -332,12 +380,20 @@
 %token KW_ADD_PREFIX                  10509
 %token KW_REPLACE_PREFIX              10510
 %token KW_CAST                        10511
+%token KW_UPPER                       10512
+%token KW_LOWER                       10513
+%token KW_INCLUDE_BYTES               10514
 
 %token KW_ON_ERROR                    10520
 
 %token KW_RETRIES                     10521
 
 %token KW_FETCH_NO_DATA_DELAY         10522
+
+/* metrics template */
+%token KW_LABELS                      10530
+
+
 /* END_DECLS */
 
 %type   <ptr> expr_stmt
@@ -365,8 +421,12 @@
 
 %type   <ptr> template_content
 %type   <ptr> template_content_list
+%type   <ptr> template_name_or_content
+%type   <ptr> template_name_or_content_tail
+%type   <num> type_hint
 
 %type   <ptr> filter_content
+%type   <ptr> filterx_content
 
 %type   <ptr> parser_content
 
@@ -376,6 +436,7 @@
 %type	<ptr> log_item
 
 %type   <ptr> log_last_junction
+%type   <ptr> log_scheduler
 %type   <ptr> log_junction
 %type   <ptr> log_content
 %type   <ptr> log_conditional
@@ -388,12 +449,15 @@
 
 %type   <ptr> value_pair_option
 
+%type	<num> yesno_strict
 %type	<num> yesno
+%type	<num> yesnoauto
 %type   <num> dnsmode
 %type	<num> dest_writer_options_flags
 
 %type	<cptr> string
 %type	<cptr> string_or_number
+%type	<cptr> optional_string
 %type	<cptr> normalized_flag
 %type   <ptr> string_list
 %type   <ptr> string_list_build
@@ -499,7 +563,15 @@ rewrite_stmt
           }
 
 log_stmt
-        : KW_LOG _log_context_push '{' log_content '}' _log_context_pop             { $$ = $4;}
+        : KW_LOG optional_string _log_context_push '{' log_content '}' _log_context_pop
+          {
+            if ($2)
+              {
+                log_expr_node_set_name($5, $2);
+                free($2);
+              }
+            $$ = $5;
+          }
 	;
 
 
@@ -523,7 +595,7 @@ plugin_stmt
 /* START_RULES */
 
 source_content
-        : _source_context_push source_items _source_context_pop   { $$ = log_expr_node_new_junction($2, &@$); }
+        : _source_context_push source_items _source_context_pop   { $$ = log_expr_node_new_source_junction($2, &@$); }
         ;
 
 source_items
@@ -589,6 +661,16 @@ filter_content
 	  }
 	;
 
+filterx_content
+        : _filterx_context_push <ptr>{
+            GList *filterx_stmts = NULL;
+
+	    CHECK_ERROR_WITHOUT_MESSAGE(cfg_parser_parse(&filterx_parser, lexer, (gpointer *) &filterx_stmts, NULL), @$);
+
+            $$ = log_expr_node_new_pipe(log_filterx_pipe_new(filterx_stmts, configuration), &@$);
+	  } _filterx_context_pop			{ $$ = $2; }
+	;
+
 parser_content
         :
           {
@@ -610,7 +692,7 @@ rewrite_content
         ;
 
 dest_content
-         : _destination_context_push dest_items _destination_context_pop               { $$ = log_expr_node_new_junction($2, &@$); }
+         : _destination_context_push dest_items _destination_context_pop               { $$ = log_expr_node_new_destination_junction($2, &@$); }
          ;
 
 
@@ -654,15 +736,44 @@ log_item
         | KW_SOURCE '{' source_content '}'      { $$ = log_expr_node_new_source(NULL, $3, &@$); }
         | KW_FILTER '(' string ')'		{ $$ = log_expr_node_new_filter_reference($3, &@$); free($3); }
         | KW_FILTER '{' filter_content '}'      { $$ = log_expr_node_new_filter(NULL, $3, &@$); }
+        | KW_FILTERX '{' filterx_content '}'    { $$ = log_expr_node_new_filter(NULL, $3, &@$); }
         | KW_PARSER '(' string ')'              { $$ = log_expr_node_new_parser_reference($3, &@$); free($3); }
         | KW_PARSER '{' parser_content '}'      { $$ = log_expr_node_new_parser(NULL, $3, &@$); }
         | KW_REWRITE '(' string ')'             { $$ = log_expr_node_new_rewrite_reference($3, &@$); free($3); }
         | KW_REWRITE '{' rewrite_content '}'    { $$ = log_expr_node_new_rewrite(NULL, $3, &@$); }
         | KW_DESTINATION '(' string ')'		{ $$ = log_expr_node_new_destination_reference($3, &@$); free($3); }
         | KW_DESTINATION '{' dest_content '}'   { $$ = log_expr_node_new_destination(NULL, $3, &@$); }
+        | log_scheduler                         { $$ = $1; }
         | log_conditional			{ $$ = $1; }
         | log_junction                          { $$ = $1; }
 	;
+
+log_scheduler
+        : KW_PARALLELIZE '('
+          {
+            LogPipe *scheduler_pipe = log_scheduler_pipe_new(configuration);
+            last_scheduler_options = log_scheduler_pipe_get_scheduler_options(scheduler_pipe);
+            $<ptr>$ = scheduler_pipe;
+          }
+          log_scheduler_options ')'             { $$ = log_expr_node_new_pipe($<ptr>3, &@$); }
+        ;
+
+log_scheduler_options
+        : log_scheduler_option log_scheduler_options
+        |
+        ;
+
+log_scheduler_option
+        : KW_PARTITIONS '(' nonnegative_integer ')'
+          {
+            last_scheduler_options->num_partitions = $3;
+          }
+        | KW_PARTITION_KEY '(' template_content ')'
+          {
+            log_scheduler_options_set_partition_key_ref(last_scheduler_options, $3);
+          }
+        ;
+
 
 log_junction
         : KW_JUNCTION '{' log_forks '}'         { $$ = log_expr_node_new_junction($3, &@$); }
@@ -687,8 +798,24 @@ log_forks
         ;
 
 log_fork
-        : KW_LOG '{' log_content '}'            { $$ = $3; }
-        | KW_CHANNEL '{' log_content '}'        { $$ = $3; }
+        : KW_LOG optional_string '{' _log_context_push log_content _log_context_pop '}'
+          {
+            if ($2)
+              {
+                log_expr_node_set_name($5, $2);
+                free($2);
+              }
+            $$ = $5;
+          }
+        | KW_CHANNEL optional_string '{' _log_context_push log_content _log_context_pop '}'
+          {
+            if ($2)
+              {
+                log_expr_node_set_name($5, $2);
+                free($2);
+              }
+            $$ = $5;
+          }
         ;
 
 log_conditional
@@ -703,17 +830,17 @@ log_conditional
 log_if
         : KW_IF '(' filter_content ')' '{' log_content '}'
           {
-            $$ = log_expr_node_new_conditional_with_filter($3, $6, &@$);
+            $$ = log_expr_node_new_simple_conditional($3, $6, &@$);
           }
         | KW_IF '{' log_content '}'
           {
-            $$ = log_expr_node_new_conditional_with_block($3, &@$);
+            $$ = log_expr_node_new_compound_conditional($3, &@$);
           }
         | log_if KW_ELIF '(' filter_content ')' '{' log_content '}'
           {
             LogExprNode *false_branch;
 
-            false_branch = log_expr_node_new_conditional_with_filter($4, $7, &@$);
+            false_branch = log_expr_node_new_simple_conditional($4, $7, &@$);
             log_expr_node_conditional_set_false_branch_of_the_last_if($1, false_branch);
             $$ = $1;
           }
@@ -721,7 +848,7 @@ log_if
           {
             LogExprNode *false_branch;
 
-            false_branch = log_expr_node_new_conditional_with_block($4, &@$);
+            false_branch = log_expr_node_new_compound_conditional($4, &@$);
             log_expr_node_conditional_set_false_branch_of_the_last_if($1, false_branch);
             $$ = $1;
           }
@@ -754,9 +881,9 @@ template_stmt
           }
         | template_fn
           {
-            user_template_function_register(configuration, last_template->name, last_template);
-            log_template_unref(last_template);
-            last_template = NULL;
+            LogTemplate *template = $1;
+            user_template_function_register(configuration, template->name, template);
+            log_template_unref(template);
           }
         ;
 
@@ -768,15 +895,15 @@ template_def
 template_block
 	: KW_TEMPLATE string
 	  <ptr>{
-	    $$ = last_template = log_template_new(configuration, $2);
+	    $$ = log_template_new(configuration, $2);
 	  }
-	  '{' template_items '}'						{ $$ = $3; free($2); }
+	  '{' { $<ptr>$ = $3; } template_items '}'				{ $$ = $3; free($2); }
         ;
 
 template_simple
         : KW_TEMPLATE string
           <ptr>{
-	    $$ = last_template = log_template_new(configuration, $2);
+	    $$ = log_template_new(configuration, $2);
           }
           template_content_inner						{ $$ = $3; free($2); }
 	;
@@ -784,53 +911,71 @@ template_simple
 template_fn
         : KW_TEMPLATE_FUNCTION string
           <ptr>{
-	    $$ = last_template = log_template_new(configuration, $2);
+	    $$ = log_template_new(configuration, $2);
           }
           template_content_inner						{ $$ = $3; free($2); }
 	;
 
 template_items
-	: template_item semicolons template_items
+	: { $<ptr>$ = $<ptr>0; } template_item semicolons { $<ptr>$ = $<ptr>0; } template_items
 	|
+	;
+
+template_item
+	: KW_TEMPLATE '(' { $<ptr>$ = $<ptr>0; } template_content_inner ')'
+	| KW_TEMPLATE_ESCAPE '(' yesno ')'	{ log_template_set_escape($<ptr>0, $3); }
 	;
 
 /* START_RULES */
 
+/* $0 must be the <ptr> for the LogTemplate to be populated */
 template_content_inner
         : string
         {
           GError *error = NULL;
 
-          CHECK_ERROR_GERROR(log_template_compile(last_template, $1, &error), @1, error, "Error compiling template");
+          CHECK_ERROR_GERROR(log_template_compile($<ptr>0, $1, &error), @1, error, "Error compiling template");
           free($1);
         }
-        | LL_IDENTIFIER '(' string_or_number ')'
+        | type_hint '(' string_or_number ')'
         {
           GError *error = NULL;
 
-          CHECK_ERROR_GERROR(log_template_compile(last_template, $3, &error), @3, error, "Error compiling template");
+          CHECK_ERROR_GERROR(log_template_compile($<ptr>0, $3, &error), @3, error, "Error compiling template");
           free($3);
 
-          CHECK_ERROR_GERROR(log_template_set_type_hint(last_template, $1, &error), @1, error, "Error setting the template type-hint \"%s\"", $1);
-          free($1);
+          log_template_set_type_hint_value($<ptr>0, $1);
         }
         | LL_NUMBER
         {
           gchar decimal[32];
 
           g_snprintf(decimal, sizeof(decimal), "%" G_GINT64_FORMAT, $1);
-          log_template_compile_literal_string(last_template, decimal);
-          log_template_set_type_hint(last_template, "int64", NULL);
+          log_template_compile_literal_string($<ptr>0, decimal);
+          log_template_set_type_hint($<ptr>0, "int64", NULL);
         }
         | LL_FLOAT
         {
-          log_template_compile_literal_string(last_template, lexer->token_text->str);
-          log_template_set_type_hint(last_template, "float", NULL);
+          log_template_compile_literal_string($<ptr>0, lexer->token_text->str);
+          log_template_set_type_hint($<ptr>0, "float", NULL);
         }
         ;
 
+type_hint
+        : LL_IDENTIFIER
+          {
+            LogMessageValueType type;
+            GError *error = NULL;
+
+            CHECK_ERROR_GERROR(type_hint_parse($1, &type, &error), @1, error, "Unknown type hint");
+            free($1);
+            $$ = type;
+          };
+
 template_content
-        : <ptr>{ $$ = last_template = log_template_new(configuration, NULL); } template_content_inner	{ $$ = $1; }
+        : <ptr>{
+            $$ = log_template_new(configuration, NULL);
+          } template_content_inner					    { $$ = $1; }
         ;
 
 template_content_list
@@ -838,12 +983,17 @@ template_content_list
 	| { $$ = NULL; }
 	;
 
+template_name_or_content
+        : _template_ref_context_push template_name_or_content_tail          { $$ = $2; };
+        ;
+
+template_name_or_content_tail
+        : LL_TEMPLATE_REF 						    { $$ = cfg_tree_lookup_template(&configuration->tree, $1); free($1); }
+        | template_content 						    { $$ = $1; };
+        ;
+
 /* END_RULES */
 
-template_item
-	: KW_TEMPLATE '(' template_content_inner ')'
-	| KW_TEMPLATE_ESCAPE '(' yesno ')'	{ log_template_set_escape(last_template, $3); }
-	;
 
 
 block_stmt
@@ -861,7 +1011,7 @@ block_stmt
             gint context_type = cfg_lexer_lookup_context_type_by_name($3);
             CHECK_ERROR(context_type, @3, "unknown context \"%s\"", $3);
 
-            block = cfg_block_new(context_type, $4, $10, last_block_args, &@1);
+            block = cfg_block_new(context_type, $4, $10, last_block_args, &@10);
             cfg_lexer_register_generator_plugin(&configuration->plugin_context, block);
             free($3);
             free($4);
@@ -924,9 +1074,10 @@ options_item
 	| KW_PROTO_TEMPLATE '(' string ')'	{ configuration->proto_template_name = g_strdup($3); free($3); }
 	| KW_RECV_TIME_ZONE '(' string ')'	{ configuration->recv_time_zone = g_strdup($3); free($3); }
 	| KW_MIN_IW_SIZE_PER_READER '(' positive_integer ')' { configuration->min_iw_size_per_reader = $3; }
+	| KW_LOG_LEVEL '(' string ')'		{ CHECK_ERROR(cfg_set_log_level(configuration, $3), @3, "Unknown log-level() option"); free($3); }
 	| { last_template_options = &configuration->template_options; } template_option
 	| { last_host_resolve_options = &configuration->host_resolve_options; } host_resolve_option
-	| { last_stats_options = &configuration->stats_options; } stat_option
+	| { last_stats_options = &configuration->stats_options; last_healthcheck_options = &configuration->healthcheck_options; } stat_option
 	| { last_dns_cache_options = &configuration->dns_cache_options; } dns_cache_option
 	| { last_file_perm_options = &configuration->file_perm_options; } file_perm_option
 	| LL_PLUGIN
@@ -947,6 +1098,21 @@ stat_option
 	| KW_STATS_LEVEL '(' nonnegative_integer ')'         { last_stats_options->level = $3; }
 	| KW_STATS_LIFETIME '(' positive_integer ')'      { last_stats_options->lifetime = $3; }
   | KW_STATS_MAX_DYNAMIC '(' nonnegative_integer ')'   { last_stats_options->max_dynamic = $3; }
+	| KW_STATS '(' stats_group_options ')'
+	;
+
+stats_group_options
+	: stats_group_option stats_group_options
+	|
+	;
+
+stats_group_option
+	: KW_FREQ '(' nonnegative_integer ')'          { last_stats_options->log_freq = $3; }
+	| KW_LEVEL '(' nonnegative_integer ')'         { last_stats_options->level = $3; }
+	| KW_LIFETIME '(' positive_integer ')'      { last_stats_options->lifetime = $3; }
+	| KW_MAX_DYNAMIC '(' nonnegative_integer ')'   { last_stats_options->max_dynamic = $3; }
+	| KW_SYSLOG_STATS '(' yesnoauto ')'     { last_stats_options->syslog_stats = $3; }
+	| KW_HEALTHCHECK_FREQ '(' nonnegative_integer ')' { last_healthcheck_options->freq = $3; }
 	;
 
 dns_cache_option
@@ -966,10 +1132,20 @@ string
 	| LL_STRING
 	;
 
-yesno
+yesno_strict
 	: KW_YES				{ $$ = 1; }
 	| KW_NO					{ $$ = 0; }
+	;
+
+yesno
+	: yesno_strict
 	| LL_NUMBER				{ $$ = $1; }
+	;
+
+yesnoauto
+	: KW_YES  { $$ = CYNA_YES; }
+	| KW_NO   { $$ = CYNA_NO; }
+	| KW_AUTO { $$ = CYNA_AUTO; }
 	;
 
 dnsmode
@@ -1031,6 +1207,11 @@ string_or_number
         : string                                { $$ = $1; }
         | LL_NUMBER                             { $$ = strdup(lexer->token_text->str); }
         | LL_FLOAT                              { $$ = strdup(lexer->token_text->str); }
+        ;
+
+optional_string
+        : string                                { $$ = $1; }
+        |                                       { $$ = NULL; }
         ;
 
 path
@@ -1097,19 +1278,13 @@ facility_string
         ;
 
 parser_opt
-        : KW_TEMPLATE '(' string ')'            {
-                                                  LogTemplate *template;
-                                                  GError *error = NULL;
-
-                                                  template = cfg_tree_check_inline_template(&configuration->tree, $3, &error);
-                                                  CHECK_ERROR_GERROR(template != NULL, @3, error, "Error compiling template");
-                                                  log_parser_set_template(last_parser, template);
-                                                  free($3);
-                                                }
+        : KW_TEMPLATE '(' template_name_or_content ')'          { log_parser_set_template(last_parser, $3); }
+        | KW_INTERNAL '(' yesno ')'                             { log_pipe_set_internal(&last_parser->super, $3); }
         ;
 
 driver_option
         : KW_PERSIST_NAME '(' string ')' { log_pipe_set_persist_name(&last_driver->super, $3); free($3); }
+        | KW_INTERNAL '(' yesno ')' { log_pipe_set_internal(&last_driver->super, $3); }
         ;
 
 inner_source
@@ -1136,6 +1311,7 @@ inner_source
               }
           }
         ;
+
 
 /* All source drivers should incorporate this rule, implies driver_option */
 source_driver_option
@@ -1185,16 +1361,31 @@ threaded_dest_driver_batch_option
 
 threaded_dest_driver_workers_option
         : KW_WORKERS '(' positive_integer ')'  { log_threaded_dest_driver_set_num_workers(last_driver, $3); }
+        | KW_WORKER_PARTITION_KEY '(' template_content ')' { log_threaded_dest_driver_set_worker_partition_key_ref(last_driver, $3); }
         ;
 
 /* implies dest_driver_option */
 threaded_dest_driver_general_option
+        : threaded_dest_driver_general_option_noflags
+        | threaded_dest_driver_flags_option
+        ;
+
+threaded_dest_driver_general_option_noflags
 	: KW_RETRIES '(' positive_integer ')'
         {
           log_threaded_dest_driver_set_max_retries_on_error(last_driver, $3);
         }
         | KW_TIME_REOPEN '(' positive_integer ')' { log_threaded_dest_driver_set_time_reopen(last_driver, $3); }
         | dest_driver_option
+        ;
+
+threaded_dest_driver_flags_option
+        : KW_FLAGS '(' threaded_dest_driver_flags ')'
+        ;
+
+threaded_dest_driver_flags
+        : string threaded_dest_driver_flags     { CHECK_ERROR(log_threaded_dest_driver_process_flag(last_driver, $1), @1, "Unknown flag \"%s\"", $1); free($1); }
+        |
         ;
 
 /* implies source_driver_option and source_option */
@@ -1204,6 +1395,10 @@ threaded_source_driver_option
         | { last_msg_format_options = log_threaded_source_driver_get_parse_options(last_driver); } msg_format_option
         | { last_source_options = log_threaded_source_driver_get_source_options(last_driver); } source_option
         | source_driver_option
+        ;
+
+threaded_source_driver_workers_option
+        : KW_WORKERS '(' positive_integer ')' { log_threaded_source_driver_set_num_workers(last_driver, $3); }
         ;
 
 threaded_fetcher_driver_option
@@ -1281,13 +1476,18 @@ msg_format_option
 	  {
 	    if (last_msg_format_options->default_pri == 0xFFFF)
 	      last_msg_format_options->default_pri = LOG_USER;
-	    last_msg_format_options->default_pri = (last_msg_format_options->default_pri & ~LOG_PRIMASK) | $3;
+	    last_msg_format_options->default_pri = (last_msg_format_options->default_pri & ~SYSLOG_PRIMASK) | $3;
           }
 	| KW_DEFAULT_FACILITY '(' facility_string ')'
 	  {
 	    if (last_msg_format_options->default_pri == 0xFFFF)
 	      last_msg_format_options->default_pri = LOG_NOTICE;
-	    last_msg_format_options->default_pri = (last_msg_format_options->default_pri & LOG_PRIMASK) | $3;
+	    last_msg_format_options->default_pri = (last_msg_format_options->default_pri & SYSLOG_PRIMASK) | $3;
+          }
+        | KW_SDATA_PREFIX '(' string ')'
+          {
+            CHECK_ERROR(msg_format_options_set_sdata_prefix(last_msg_format_options, $3), @3, "Prefix is too long \"%s\"", $3);
+            free($3);
           }
         ;
 
@@ -1296,21 +1496,14 @@ dest_writer_options
 	|
 	;
 
-dest_writer_option
-        /* NOTE: plugins need to set "last_writer_options" in order to incorporate this rule in their grammar */
 
-	: KW_FLAGS '(' dest_writer_options_flags ')' { last_writer_options->options = $3; }
+/* NOTE: plugins need to set "last_writer_options" in order to incorporate this rule in their grammar */
+dest_writer_option
+        : KW_FLAGS '(' dest_writer_options_flags ')'
 	| KW_FLUSH_LINES '(' nonnegative_integer ')'		{ last_writer_options->flush_lines = $3; }
 	| KW_FLUSH_TIMEOUT '(' positive_integer ')'	{ }
         | KW_SUPPRESS '(' nonnegative_integer ')'            { last_writer_options->suppress = $3; }
-	| KW_TEMPLATE '(' string ')'       	{
-                                                  GError *error = NULL;
-
-                                                  last_writer_options->template = cfg_tree_check_inline_template(&configuration->tree, $3, &error);
-                                                  CHECK_ERROR_GERROR(last_writer_options->template != NULL, @3, error, "Error compiling template");
-	                                          free($3);
-	                                        }
-	| KW_TEMPLATE_ESCAPE '(' yesno ')'	{ log_writer_options_set_template_escape(last_writer_options, $3); }
+	| KW_TEMPLATE '(' template_name_or_content ')'       { last_writer_options->template = $3; }
 	| KW_PAD_SIZE '(' nonnegative_integer ')'         { last_writer_options->padding = $3; }
 	| KW_TRUNCATE_SIZE '(' nonnegative_integer ')'         { last_writer_options->truncate_size = $3; }
 	| KW_MARK_FREQ '(' nonnegative_integer ')'        { last_writer_options->mark_freq = $3; }
@@ -1326,9 +1519,9 @@ dest_writer_option
 	;
 
 dest_writer_options_flags
-	: normalized_flag dest_writer_options_flags   { $$ = log_writer_options_lookup_flag($1) | $2; free($1); }
-	|					      { $$ = 0; }
-	;
+        : string dest_writer_options_flags     { CHECK_ERROR(log_writer_options_process_flag(last_writer_options, $1), @1, "Unknown flag \"%s\"", $1); free($1); }
+        |
+        ;
 
 file_perm_option
 	: KW_OWNER '(' string_or_number ')'	{ file_perm_options_set_file_uid(last_file_perm_options, $3); free($3); }
@@ -1351,6 +1544,7 @@ template_option
 	| KW_TIME_ZONE '(' string ')'		{ last_template_options->time_zone[LTZ_SEND] = g_strdup($3); free($3); }
 	| KW_SEND_TIME_ZONE '(' string ')'      { last_template_options->time_zone[LTZ_SEND] = g_strdup($3); free($3); }
 	| KW_LOCAL_TIME_ZONE '(' string ')'     { last_template_options->time_zone[LTZ_LOCAL] = g_strdup($3); free($3); }
+	| KW_TEMPLATE_ESCAPE '(' yesno ')'	{ last_template_options->escape = $3; }
 	| KW_ON_ERROR '(' string ')'
         {
           gint on_error;
@@ -1414,6 +1608,7 @@ vp_option
         | KW_EXCLUDE '(' string_list ')'                 { value_pairs_add_glob_patterns(last_value_pairs, $3, FALSE); }
 	| KW_SCOPE '(' vp_scope_list ')'
 	| KW_CAST '(' yesno ')'                          { value_pairs_set_cast_to_strings(last_value_pairs, $3); }
+	| KW_INCLUDE_BYTES '(' yesno ')'                 { value_pairs_set_include_bytes(last_value_pairs, $3); }
 	;
 
 vp_scope_list
@@ -1431,7 +1626,34 @@ vp_rekey_option
 	| KW_SHIFT_LEVELS '(' positive_integer ')' { value_pairs_transform_set_add_func(last_vp_transset, value_pairs_new_transform_shift_levels($3)); }
 	| KW_ADD_PREFIX '(' string ')' { value_pairs_transform_set_add_func(last_vp_transset, value_pairs_new_transform_add_prefix($3)); free($3); }
 	| KW_REPLACE_PREFIX '(' string string ')' { value_pairs_transform_set_add_func(last_vp_transset, value_pairs_new_transform_replace_prefix($3, $4)); free($3); free($4); }
+	| KW_UPPER '(' ')' { value_pairs_transform_set_add_func(last_vp_transset, value_pairs_new_transform_upper()); }
+	| KW_LOWER '(' ')' { value_pairs_transform_set_add_func(last_vp_transset, value_pairs_new_transform_lower()); }
 	;
+
+dyn_metrics_template_opt
+        : KW_KEY '(' string ')' { dyn_metrics_template_set_key(last_dyn_metrics_template, $3); g_free($3); }
+        | KW_LABELS '(' dyn_metrics_template_labels_opts ')'
+        | KW_LEVEL '(' nonnegative_integer ')' { dyn_metrics_template_set_level(last_dyn_metrics_template, $3); }
+
+dyn_metrics_template_labels_opts
+        : dyn_metrics_template_labels_opt dyn_metrics_template_labels_opts
+        |
+        ;
+
+dyn_metrics_template_labels_opt
+        : dyn_metrics_template_label_template
+        | { last_value_pairs = dyn_metrics_template_get_value_pairs(last_dyn_metrics_template); } vp_option
+        ;
+
+dyn_metrics_template_label_template
+        : string LL_ARROW template_content
+          {
+            dyn_metrics_template_add_label_template(last_dyn_metrics_template, $1, $3);
+            free($1);
+            log_template_unref($3);
+          }
+        ;
+
 
 rewrite_expr_opt
         : KW_VALUE '(' string ')'
@@ -1449,6 +1671,7 @@ rewrite_expr_opt
 	    CHECK_ERROR(log_msg_is_value_name_valid(p), @3, "%s is not a valid name for a name-value pair, perhaps a misspelled .SDATA reference?", p);
             free($3);
           }
+        | KW_INTERNAL '(' yesno ')' { log_pipe_set_internal(&last_rewrite->super, $3); }
         | rewrite_condition_opt
         ;
 
@@ -1462,6 +1685,26 @@ rewrite_condition_opt
           } ')'
         ;
 
+multi_line_option
+	: KW_MULTI_LINE_MODE '(' string ')'
+          {
+            CHECK_ERROR(multi_line_options_set_mode(last_multi_line_options, $3), @3, "Invalid multi-line mode");
+	    free($3);
+          }
+	| KW_MULTI_LINE_PREFIX '(' string ')'
+          {
+            GError *error = NULL;
+            CHECK_ERROR_GERROR(multi_line_options_set_prefix(last_multi_line_options, $3, &error), @3, error, "error compiling multi-line regexp");
+            free($3);
+          }
+	| KW_MULTI_LINE_GARBAGE '(' string ')'
+	  {
+            GError *error = NULL;
+
+            CHECK_ERROR_GERROR(multi_line_options_set_garbage(last_multi_line_options, $3, &error), @3, error, "error compiling multi-line regexp");
+            free($3);
+	  }
+	;
 
 _root_context_push: { cfg_lexer_push_context(lexer, LL_CONTEXT_ROOT, NULL, "root context"); };
 _root_context_pop: { cfg_lexer_pop_context(lexer); };
@@ -1475,6 +1718,8 @@ _rewrite_context_push: { cfg_lexer_push_context(lexer, LL_CONTEXT_REWRITE, NULL,
 _rewrite_context_pop: { cfg_lexer_pop_context(lexer); };
 _filter_context_push: { cfg_lexer_push_context(lexer, LL_CONTEXT_FILTER, NULL, "filter statement"); };
 _filter_context_pop: { cfg_lexer_pop_context(lexer); };
+_filterx_context_push: { cfg_lexer_push_context(lexer, LL_CONTEXT_FILTERX, NULL, "filterx statement"); };
+_filterx_context_pop: { cfg_lexer_pop_context(lexer); };
 _log_context_push: { cfg_lexer_push_context(lexer, LL_CONTEXT_LOG, NULL, "log statement"); };
 _log_context_pop: { cfg_lexer_pop_context(lexer); };
 _block_def_context_push: { cfg_lexer_push_context(lexer, LL_CONTEXT_BLOCK_DEF, block_def_keywords, "block definition"); };
@@ -1485,6 +1730,9 @@ _block_content_context_push: { cfg_lexer_push_context(lexer, LL_CONTEXT_BLOCK_CO
 _block_content_context_pop: { cfg_lexer_pop_context(lexer); };
 _block_arg_context_push: { cfg_lexer_push_context(lexer, LL_CONTEXT_BLOCK_ARG, NULL, "block argument"); };
 _block_arg_context_pop: { cfg_lexer_pop_context(lexer); };
+_block_func_arg_context_push: { cfg_lexer_push_context(lexer, LL_CONTEXT_BLOCK_FUNCARG, NULL, "block argument"); };
+_block_func_arg_context_pop: { cfg_lexer_pop_context(lexer); };
+_template_ref_context_push: { cfg_lexer_push_context(lexer, LL_CONTEXT_TEMPLATE_REF, NULL, "template reference"); };
 _inner_dest_context_push: { cfg_lexer_push_context(lexer, LL_CONTEXT_INNER_DEST, NULL, "within destination"); };
 _inner_dest_context_pop: { cfg_lexer_pop_context(lexer); };
 _inner_src_context_push: { cfg_lexer_push_context(lexer, LL_CONTEXT_INNER_SRC, NULL, "within source"); };
