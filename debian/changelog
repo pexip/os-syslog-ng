@@ -1,3 +1,9 @@
+syslog-ng (4.8.1-4+pexip25u1) pexip-trixie; urgency=medium
+
+  * Initial trixie build
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Tue, 29 Apr 2025 22:58:56 +0100
+
 syslog-ng (4.8.1-4) unstable; urgency=medium
 
   [ SZALAY Attila ]
