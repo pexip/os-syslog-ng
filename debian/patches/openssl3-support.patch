@@ -2,7 +2,19 @@ Index: syslog-ng/lib/transport/tls-session.c
 ===================================================================
 --- syslog-ng.orig/lib/transport/tls-session.c
 +++ syslog-ng/lib/transport/tls-session.c
-@@ -526,7 +526,11 @@ tls_session_info_callback(const SSL *ssl
+@@ -441,7 +441,11 @@ tls_session_ocsp_client_verify(TLSSessio
+       return FALSE;
+     }
+ 
++#if OPENSSL_VERSION_NUMBER < 0x30000000L
+   X509 *cert = SSL_get_peer_certificate(self->ssl);
++#else
++  X509 *cert = SSL_get1_peer_certificate(self->ssl);
++#endif
+   if (!cert)
+     {
+       g_set_error(error, TLSCONTEXT_ERROR, TLSCONTEXT_INTERNAL_ERROR, "no certificate was presented by server");
+@@ -526,7 +530,11 @@ tls_session_info_callback(const SSL *ssl
    TLSSession *self = (TLSSession *)SSL_get_app_data(ssl);
    if (!self->peer_info.found && where == (SSL_ST_ACCEPT|SSL_CB_LOOP))
      {
