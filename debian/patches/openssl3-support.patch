@@ -1,8 +1,10 @@
---- a/lib/transport/tls-session.c
-+++ b/lib/transport/tls-session.c
-@@ -308,7 +308,11 @@
+Index: syslog-ng/lib/transport/tls-session.c
+===================================================================
+--- syslog-ng.orig/lib/transport/tls-session.c
++++ syslog-ng/lib/transport/tls-session.c
+@@ -526,7 +526,11 @@ tls_session_info_callback(const SSL *ssl
    TLSSession *self = (TLSSession *)SSL_get_app_data(ssl);
-   if( !self->peer_info.found && where == (SSL_ST_ACCEPT|SSL_CB_LOOP) )
+   if (!self->peer_info.found && where == (SSL_ST_ACCEPT|SSL_CB_LOOP))
      {
 +#if OPENSSL_VERSION_NUMBER < 0x30000000L
        X509 *cert = SSL_get_peer_certificate(ssl);

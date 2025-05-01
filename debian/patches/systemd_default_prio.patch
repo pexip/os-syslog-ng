@@ -1,8 +1,8 @@
-diff --git a/modules/systemd-journal/journal-reader.c b/modules/systemd-journal/journal-reader.c
-index 3ed7548..0b04417 100644
---- a/modules/systemd-journal/journal-reader.c
-+++ b/modules/systemd-journal/journal-reader.c
-@@ -41,7 +41,7 @@
+Index: syslog-ng/modules/systemd-journal/journal-reader.c
+===================================================================
+--- syslog-ng.orig/modules/systemd-journal/journal-reader.c
++++ syslog-ng/modules/systemd-journal/journal-reader.c
+@@ -44,7 +44,7 @@
  #define MAX_CURSOR_LENGTH 1024
  
  #define DEFAULT_FIELD_SIZE (64 * 1024)
@@ -10,12 +10,12 @@ index 3ed7548..0b04417 100644
 +#define DEFAULT_PRIO (LOG_SYSLOG | LOG_NOTICE)
  #define DEFAULT_FETCH_LIMIT 10
  
- static gboolean journal_reader_initialized = FALSE;
-diff --git a/modules/systemd-journal/tests/test_systemd_journal.c b/modules/systemd-journal/tests/test_systemd_journal.c
-index 635f148..b785911 100644
---- a/modules/systemd-journal/tests/test_systemd_journal.c
-+++ b/modules/systemd-journal/tests/test_systemd_journal.c
-@@ -458,7 +458,7 @@ void
+ 
+Index: syslog-ng/modules/systemd-journal/tests/test_systemd_journal.c
+===================================================================
+--- syslog-ng.orig/modules/systemd-journal/tests/test_systemd_journal.c
++++ syslog-ng/modules/systemd-journal/tests/test_systemd_journal.c
+@@ -294,7 +294,7 @@ void
  _test_default_level_test(TestCase *self, TestSource *src, LogMessage *msg)
  {
    gint level = GPOINTER_TO_INT(self->user_data);
