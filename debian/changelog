@@ -1,3 +1,9 @@
+syslog-ng (4.8.1-5+pexip25u1) pexip-trixie; urgency=medium
+
+  * New upstream release
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Thu, 31 Jul 2025 15:05:44 +0100
+
 syslog-ng (4.8.1-5) unstable; urgency=medium
 
   * Fix transport accepting incorrect wildcards
