@@ -1,4 +1,5 @@
 0001-Update-control-file-path.patch
 0002-Direct_check_if_seek_can_be_called.patch
+0003-Fix-transport-accepting-incorrect-wildcards.patch
 systemd_default_prio.patch
 openssl3-support.patch
