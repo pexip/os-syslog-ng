@@ -4,6 +4,12 @@ syslog-ng (4.8.1-5+pexip25u1) pexip-trixie; urgency=medium
 
  -- Mark Hymers <mark.hymers@pexip.com>  Thu, 31 Jul 2025 15:05:44 +0100
 
+syslog-ng (4.8.1-5+deb13u1) trixie; urgency=medium
+
+  * Turn off writing log statistics (closes: #1110329).
+
+ -- Laszlo Boszormenyi (GCS) <gcs@debian.org>  Sun, 12 Oct 2025 12:39:32 +0200
+
 syslog-ng (4.8.1-5) unstable; urgency=medium
 
   * Fix transport accepting incorrect wildcards
