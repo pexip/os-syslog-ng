@@ -1,3 +1,20 @@
+syslog-ng (3.38.1-5+pexip24u3+deb12u1) pexip; urgency=medium
+
+  * New upstream release with security fix
+
+ -- Steve McIntyre <steve.mcintyre@pexip.com>  Tue, 20 Jan 2026 12:58:00 +0000
+
+syslog-ng (3.38.1-5+deb12u1) bookworm; urgency=medium
+
+  * Non-maintainer upload by the LTS Security Team.
+  * Add fix for CVE-2024-47619: `tls_wildcard_match()` matches on certificates
+    such as `foo.*.bar` although that is not allowed. It is also possible to
+    pass partial wildcards such as `foo.a*c.bar` which glib matches but should
+    be avoided / invalidated. This issue could have an impact on TLS
+    connections, such as in man-in-the-middle situations.
+
+ -- Jochen Sprickerhof <jspricke@debian.org>  Thu, 23 Oct 2025 12:31:38 +0200
+
 syslog-ng (3.38.1-5+pexip24u2) pexip-bookworm; urgency=medium
 
   * Initial bookworm build
