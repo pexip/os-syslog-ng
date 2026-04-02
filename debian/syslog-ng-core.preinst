@@ -29,6 +29,11 @@ then
         done
 fi
 
+if [ "$1" = "upgrade" ] || [ "$1" = install ]; then
+    # scl.conf has moved to /usr/share
+    rm -f /etc/syslog-ng/scl.conf
+fi
+
 #DEBHELPER#
 
 exit 0
