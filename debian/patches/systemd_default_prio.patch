@@ -1,3 +1,5 @@
+Default systemd-journal facility to LOG_SYSLOG instead of LOG_LOCAL0
+
 Index: syslog-ng/modules/systemd-journal/journal-reader.c
 ===================================================================
 --- syslog-ng.orig/modules/systemd-journal/journal-reader.c

@@ -1,3 +1,5 @@
+Replace use of old APIs which are deprecated in OpenSSL 3
+
 Index: syslog-ng/lib/transport/tls-session.c
 ===================================================================
 --- syslog-ng.orig/lib/transport/tls-session.c
